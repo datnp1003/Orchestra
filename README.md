@@ -508,6 +508,13 @@ khởi động sạch; 6 page dùng đúng các hàm logic đã qua 9 nhóm test
 
 Còn lại: unlock-máy [EYES] · macOS/Linux · code signing · repo public · beta — tất cả ngoài session.
 
+## 📋 P7 Launch Kit — sẵn sàng
+
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — onboarding 15 phút (Bước cài → login worker → task đầu → hiểu gate → nâng cao)
+- **[docs/p7-launch-kit.md](docs/p7-launch-kit.md)** — 4 mục P7 với lệnh sẵn chạy: repo public (1 lệnh gh) · npm publish · Marketplace PAT · beta metrics — **mỗi mục chờ đúng 1 tài khoản/quyết định của bạn**
+- Trạng thái mặc định an toàn: repo **private** (public = 1 lệnh, quyết định của bạn), npm chưa login
+
+
 Chạy prototype:
 ```bash
 cd Orchestra/prototype
