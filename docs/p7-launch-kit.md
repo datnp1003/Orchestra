@@ -39,7 +39,8 @@ cd Orchestra/extension
 npx --yes @vscode/vsce publish 0.2.4          # bump version + publish
 ```
 
-Icon 128x128 cần thêm trước khi publish (`--icon` trong package.json + `"icon"` field).
+Icon 128x128: **✓ ĐÃ XONG** — `extension/resources/icon128.png` (sinh bằng code, ring "O" accent)
+đã wire vào `package.json` (`"icon"` field) và vào VSIX 0.2.4. Bỏ qua bước icon trong §3.
 
 ## 4. Docs site
 
@@ -61,6 +62,6 @@ Nội dung đã sẵn: `docs/QUICKSTART.md` (onboarding 15 phút) + 4 spec + roa
 |---|---|---|
 | Repo public | quyết định của bạn | §1 |
 | npm publish | `npm login` | §2 |
-| Marketplace | PAT + publisher | §3 |
+| Marketplace | PAT + publisher (icon ✓ đã có) | §3 |
 | macOS/Linux builds | môi trường khác | `electron-builder -ml` (chạy trên máy tương ứng) |
 | Code signing | chứng thư EV (tùy chọn) | cấu hình `win.certificateFile` |
