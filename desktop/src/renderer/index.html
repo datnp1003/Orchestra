@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>Orchestra Desktop</title>
+</head>
+<body>
+  <div id="app">
+    <nav id="nav">
+      <div class="brand">ORCHESTRA</div>
+      <a href="#/dashboard" data-page="dashboard">Dashboard</a>
+      <a href="#/chat" data-page="chat">Chat</a>
+      <a href="#/terminal" data-page="terminal">Terminal</a>
+      <a href="#/transcript" data-page="transcript">Transcript</a>
+      <a href="#/matrix" data-page="matrix">Policy Matrix</a>
+      <a href="#/wizard" data-page="wizard">Setup Wizard</a>
+      <a href="#/settings" data-page="settings">Settings</a>
+      <div class="brand small" id="repoLabel"></div>
+    </nav>
+    <main id="page"></main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

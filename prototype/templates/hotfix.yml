@@ -1,0 +1,30 @@
+id: hotfix
+version: 1
+name: "Hotfix nhanh (P3 runner)"
+test_command: "npm test"
+
+nodes:
+  - id: implement
+    type: implement
+    role: coder
+    self_test: true
+    budget: { usd: 1.50, minutes: 6 }
+    outputs: [diff]
+    on_fail: { action: retry, max_retries: 1, then: ask_user }
+
+  - id: verify
+    type: verify
+    needs: [implement]
+    role: verifier
+    distinct_worker_from: [implement]
+    outputs: [test_report]
+    gate:
+      - tests.green
+    on_fail: { action: spawn_fix, max_retries: 1, then: ask_user }
+
+  - id: merge_gate
+    type: merge_gate
+    needs: [verify]
+    policy: ask_always
+    gate:
+      - all_gates_passed

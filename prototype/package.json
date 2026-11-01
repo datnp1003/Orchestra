@@ -1,0 +1,23 @@
+{
+  "name": "orchestra-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "P1 prototype: registry + headless spawn + stream-json normalization theo Worker Protocol spec v0.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "list": "node dist/cli.js list",
+    "smoke": "node dist/cli.js smoke claude --save-fixture"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "js-yaml": "^5.5.0"
+  }
+}

@@ -1,0 +1,48 @@
+id: feature-dev
+version: 1
+name: "Feature development (P3 runner)"
+test_command: "npm test"
+
+nodes:
+  - id: plan
+    type: plan
+    role: planner
+    approval: required
+    outputs: [plan]
+
+  - id: implement
+    type: implement
+    needs: [plan]
+    role: coder
+    self_test: true
+    budget: { usd: 2.00, minutes: 8 }
+    outputs: [diff, self_test_report]
+    on_fail: { action: retry, max_retries: 1, then: ask_user }
+
+  - id: verify
+    type: verify
+    needs: [implement]
+    role: verifier
+    distinct_worker_from: [implement]
+    outputs: [test_report]
+    gate:
+      - tests.green
+    on_fail: { action: spawn_fix, max_retries: 1, then: ask_user }
+
+  - id: review
+    type: review
+    needs: [verify]
+    role: reviewer
+    distinct_worker_from: [implement]
+    outputs: [verdict, review_comments]
+    gate:
+      - verdict.approved
+    on_fail: { action: spawn_fix, max_retries: 1, then: ask_user }
+
+  - id: merge_gate
+    type: merge_gate
+    needs: [review]
+    policy: auto_if
+    gate:
+      - all_gates_passed
+      - files_changed <= 10

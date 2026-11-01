@@ -1,0 +1,69 @@
+{
+  "name": "orchestra-desktop",
+  "productName": "Orchestra Desktop",
+  "version": "0.1.0",
+  "description": "Orchestra Desktop — IDE agent orchestrator độc lập: điều phối agent CLI trong pipeline có gate",
+  "main": "out/desktop/src/main/main.js",
+  "type": "module",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/datnp1003/Orchestra.git"
+  },
+  "author": "orchestra-dev",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.18",
+    "@lydell/node-pty-win32-x64": "^1.2.0-beta.18",
+    "electron-updater": "^6.8.11",
+    "js-yaml": "^4.1.0"
+  },
+  "build": {
+    "appId": "dev.orchestra.desktop",
+    "productName": "Orchestra Desktop",
+    "files": [
+      "out/**",
+      "src/preload.cjs",
+      "src/renderer/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/@lydell/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "datnp1003",
+      "repo": "Orchestra"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "allowScripts": {
+    "@lydell/node-pty@1.2.0-beta.18": true,
+    "electron@33.4.11": true
+  }
+}

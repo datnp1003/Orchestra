@@ -1,0 +1,18 @@
+# Model Registry — Orchestra liệt kê MỌI model; phân phối theo khả năng của từng CLI (P6.6)
+# family = provider gốc của model; gateway = vault provider chứa key+base_url (model custom)
+version: 1
+
+models:
+  # ---- native families ----
+  - { id: opus-4.6,      family: anthropic, ctx: 400000, cost_tier: high }
+  - { id: sonnet-4.6,    family: anthropic, ctx: 400000, cost_tier: medium }
+  - { id: gpt-5.3-codex, family: openai,    ctx: 400000, cost_tier: medium }
+  - { id: gpt-5.3,       family: openai,    ctx: 400000, cost_tier: high }
+  - { id: gemini-3-pro,  family: google,    ctx: 1000000, cost_tier: medium }
+
+  # ---- custom endpoint models (chạy qua gateway đã cấu hình trong vault) ----
+  - { id: worker-claude, family: custom, gateway: anthropic, cost_tier: medium }
+  - { id: worker-codex,  family: custom, gateway: openai,    cost_tier: medium }
+  - { id: deepseek-v4,   family: custom, gateway: openai,    cost_tier: low }
+  - { id: kimi-k2.5,     family: custom, gateway: openai,    cost_tier: low }
+  - { id: glm-5.3,       family: custom, gateway: openai,    cost_tier: low }

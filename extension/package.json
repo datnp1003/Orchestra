@@ -1,0 +1,129 @@
+{
+  "name": "orchestra",
+  "displayName": "Orchestra",
+  "description": "IDE agent orchestrator — điều phối agent CLI (claude, codex, ...) như worker trong pipeline có gate",
+  "publisher": "orchestra-dev",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension/src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orchestra-sidebar",
+          "title": "Orchestra",
+          "icon": "$(rocket)"
+        }
+      ]
+    },
+    "views": {
+      "orchestra-sidebar": [
+        {
+          "id": "orchestra.chatView",
+          "name": "Chat",
+          "type": "webview"
+        },
+        {
+          "id": "orchestra.fleetView",
+          "name": "Fleet"
+        },
+        {
+          "id": "orchestra.tasksView",
+          "name": "Tasks"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Orchestra",
+      "properties": {
+        "orchestra.defaultRepo": {
+          "type": "string",
+          "default": "",
+          "description": "Repo mặc định khi workspace không có .orchestra/ (để trống = dùng demo-repo của prototype)"
+        },
+        "orchestra.autoApprovePlan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run Pipeline: tự duyệt plan node, không dừng hỏi (không khuyến nghị cho repo thật)"
+        },
+        "orchestra.hooksEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Guard hook pre-execution — chặn git push, network pattern, path escape TRƯỚC khi lệnh chạy"
+        },
+        "orchestra.skillSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tự sync .orchestra/kb → AGENTS.md + CLAUDE.md trước mỗi dispatch để worker đọc project memory"
+        },
+        "orchestra.templatesDir": {
+          "type": "string",
+          "default": "",
+          "description": "Thư mục pipeline templates (để trống = templates đi kèm extension)"
+        },
+        "orchestra.orchestratorWorker": {
+          "type": "string",
+          "default": "claude",
+          "enum": [
+            "claude",
+            "codex"
+          ],
+          "description": "CLI làm brain cho Orchestrator trong Chat (chạy read-only, session resume để nhớ hội thoại)"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "orchestra.dispatch",
+        "title": "Orchestra: Dispatch Task"
+      },
+      {
+        "command": "orchestra.runPipeline",
+        "title": "Orchestra: Run Pipeline"
+      },
+      {
+        "command": "orchestra.showMatrix",
+        "title": "Orchestra: Show Policy Matrix"
+      },
+      {
+        "command": "orchestra.reviewMerge",
+        "title": "Orchestra: Review && Merge"
+      },
+      {
+        "command": "orchestra.syncSkills",
+        "title": "Orchestra: Sync Skills (KB → AGENTS.md/CLAUDE.md)"
+      },
+      {
+        "command": "orchestra.installWorker",
+        "title": "Orchestra: Install Worker (npm)"
+      },
+      {
+        "command": "orchestra.refreshViews",
+        "title": "Orchestra: Refresh",
+        "icon": "$(refresh)"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node test/run-tests.cjs"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.4.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
