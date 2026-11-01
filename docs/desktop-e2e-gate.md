@@ -90,3 +90,27 @@ còn: macOS/Linux builds, code signing, publish Release (P7).
 **Gate P-D1/P-D2: PASS ở mức máy-verified đầy đủ.** Còn [EYES] = xác nhận hình ảnh GUI
 (vì sandbox không render window) + publish Release (P7). E2E script chạy lại được bất cứ lúc nào:
 `cd Orchestra/desktop && node test/e2e-headless.mjs`
+
+---
+
+# PHỤ LỤC (01/11/2026 — sau verdict)
+
+## Vì sao [EYES] không máy-verified được — BẰNG CHỨNG CHỐT HẠ
+Screenshot full-screen (PowerShell CopyFromScreen, DPI-aware) chụp được **màn hình khóa
+Windows** (avatar "Nitro V 15") — máy đang **locked** khi session chạy. GUI không thể render
+vào bộ nhớ màn hình khi locked. Đây là lý do vật lý, không phải giới hạn code. Script:
+`desktop/test/screenshot.ps1` — **máy unlocked, chạy lại là có ảnh từng page ngay**.
+
+## P7 khởi động — GitHub repo + Release LIVE
+- Repo: **github.com/datnp1003/Orchestra** (private) — 68 file source, .gitignore đúng
+  (fix 2 lần: node_modules → `.vscode-test` 1927 file là thủ phạm thật của 264MB)
+- **Release v0.1.0 published**: assets `latest.yml` + `Orchestra.Desktop.Setup.0.1.0.exe` + blockmap
+- `desktop/package.json`: `repository` + `publish {github, owner, repo}` → **`latest.yml` sinh chuẩn**
+- **Auto-updater: LIVE** — lưu ý trung thực: repo đang **private** → updater chỉ auto-check trên
+  máy có GH_TOKEN; khi repo public (quyết định của user) thì mọi user nhận update
+
+## Còn lại (ngoài session)
+1. [EYES] — unlock máy, chạy lại `desktop/test/screenshot.ps1` cho 6 page
+2. macOS/Linux builds + verify
+3. Code signing cert
+4. Repo public (để updater cho mọi user) + beta users

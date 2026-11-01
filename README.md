@@ -499,6 +499,15 @@ khởi động sạch; 6 page dùng đúng các hàm logic đã qua 9 nhóm test
 
 → **Gate P-D1/P-D2 PASS ở mức máy-verified đầy đủ.** Còn lại: [EYES] xác nhận GUI + publish Release (P7). E2E rerun: `cd Orchestra/desktop && node test/e2e-headless.mjs`
 
+## 🚀 GitHub + Release — LIVE (01/11/2026)
+
+- **Repo**: [github.com/datnp1003/Orchestra](https://github.com/datnp1003/Orchestra) (private)
+- **Release v0.1.0**: [releases/tag/v0.1.0](https://github.com/datnp1003/Orchestra/releases/tag/v0.1.0) — assets: `latest.yml` + Setup exe + blockmap
+- **Auto-updater: LIVE** (electron-updater ↔ GitHub Releases) — repo private nên update-check cần token; **public repo = updater cho mọi user** (quyết định P7)
+- Screenshot [EYES]: máy đang **locked** (chụp được lock screen — bằng chứng vật lý); unlock → chạy `desktop/test/screenshot.ps1` là có ảnh 6 page
+
+Còn lại: unlock-máy [EYES] · macOS/Linux · code signing · repo public · beta — tất cả ngoài session.
+
 Chạy prototype:
 ```bash
 cd Orchestra/prototype
