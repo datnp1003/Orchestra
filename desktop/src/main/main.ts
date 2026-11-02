@@ -1,15 +1,14 @@
 // Orchestra Desktop — main process (P-D1)
-import { app, BrowserWindow, Tray, Menu, Notification, nativeImage } from 'electron';
+import { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals } from './ipc.js';
 import { IPC } from './contract.js';
 import { loadSettings } from './settingsStore.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// out/desktop/src/main → lên 3 cấp = desktop/, lên 4 = Orchestra/
-const desktopDir = path.resolve(__dirname, '..', '..', '..');
-const protoDir = path.resolve(desktopDir, '..');
+// D1-fix: dùng app.getAppPath() — dev = desktop/, packaged = asar root (paths nhất quán 2 môi trường)
+const appRoot = app.getAppPath();
+const protoDir = app.isPackaged ? appRoot : path.join(appRoot, '..');
 const settingsFile = path.join(app.getPath('userData'), 'orchestra-settings.json');
 
 // icon 16x16 PNG sinh từ base64 tối giản — tránh phụ thuộc asset file
@@ -40,7 +39,7 @@ if (!gotLock) {
       title: 'Orchestra Desktop',
       icon: nativeImage.createFromBuffer(ICON_PNG),
       webPreferences: {
-        preload: path.join(desktopDir, 'src', 'preload.cjs'),
+        preload: path.join(appRoot, 'src', 'preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
       },
@@ -48,7 +47,7 @@ if (!gotLock) {
     // E2E: --page=chat mở thẳng page (router hash) — dùng cho screenshot gate
     const pageArg = process.argv.find((a) => a.startsWith('--page='));
     const hash = pageArg ? pageArg.split('=')[1] ?? '' : '';
-    win.loadFile(path.join(desktopDir, 'src', 'renderer', 'index.html'), { hash: hash ? `/${hash}` : undefined });
+    win.loadFile(path.join(appRoot, 'src', 'renderer', 'index.html'), { hash: hash ? `/${hash}` : undefined });
     win.on('closed', () => {
       win = null;
     });
@@ -84,7 +83,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     // smoke settings sớm — fail nhanh nếu userData không ghi được
     loadSettings(settingsFile);
-    wireIpc(app as unknown as Parameters<typeof wireIpc>[0], {
+    wireIpc(ipcMain, {
       win: () => win,
       settingsFile,
       notify: (title, body) => {
@@ -92,7 +91,7 @@ if (!gotLock) {
       },
       protoDir,
     });
-    wireTerminals(app as unknown as Parameters<typeof wireIpc>[0], {
+    wireTerminals(ipcMain, {
       win: () => win,
       settingsFile,
       notify: (title, body) => {

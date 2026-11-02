@@ -1,10 +1,24 @@
 // Memory layer — memory-interface-spec v0.1, phần P4:
 // tầng 2 (episodic sqlite) · tầng 3 (KB markdown) · tầng 7 (fleet stats EMA)
 // Nguyên tắc: retrospective là hệ ghi chính; brains chỉ lưu + truy vấn (§1)
-import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
+
+// FIX (bug từ Desktop runtime): Electron 33 bundle Node 20 — KHÔNG có node:sqlite (landing 22.5+).
+// Lazy require tại điểm dùng + graceful degrade: Desktop chạy được, chỉ bỏ episodic sqlite
+// (JSONL mirror vẫn ghi). CLI dưới Node 24 vẫn đầy đủ.
+type DatabaseSync = { prepare: (sql: string) => { run: (...v: unknown[]) => unknown; get: (...v: unknown[]) => any }; exec: (sql: string) => void; close: () => void };
+function openSqliteOrNull(file: string): DatabaseSync | null {
+  try {
+    const req = createRequire(import.meta.url);
+    const { DatabaseSync } = req('node:sqlite') as { DatabaseSync: new (f: string) => DatabaseSync };
+    return new DatabaseSync(file);
+  } catch {
+    return null; // Electron Node 20 / môi trường thiếu node:sqlite
+  }
+}
 
 // ---------- Fleet stats (tầng 7) — Role Policy §5 ----------
 export interface TaskRecordLite {
@@ -107,10 +121,11 @@ export function statsKey(worker: string, role: string): string {
 }
 
 // ---------- Episodic sqlite (tầng 2) ----------
-export function openEpisodic(repo: string): DatabaseSync {
+export function openEpisodic(repo: string): DatabaseSync | null {
   const dir = path.join(repo, '.orchestra');
   mkdirSync(dir, { recursive: true });
-  const db = new DatabaseSync(path.join(dir, 'episodic.sqlite'));
+  const db = openSqliteOrNull(path.join(dir, 'episodic.sqlite'));
+  if (!db) return null;
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY, ts TEXT, node TEXT, role TEXT, worker TEXT,
     exit INTEGER, scope_ok INTEGER, usd REAL, tokens_in INTEGER, tokens_out INTEGER
@@ -123,6 +138,7 @@ export function openEpisodic(repo: string): DatabaseSync {
 
 export function syncTasksToSqlite(repo: string): number {
   const db = openEpisodic(repo);
+  if (!db) return 0; // node:sqlite không khả dụng (Electron Node 20) — episodic sqlite tắt tạm
   const records = readRecords(path.join(repo, '.orchestra', 'tasks'));
   const insert = db.prepare(
     `INSERT OR REPLACE INTO tasks (id, ts, node, role, worker, exit, scope_ok, usd, tokens_in, tokens_out)
@@ -156,14 +172,16 @@ export type FeedbackType =
 
 export function addFeedback(repo: string, fb: { type: FeedbackType; taskId?: string; worker?: string; detail?: string }): void {
   const db = openEpisodic(repo);
-  db.prepare('INSERT INTO feedback (ts, type, task_id, worker, detail) VALUES (?, ?, ?, ?, ?)').run(
-    new Date().toISOString(),
-    fb.type,
-    fb.taskId ?? null,
-    fb.worker ?? null,
-    fb.detail ?? null,
-  );
-  db.close();
+  if (db) {
+    db.prepare('INSERT INTO feedback (ts, type, task_id, worker, detail) VALUES (?, ?, ?, ?, ?)').run(
+      new Date().toISOString(),
+      fb.type,
+      fb.taskId ?? null,
+      fb.worker ?? null,
+      fb.detail ?? null,
+    );
+    db.close();
+  }
   // mirror JSONL — đọc được bằng mắt, sync qua git
   appendFileSync(
     path.join(repo, '.orchestra', 'feedback.jsonl'),
