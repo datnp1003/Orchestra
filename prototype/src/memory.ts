@@ -30,6 +30,8 @@ export interface TaskRecordLite {
   run: { exit: number | null; killed: boolean };
   scope_check?: { ok: boolean };
   usage?: { usd?: number | null } | null;
+  outcome?: string;
+  files_changed?: string[];
 }
 
 export interface FleetStat {
@@ -57,6 +59,8 @@ function readRecords(dir: string): TaskRecordLite[] {
         run: r.run ?? { exit: null, killed: false },
         scope_check: r.scope_check,
         usage: r.usage ?? null,
+        outcome: r.outcome,
+        files_changed: r.artifacts?.files_changed,
       });
     } catch {
       /* record lỗi — bỏ qua, không crash aggregator */
@@ -66,6 +70,9 @@ function readRecords(dir: string): TaskRecordLite[] {
 }
 
 function passedRec(r: TaskRecordLite): boolean {
+  if (r.outcome === 'no_change') return false;
+  // record cũ (chưa có outcome): implement không đổi file nào cũng là thất bại
+  if (r.node === 'implement' && Array.isArray(r.files_changed) && r.files_changed.length === 0) return false;
   return !r.run.killed && r.run.exit === 0 && r.scope_check?.ok !== false;
 }
 

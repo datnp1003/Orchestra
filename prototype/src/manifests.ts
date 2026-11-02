@@ -268,7 +268,7 @@ const codex: Manifest = {
       '--json',
       '--skip-git-repo-check',
       '--sandbox',
-      opts.sandbox === 'worktree-write' ? 'workspace-write' : 'read-only',
+      codexSandbox(opts.sandbox),
     ];
     if (opts.model) args.push('-c', `model=${opts.model}`);
     args.push(prompt);
@@ -281,8 +281,16 @@ const codex: Manifest = {
     'conformance pin: 0.164.0',
     'event format exec --json là experimental — unmapped lines là tín hiệu cần sửa adapter',
     '--skip-git-repo-check: prototype chạy ngoài git repo',
+    'Windows non-admin: workspace-write fail (restricted-token sandbox) → worktree-write dùng danger-full-access; isolation chỉ còn git worktree + scope check (Lớp 4) + fs cross-check (Lớp 3) — codex KHÔNG có PreToolUse hook nên guard.cjs không áp dụng',
   ],
 };
+
+/** codex --sandbox theo node: read-only giữ nguyên mọi OS; worktree-write trên win32 → danger-full-access
+ *  (unelevated restricted-token sandbox của codex không spawn được shell — E2E t-mvyyi9rd-agyn). */
+export function codexSandbox(sandbox: HeadlessOpts['sandbox'], platform: NodeJS.Platform = process.platform): string {
+  if (sandbox !== 'worktree-write') return 'read-only';
+  return platform === 'win32' ? 'danger-full-access' : 'workspace-write';
+}
 
 const antigravity: Manifest = {
   id: 'antigravity',

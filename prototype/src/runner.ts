@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { FleetEvent, HeadlessOpts, Manifest } from './types.js';
 import { resolveVaultEnv } from './vault.js';
 import { protoAsset } from './paths.js';
+import { changedFiles as gitChangedFiles, isGitRepo } from './worktree.js';
 
 // ---------- Supervisor Lớp 3 helpers (Worker Protocol §9b) ----------
 
@@ -41,6 +42,16 @@ export function computeFsCrossCheck(changed: string[], targets: string[]): { ok:
     return !baselines.some((t) => t.includes(base));
   });
   return { ok: unreported.length === 0, unreported };
+}
+
+/**
+ * fs.watch bắn cả cho file git vừa checkout khi tạo worktree → chỉ giữ file git thấy thực sự đổi
+ * (porcelain trước stageAll: modified + untracked; untracked dir hiện dạng `dir/`). Không phải git → giữ nguyên.
+ */
+export function filterRealChanges(watchDir: string, fsChanged: string[]): string[] {
+  if (!isGitRepo(watchDir)) return fsChanged;
+  const real = gitChangedFiles(watchDir).map((f) => f.replace(/\\/g, '/'));
+  return fsChanged.filter((f) => real.some((g) => g === f || (g.endsWith('/') && f.startsWith(g))));
 }
 
 /**
@@ -262,7 +273,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
         };
         events.push(doneEv);
         opts.onEvent?.(doneEv);
-        const fsChanged = [...changedFiles];
+        const fsChanged = opts.watchDir ? filterRealChanges(opts.watchDir, [...changedFiles]) : [...changedFiles];
         resolve({
           exitCode,
           killed,

@@ -210,6 +210,8 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   for (const e of run.events) eventCounts[e.t] = (eventCounts[e.t] ?? 0) + 1;
   const msgEvents = run.events.filter((e) => e.t === 'message' && typeof e['text'] === 'string');
   const lastMessage = msgEvents.length ? (msgEvents[msgEvents.length - 1]!['text'] as string) : undefined;
+  // implement (kể cả fixer) không đổi file nào = thất bại, dù exit 0 — vd sandbox chặn shell
+  const noChange = o.node === 'implement' && files.length === 0;
 
   const record = {
     id: taskId,
@@ -234,6 +236,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
       ? { tokens_in: lastUsage['tokens_in'] ?? null, tokens_out: lastUsage['tokens_out'] ?? null, usd: lastUsage['usd'] ?? null }
       : null,
     artifacts: { files_changed: files, patch_ref: patch ? patchPath : null },
+    ...(noChange ? { outcome: 'no_change' } : {}),
     last_message: lastMessage,
     session: run.session ?? null,
     fs_cross_check: run.fsCrossCheck,
@@ -248,6 +251,16 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     commitAll(wt.path, `orchestra: ${o.node} ${taskId}`);
   }
 
+  if (noChange) {
+    return {
+      ok: false,
+      taskId,
+      stage: 'no_change',
+      reason: `implement không thay đổi file nào (exit=${run.exitCode}). worker: ${(lastMessage ?? '').slice(0, 300)} | stderr: ${run.stderrTail.slice(0, 300)}`,
+      recordPath,
+      record,
+    };
+  }
   return {
     ok: !run.killed && run.exitCode === 0 && scopeCheck.ok,
     taskId,

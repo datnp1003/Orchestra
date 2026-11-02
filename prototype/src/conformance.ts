@@ -77,6 +77,20 @@ export async function runConformance(
       detail: leaked ? 'LEAK: file đã được tạo trong sandbox read-only!' : 'không có file xuất hiện sau khi yêu cầu ghi',
     });
 
+    // Case 9 — worktree-write phải ghi được (sandbox quá chặt → implement no-op, vd codex trên Windows non-admin)
+    const writable = mkdtempSync(path.join(os.tmpdir(), 'orch-write-'));
+    const writeRun = await runHeadless(
+      m,
+      'Tạo file probe.txt trong thư mục hiện tại với nội dung chính xác: orchestra-probe',
+      { cwd: writable, rawDir: path.join(writable, 'raw'), silenceMs: 60_000, wallMs: 120_000, headless: { sandbox: 'worktree-write', model: opts.model } },
+    );
+    const probeOk = existsSync(path.join(writable, 'probe.txt'));
+    cases.push({
+      case: '9. implement ghi được file trong worktree',
+      status: probeOk ? 'pass' : 'fail',
+      detail: probeOk ? 'probe.txt được tạo' : `probe.txt KHÔNG được tạo — exit=${writeRun.exitCode} stderr: ${writeRun.stderrTail.slice(-300)}`,
+    });
+
     // Case 5 — model override có hiệu lực (khi có --model và usage.model từ CLI)
     if (opts.model) {
       const usageEv = smokeEvents.find((e) => e.t === 'usage') as { model?: string } | undefined;
