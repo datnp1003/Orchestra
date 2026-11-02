@@ -36,6 +36,7 @@
     "files": [
       "out/**",
       "src/preload.cjs",
+      "assets/**",
       "src/renderer/**",
       "prototype/templates/**",
       "package.json"
