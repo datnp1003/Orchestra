@@ -19,10 +19,10 @@ import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '
 import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
-import { fromClaudeSettings, fromCodexConfig } from './importCli.js';
+import { parseChatSession, SESSION_ID_RE } from './chatSessions.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 
 // R2a: 1 provider store + 1 router cho cả app — brain, dispatch, pipeline đều đi qua đây
 const store = createProviderStore();
@@ -165,29 +165,6 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     }
   });
   ipcMain.handle(IPC.ROUTER_STATUS, () => ({ running: !!router, port: router?.port ?? null, providers: store.listProviders().length }));
-  // đọc config CLI của user trong main; trả id + lý do bỏ qua, không trả key
-  ipcMain.handle(IPC.PROVIDERS_IMPORT, () => {
-    const read = (f: string) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
-    const imported: string[] = [];
-    const skipped: string[] = [];
-    const cl = read(path.join(os.homedir(), '.claude', 'settings.json'));
-    const cx = read(path.join(os.homedir(), '.codex', 'config.toml'));
-    const found = [
-      cl === null ? { skip: 'claude: không có ~/.claude/settings.json' } : fromClaudeSettings(cl),
-      cx === null ? { skip: 'codex: không có ~/.codex/config.toml' } : fromCodexConfig(cx, process.env),
-    ];
-    for (const f of found) {
-      if ('skip' in f) skipped.push(f.skip);
-      else {
-        try {
-          imported.push(store.saveProvider(f.cfg, f.key).id);
-        } catch (err) {
-          skipped.push(`${f.cfg.id}: ${errMsg(err)}`);
-        }
-      }
-    }
-    return { imported, skipped };
-  });
   ipcMain.handle(IPC.REPO_SET_ACTIVE, (_e, repo: string) => {
     const s = settings();
     if (!s.repos.includes(repo)) s.repos.push(repo);
@@ -202,7 +179,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
 
   ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
-  ipcMain.handle(IPC.TASKS_LIST, () => withRepo(tasksSnapshot, () => []));
+  ipcMain.handle(IPC.TASKS_LIST, (_e, p?: { limit?: number }) => withRepo((repo) => tasksSnapshot(repo, p?.limit), () => []));
   ipcMain.handle(IPC.MATRIX_HTML, () => withRepo((repo) => policyMatrixHtml(repo, true), () => ''));
   ipcMain.handle(IPC.PROMOTE, (_e, p: { role: string; cli: string }) =>
     withRepo((repo) => promoteWorker(repo, p.role, p.cli), (detail) => ({ ok: false, detail })));
@@ -320,6 +297,28 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     chatAbort?.abort();
     return { ok: !!chatAbort };
   });
+  // session = 1 file jsonl; mở lại → lượt sau append tiếp vào file đó
+  ipcMain.handle(IPC.CHAT_SESSIONS, () => withRepo((repo) => {
+    const dir = path.join(repo, '.orchestra', 'chat');
+    if (!existsSync(dir)) return [];
+    // ponytail: parse cả file mỗi lần list — chậm khi hàng trăm session dài → cache theo mtime
+    return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+      const file = path.join(dir, f);
+      const id = f.slice(0, -'.jsonl'.length);
+      const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
+      return { id, title, turns, updatedAt: statSync(file).mtime.toISOString(), active: id === chat.startedAt };
+    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, () => []));
+  ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { id: string }) => withRepo((repo) => {
+    if (chatBusy) return { ok: false, error: 'Orchestra đang xử lý lượt trước — chờ xong rồi mở session khác' };
+    const id = String(p?.id ?? '');
+    if (!SESSION_ID_RE.test(id)) return { ok: false, error: 'session id không hợp lệ' };
+    const file = path.join(repo, '.orchestra', 'chat', `${id}.jsonl`);
+    if (!existsSync(file)) return { ok: false, error: `không có session ${id}` };
+    const { history, messages } = parseChatSession(readFileSync(file, 'utf8'));
+    chat = { history, startedAt: id };
+    return { ok: true, messages };
+  }, (error) => ({ ok: false, error })));
   ipcMain.handle(IPC.CHAT_RESET, () => {
     resetChat();
     return { ok: true };

@@ -15,10 +15,11 @@ import path from 'node:path';
 
 export const FALLBACK_REPO = 'C:/Users/Nitro V 15/Desktop/Source/Orchestra/prototype/demo-repo';
 
-export function fleetSnapshot(): { id: string; installed: boolean; version?: string; auth: string }[] {
+/** router = CLI có routerArgs (auth đi qua Orchestra router) */
+export function fleetSnapshot(): { id: string; display: string; installed: boolean; version?: string; auth: string; router: boolean }[] {
   return MANIFESTS.map((m) => {
     const s = checkStatus(m);
-    return { id: m.id, installed: s.installed, version: s.version, auth: s.auth };
+    return { id: m.id, display: m.display, installed: s.installed, version: s.version, auth: s.auth, router: !!m.routerArgs };
   });
 }
 
@@ -33,14 +34,16 @@ export function modelsList(ids: string[], providers: ProviderConfig[]): {
   };
 }
 
-export function tasksSnapshot(repo = FALLBACK_REPO): { id: string; node: string; worker: string; exit: number | null; scopeOk: boolean; files: number }[] {
+/** limit: chỉ đọc N file mới nhất (tên file sort được theo thời gian) — không parse hết rồi bỏ */
+export function tasksSnapshot(repo = FALLBACK_REPO, limit = 20): { id: string; node: string; worker: string; exit: number | null; scopeOk: boolean; files: number }[] {
   const dir = path.join(repo, '.orchestra', 'tasks');
   if (!existsSync(dir)) return [];
+  const n = Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 200); // limit đến từ IPC → clamp
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .sort()
     .reverse()
-    .slice(0, 30)
+    .slice(0, n)
     .map((f) => {
       try {
         const r = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));

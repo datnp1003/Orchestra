@@ -23,7 +23,6 @@ export const IPC = {
   PROVIDERS_SAVE: 'providers:save',
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_TEST: 'providers:test',
-  PROVIDERS_IMPORT: 'providers:import',
   ROUTER_STATUS: 'router:status',
   OAUTH_START: 'oauth:start',
   OAUTH_FINISH: 'oauth:finish',
@@ -38,6 +37,8 @@ export const IPC = {
   BRAIN_MODELS: 'brain:models',
   CHAT_RESET: 'chat:reset',
   CHAT_CANCEL: 'chat:cancel',
+  CHAT_SESSIONS: 'chat:sessions',
+  CHAT_OPEN: 'chat:open',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -54,7 +55,7 @@ export const EVENTS = {
   CHAT_STEP: 'chat:step',
 } as const;
 
-export const PAGES = ['dashboard', 'chat', 'transcript', 'matrix', 'settings', 'wizard'] as const;
+export const PAGES = ['dashboard', 'chat', 'transcript', 'settings', 'wizard'] as const;
 export type Page = (typeof PAGES)[number];
 
 export interface AppSettings {

@@ -80,26 +80,40 @@ function renderChrome() {
   }
 }
 
-async function loadSideTasks() {
-  const box = $('#sideTaskList');
-  if (!box) return;
-  const tasks = await api.invoke('tasks:list');
-  const recent = tasks.slice(-6).reverse();
-  box.innerHTML = recent.map((t) => `
-    <div class="task-item" data-hash="#/transcript" title="${esc(t.node)}/${esc(t.worker)} exit=${t.exit ?? '-'}">
-      <span class="dot ${t.exit === 0 ? 'ok' : t.exit == null ? '' : 'err'}"></span>
-      <span class="task-id">${esc(t.id)}</span>
-      <span class="task-worker">${esc(t.worker)}</span>
-    </div>`).join('') || '<div class="side-empty">Chưa có task</div>';
-  box.querySelectorAll('.task-item').forEach((el) => { el.onclick = () => (location.hash = el.dataset.hash); });
+// ---------- Sessions (hội thoại đã lưu — click để resume) ----------
+const ago = (iso) => {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  return s < 60 ? 'vừa xong' : s < 3600 ? `${Math.floor(s / 60)} phút` : s < 86400 ? `${Math.floor(s / 3600)} giờ` : `${Math.floor(s / 86400)} ngày`;
+};
+async function loadSessions() {
+  const box = $('#sideSessionList');
+  const list = await api.invoke('chat:sessions');
+  box.innerHTML = list.map((x) => `
+    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" title="${esc(`${x.title} — ${x.turns} lượt`)}">
+      <span class="session-title">${esc(x.title)}</span>
+      <span class="session-time">${esc(ago(x.updatedAt))}</span>
+    </div>`).join('') || '<div class="side-empty">Chưa có session</div>';
+  box.querySelectorAll('[data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.session); });
+}
+let openedMsgs = null; // tin nhắn của session vừa mở — renderChat vẽ 1 lần
+async function openSession(id) {
+  const r = await api.invoke('chat:open', { id });
+  if (!r.ok) return alert('✗ ' + r.error);
+  openedMsgs = r.messages;
+  if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
+  else location.hash = '#/chat';
+  loadSessions();
+}
+async function newChat() {
+  await api.invoke('chat:reset');
+  openedMsgs = null;
+  if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
+  else location.hash = '#/chat';
+  loadSessions();
 }
 
 // ---------- chrome clicks ----------
-document.getElementById('newTask').onclick = () => {
-  location.hash = '#/chat';
-  route();
-  setTimeout(() => $('#chatInput')?.focus(), 60);
-};
+document.getElementById('newChat').onclick = newChat;
 document.getElementById('btnSettings').onclick = () => {
   settingsTab = 'chung';
   if (!location.hash.includes('#/settings')) location.hash = '#/settings';
@@ -110,6 +124,7 @@ $('#repoSel').addEventListener('change', async (e) => {
   if (!r || r.startsWith('(')) return;
   await api.invoke('repo:set-active', r);
   await loadSettings();
+  loadSessions();
   route(); // nạp lại trang hiện tại với repo mới
 });
 
@@ -118,11 +133,9 @@ $('#cbModel').addEventListener('change', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
   renderChrome();
   if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
+  loadSessions();
 });
-$('#cbNew').addEventListener('click', async () => {
-  await api.invoke('chat:reset');
-  renderChat();
-});
+$('#cbNew').addEventListener('click', newChat);
 
 function logLine(s) {
   const el = $('#log');
@@ -145,6 +158,8 @@ async function renderChat() {
     return d;
   };
   add('greet', '◆ Orchestra sẵn sàng. Mô tả task — Orchestra tự khảo sát repo và giao việc cho worker.');
+  for (const m of openedMsgs ?? []) add(m.role, m.text);
+  openedMsgs = null;
   const input = $('#chatInput');
   const send = async () => {
     const t = input.value.trim();
@@ -159,6 +174,7 @@ async function renderChat() {
       await api.invoke('chat:exchange', { text: t });
     } finally {
       stop.hidden = true;
+      loadSessions();
     }
   };
   $('#chatSend').onclick = send;
@@ -209,7 +225,7 @@ async function renderChat() {
 async function renderDashboard() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
-  const [, tasks] = await Promise.all([loadFleet(), api.invoke('tasks:list'), loadSettings()]);
+  const [, tasks] = await Promise.all([loadFleet(), api.invoke('tasks:list', { limit: TOP_N }), loadSettings()]);
   page.innerHTML = `
     <h2>Dashboard</h2>
     <div class="card"><h3>Fleet</h3>
@@ -234,13 +250,14 @@ async function renderDashboard() {
         <button id="pGo">Chạy pipeline</button>
       </div>
     </div>
-    <div class="card"><h3>Task records</h3>
+    <div class="card"><h3>Task records — ${TOP_N} mới nhất, click để xem trong Transcript</h3>
       <table><thead><tr><th>id</th><th>node</th><th>worker</th><th>exit</th><th>scope</th><th>files</th></tr></thead>
-      <tbody>${tasks.map((t) => `<tr class="click-row"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${t.files}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">chưa có</td></tr>'}</tbody>
+      <tbody>${tasks.map((t, i) => `<tr class="click-row" data-i="${i}"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${t.files}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">chưa có</td></tr>'}</tbody>
       </table>
     </div>
-    <div class="card"><h3>Live stream</h3><div id="log"></div></div>`;
-  page.querySelectorAll('.click-row').forEach((el) => { el.onclick = () => (location.hash = '#/transcript'); });
+    <div class="card" id="transcript"></div>`;
+  renderTranscript($('#transcript'), tasks);
+  if (openTranscript) { openTranscript = false; $('#transcript').scrollIntoView(); }
   $('#dWorker').onchange = () => { $('#dModel').innerHTML = modelOptions($('#dWorker').value, '', '(theo policy)'); };
   $('#btnToWizard').onclick = () => { settingsTab = 'workers'; location.hash = '#/settings'; };
   $('#dGo').onclick = async () => {
@@ -250,7 +267,6 @@ async function renderDashboard() {
     const r = await api.invoke('dispatch', { goal, scope: split($('#dScope').value), worker: $('#dWorker').value, model: $('#dModel').value });
     if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.result.ok ? '✓ OK' : '✗ FAILED'} ${r.result.taskId}${r.override && r.override.startsWith('override') ? ' — ' + r.override : ''}`);
-    loadSideTasks();
   };
   $('#pGo').onclick = async () => {
     const goal = $('#pGoal').value.trim();
@@ -259,49 +275,47 @@ async function renderDashboard() {
     const r = await api.invoke('pipeline:run', { template: $('#pTpl').value, goal, scope: split($('#pScope').value), model: $('#pModel').value });
     if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} merged=${r.merged}`);
-    loadSideTasks();
   };
-  on('dispatch:event', (d) => logLine(`[${d.t}] ${JSON.stringify(d.payload).slice(0, 160)}`));
-  on('pipeline:log', (line) => logLine(line));
 }
 
-// ---------- Transcript ----------
-async function renderTranscript() {
-  composerWrap.hidden = true;
-  page.classList.remove('fill');
-  const tasks = await api.invoke('tasks:list');
-  page.innerHTML = `
-    <h2>Transcript</h2>
-    <div class="card"><h3>Task records — click để xem JSON</h3>
-      <table><tbody>${tasks.map((t) => `<tr class="click-row" data-info="${esc(`${t.id} — ${t.node}/${t.worker} exit=${t.exit}`)}"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.files} file</td></tr>`).join('') || '<tr><td class="dim">chưa có record</td></tr>'}</tbody>
-      </table>
-    </div>
-    <div class="card"><h3>Live stream (mọi run)</h3><div id="log"></div></div>`;
-  page.querySelectorAll('[data-info]').forEach((el) => { el.onclick = () => alert(el.dataset.info); });
+// ---------- Transcript (section trong Dashboard; #/transcript cũ → #/dashboard) ----------
+const TOP_N = 20;
+let openTranscript = false;
+// tasks: top-N mới nhất (main đã giới hạn); click row ở bảng Task records → chọn task cho transcript
+function renderTranscript(box, tasks) {
+  box.innerHTML = `<h3>Transcript</h3><div id="trSel" class="dim">click 1 task ở Task records để xem</div>
+    <h3>Live stream (mọi run)</h3><div id="log"></div>`;
+  page.querySelectorAll('.click-row[data-i]').forEach((el) => {
+    el.onclick = () => {
+      const t = tasks[el.dataset.i];
+      page.querySelectorAll('.click-row.sel').forEach((r) => r.classList.remove('sel'));
+      el.classList.add('sel');
+      $('#trSel').textContent = `${t.id} — ${t.node}/${t.worker} exit=${t.exit ?? '-'} scope=${t.scopeOk ? 'OK' : 'VIOLATION'} files=${t.files}`;
+      box.scrollIntoView({ block: 'nearest' });
+    };
+  });
   on('dispatch:event', (d) => logLine(`[${d.t}] ${JSON.stringify(d.payload).slice(0, 160)}`));
   on('pipeline:log', (line) => logLine(line));
   on('install:log', (line) => logLine('[install] ' + line));
 }
 
-// ---------- Policy Matrix ----------
-async function renderMatrix() {
-  composerWrap.hidden = true;
-  page.classList.remove('fill');
+// ---------- Policy Matrix (tab trong Cài đặt) ----------
+async function renderMatrix(box) {
   const html = await api.invoke('matrix:html');
   if (!html) {
-    page.innerHTML = `<h2>Policy Matrix</h2><div class="card dim">Chưa chọn repo (hoặc repo không tồn tại) — thêm repo ở Cài đặt.</div>`;
+    box.innerHTML = `<div class="card dim">Chưa chọn repo (hoặc repo không tồn tại) — thêm repo ở tab Chung.</div>`;
     return;
   }
   // <script> inline của policyMatrixHtml bị CSP chặn → bỏ; parent gắn click qua contentDocument (srcdoc cùng origin)
-  page.innerHTML = `<h2>Policy Matrix</h2><div class="card" id="iframeWrap"><iframe srcdoc="${esc(html.replace(/<script[\s\S]*?<\/script>/gi, ''))}"></iframe></div>`;
-  const frame = page.querySelector('iframe');
+  box.innerHTML = `<div class="card" id="iframeWrap"><iframe srcdoc="${esc(html.replace(/<script[\s\S]*?<\/script>/gi, ''))}"></iframe></div>`;
+  const frame = box.querySelector('iframe');
   frame.addEventListener('load', () => {
     frame.contentDocument.addEventListener('click', async (e) => {
       const td = e.target.closest?.('td[data-role]');
       if (!td) return;
       const r = await api.invoke('matrix:promote', { role: td.dataset.role, cli: td.dataset.cli });
       if (!r.ok) alert(r.detail);
-      renderMatrix();
+      renderMatrix(box);
     });
   });
 }
@@ -312,7 +326,7 @@ async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const [s] = await Promise.all([loadSettings(), loadFleet()]);
-  const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills']];
+  const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
   const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
     ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
   const isOAuth = (k) => k.startsWith('oauth-');
@@ -340,9 +354,9 @@ async function renderSettings() {
         <h3>Worker CLI (npm)</h3>
         ${FLEET.map((f) => `<div class="wizard-step">
           <span class="dot ${f.installed ? 'ok' : 'err'}"></span>
-          <b>${esc(f.display)}</b><span class="dim">${esc(f.version ?? 'chưa cài')}</span>
+          <div><b>${esc(f.display || f.id)}</b> <span class="mono dim">${esc(f.id)}</span> <span class="dim">· ${esc(f.installed ? f.version ?? 'đã cài' : 'chưa cài')}</span>
+            <div class="dim">${f.router ? 'Auth: qua Orchestra router' : 'chưa hỗ trợ router'}</div></div>
           <button class="secondary" data-install="${esc(f.id)}">${f.installed ? 'Cài lại' : 'Cài'}</button>
-          ${f.installed ? `<button class="secondary" data-auth="${esc(f.id)}">Auth</button>` : ''}
         </div>`).join('')}
         <div id="log" style="margin-top:10px"></div>
       </div>`)}
@@ -352,10 +366,7 @@ async function renderSettings() {
         <div class="dim">Router: <span id="rStatus">…</span></div>
         <table><thead><tr><th>id</th><th>kind</th><th>baseUrl</th><th>formats</th><th>bật</th><th>key</th><th></th></tr></thead>
         <tbody id="prRows"></tbody></table>
-        <div class="row">
-          <button class="secondary" id="prImport">Import từ claude/codex config</button>
-          <span id="prOut" class="dim"></span>
-        </div>
+        <div class="row"><span id="prOut" class="dim"></span></div>
         <div class="row" id="prCodeRow" hidden>
           <input id="prCode" placeholder="dán code#state từ trang Anthropic" autocomplete="off" />
           <button id="prCodeOk">Xác nhận</button>
@@ -365,6 +376,9 @@ async function renderSettings() {
       </div>
       <div class="card">
         <h3>Thêm / sửa provider</h3>
+        <div class="quick-add" id="prQuickKey"></div>
+        <div class="side-title">OAuth</div>
+        <div class="quick-add" id="prQuickOAuth"></div>
         <label>id</label><input id="prId" placeholder="my-gw" autocomplete="off" />
         <label>kind</label><select id="prKind">${KINDS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select>
         <div id="prRisk" class="risk" hidden>
@@ -400,7 +414,9 @@ async function renderSettings() {
         <h3>Skills</h3>
         <button id="skSync">Sync KB → AGENTS.md + CLAUDE.md</button>
         <span id="skOut" class="dim" style="margin-left:8px"></span>
-      </div>`)}`;
+      </div>`)}
+    ${pane('matrix', '<div id="matrixBox"></div>')}`;
+  renderMatrix($('#matrixBox'));
   // chuyển tab
   page.querySelectorAll('.tab').forEach((t) => {
     t.onclick = () => {
@@ -440,12 +456,8 @@ async function renderSettings() {
       const r = await api.invoke('install:worker', b.dataset.install);
       logLine((r.ok ? '✓ ' : '✗ ') + r.detail);
       await loadFleet();
-      loadSideTasks();
       route();
     };
-  });
-  page.querySelectorAll('[data-auth]').forEach((b) => {
-    b.onclick = () => alert(`Login: mở terminal chạy CLI này (OAuth ${b.dataset.auth === 'claude' ? 'anthropic' : 'openai'}) — key/gateway khác cấu hình ở tab Providers.`);
   });
   // tab providers — key không bao giờ về renderer (chỉ hasKey)
   let PROVS = [];
@@ -456,6 +468,39 @@ async function renderSettings() {
     $('#prKeyed').hidden = o;
   };
   $('#prKind').onchange = syncKind;
+  // quick-add kiểu 9router: [kind, nhãn, id gợi ý, baseUrl mặc định, formats mặc định (= DEFAULT_FORMATS của router)]
+  const QUICK = [
+    ['anthropic', '＋ Anthropic API', 'anthropic', 'https://api.anthropic.com', ['messages']],
+    ['openai', '＋ OpenAI API', 'openai', 'https://api.openai.com', ['chat', 'responses']],
+    ['anthropic-compatible', '＋ Anthropic Compatible', 'anthropic-compat', '', ['messages']],
+    ['openai-compatible', '＋ OpenAI Compatible', 'openai-compat', '', ['chat']],
+    ['oauth-anthropic', 'Claude Code (Claude Pro/Max)', 'claude-code', '', ['messages']],
+    ['oauth-openai', 'OpenAI Codex (ChatGPT Plus/Pro)', 'codex', '', ['responses']],
+  ];
+  const renderQuick = () => {
+    const btn = ([kind, label]) => `<button class="secondary" data-quick="${kind}">${esc(label)}<span class="dim">${PROVS.filter((p) => p.kind === kind).length} đã kết nối</span></button>`;
+    $('#prQuickKey').innerHTML = QUICK.filter(([k]) => !isOAuth(k)).map(btn).join('');
+    $('#prQuickOAuth').innerHTML = QUICK.filter(([k]) => isOAuth(k)).map(btn).join('');
+    page.querySelectorAll('[data-quick]').forEach((b) => {
+      b.onclick = () => {
+        const [kind, , slug, url, fmts] = QUICK.find(([k]) => k === b.dataset.quick);
+        let n = 1;
+        while (PROVS.some((p) => p.id === `${slug}-${n}`)) n++;
+        $('#prId').value = `${slug}-${n}`;
+        $('#prKind').value = kind;
+        $('#prUrl').value = url;
+        $('#prUrl').placeholder = url || 'https://gw.company.com';
+        page.querySelectorAll('[data-fmt]').forEach((c) => { c.checked = fmts.includes(c.dataset.fmt); });
+        $('#prKey').value = '';
+        $('#prOn').checked = true;
+        $('#prRiskOk').checked = false;
+        $('#prModels').value = '';
+        syncKind();
+        $('#prId').focus();
+        $('#prId').select();
+      };
+    });
+  };
   const OAUTH_ST = { none: 'chưa đăng nhập', ok: 'đã đăng nhập', expired: 'hết hạn (tự refresh)', needsLogin: 'cần đăng nhập lại' };
   const refreshModels = async () => {
     await Promise.all([loadModels(), loadBrainModels()]);
@@ -466,6 +511,7 @@ async function renderSettings() {
   const renderProviders = async () => {
     const [list, st] = await Promise.all([api.invoke('providers:list'), api.invoke('router:status')]);
     PROVS = list;
+    renderQuick();
     $('#rStatus').textContent = st.running ? `✓ 127.0.0.1:${st.port} · ${st.providers} provider` : '✗ không chạy';
     $('#prRows').innerHTML = list.map((p) => `<tr>
       <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}${isOAuth(p.kind) ? ' <span class="badge-risk">OAuth ⚠</span>' : ''}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
@@ -546,12 +592,6 @@ async function renderSettings() {
     $('#prOut').textContent = r.ok ? `✓ đã lưu ${r.id}` : `✗ ${r.error}`;
     if (r.ok) await renderProviders();
   };
-  $('#prImport').onclick = async () => {
-    if (!confirm('Đọc ~/.claude/settings.json và ~/.codex/config.toml, lưu gateway + key (vault DPAPI) thành provider claude-gw / codex-gw?')) return;
-    const r = await api.invoke('providers:import');
-    $('#prOut').textContent = `import: ${r.imported.join(', ') || '(không có)'}${r.skipped.length ? ' · bỏ qua: ' + r.skipped.join('; ') : ''}`;
-    await renderProviders();
-  };
   $('#rDefault').onchange = async (e) => {
     SETTINGS = await api.invoke('settings:set', { ...SETTINGS, routerDefaultModel: e.target.value });
   };
@@ -621,12 +661,15 @@ async function renderTerminal() {
 }
 
 // ---------- router ----------
-const TITLES = { chat: 'Chat — Orchestrator', dashboard: 'Dashboard', terminal: 'Terminal', transcript: 'Transcript', matrix: 'Policy Matrix', settings: 'Cài đặt' };
-const ROUTES = { chat: renderChat, dashboard: renderDashboard, terminal: renderTerminal, transcript: renderTranscript, matrix: renderMatrix, settings: renderSettings };
+// terminal: route giữ nguyên nhưng không có link trên UI — tạm ẩn theo yêu cầu
+const TITLES = { chat: 'Chat — Orchestrator', dashboard: 'Dashboard', terminal: 'Terminal', settings: 'Cài đặt' };
+const ROUTES = { chat: renderChat, dashboard: renderDashboard, terminal: renderTerminal, settings: renderSettings };
 function route() {
   let hash = (location.hash || '#/chat').replace('#/', '');
   if (hash === 'wizard') hash = 'settings'; // hash cũ còn hoạt động
-  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === hash));
+  if (hash === 'transcript') { openTranscript = true; location.hash = '#/dashboard'; return; } // Transcript giờ là section trong Dashboard
+  if (hash === 'matrix') { settingsTab = 'matrix'; location.hash = '#/settings'; return; } // Policy Matrix giờ là tab trong Cài đặt (hashchange → route lại)
+  document.querySelectorAll('#sidebar a[data-page]').forEach((a) => a.classList.toggle('active', a.dataset.page === hash));
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
   $('#pageTitle').textContent = TITLES[hash] || 'Orchestra';
   (ROUTES[hash] || renderChat)();
@@ -637,7 +680,7 @@ window.addEventListener('hashchange', route);
 // ---------- init ----------
 (async () => {
   await loadSettings();
-  await Promise.all([loadFleet(), loadSideTasks(), loadModels(), loadBrainModels()]);
+  await Promise.all([loadFleet(), loadSessions(), loadModels(), loadBrainModels()]);
   route();
 })();
 
@@ -646,9 +689,9 @@ function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const settings = { activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
   const fleet = [
-    { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true },
-    { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true },
-    { id: 'antigravity', display: 'Antigravity', version: null, auth: 'unknown', conformance: null, installed: false },
+    { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
+    { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },
+    { id: 'antigravity', display: 'Antigravity', version: null, auth: 'unknown', conformance: null, installed: false, router: false },
   ];
   const tasks = [
     { id: 'task-0a1', node: 'implement', worker: 'claude', exit: 0, scopeOk: true, files: 3 },
@@ -667,7 +710,8 @@ function devStub() {
     if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true },
       { id: 'cc', kind: 'oauth-anthropic', baseUrl: 'https://api.anthropic.com', formats: ['messages'], enabled: true, hasKey: false, riskAcknowledged: true, models: ['claude-sonnet-5-5'], oauthStatus: 'none', expiresAt: null }];
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
-    if (ch === 'providers:import') return { imported: [], skipped: ['(stub)'] };
+    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Thêm cổng thanh toán X', updatedAt: new Date().toISOString(), turns: 2, active: false }];
+    if (ch === 'chat:open') return { ok: true, messages: [{ role: 'user', text: 'Thêm cổng thanh toán X' }, { role: 'orch', text: '(stub) session đã mở' }] };
     if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
     return { ok: true };

@@ -32,10 +32,10 @@ assert.equal(validateSettings({ routerDefaultModel: 7 }).routerDefaultModel, '')
 const old = validateSettings({ repos: ['C:/a'], activeRepo: 'C:/a', orchestratorWorker: 'claude', orchestratorModel: 'opus', brainModel: 'worker-claude', hooksEnabled: false });
 assert.deepEqual([old.activeRepo, old.brainModel, old.routerDefaultModel, old.hooksEnabled], ['C:/a', '', '', false]);
 assert.ok(chans.includes('models:list'), 'có channel models:list');
-for (const c of ['brain:models', 'chat:reset', 'chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'providers:import', 'router:status']) {
+for (const c of ['brain:models', 'chat:reset', 'chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'router:status', 'chat:sessions', 'chat:open']) {
   assert.ok(chans.includes(c), `có channel ${c}`);
 }
-for (const c of ['brain:config', 'vault:set', 'vault:delete']) assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
 assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: có oauth:start + oauth:finish');
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);

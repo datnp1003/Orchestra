@@ -36,8 +36,33 @@ console.log('✓ composer: nút Dừng');
 assert.ok(js.includes("['providers', 'Providers']") && !js.includes("'vault'"), 'tab Providers thay Vault');
 for (const c of ["'brain:config'", "'vault:set'", "'vault:delete'"]) assert.ok(!js.includes(c), `renderer không gọi ${c}`);
 assert.ok(/id="prKey" type="password"/.test(js), 'key input type=password');
-assert.ok(/confirm\([^)]*claude\/settings\.json/.test(js), 'import có confirm()');
-console.log('✓ Providers tab: password key, import có confirm, không còn vault/brain:config');
+assert.ok(!js.includes('providers:import') && !js.includes('prImport'), 'đã bỏ Import từ claude/codex config');
+for (const l of ['＋ Anthropic API', '＋ OpenAI API', '＋ Anthropic Compatible', '＋ OpenAI Compatible', 'Claude Code (Claude Pro/Max)', 'OpenAI Codex (ChatGPT Plus/Pro)', 'đã kết nối']) {
+  assert.ok(js.includes(l), `quick-add: ${l}`);
+}
+console.log('✓ Providers tab: password key, quick-add, không còn import/vault/brain:config');
+
+// UI feedback: sessions thay Tasks gần đây; nav gọn; Dashboard ngay trên Cài đặt; Matrix vào Settings
+assert.ok(html.includes('id="sideSessionList"') && js.includes("'chat:sessions'") && js.includes("'chat:open'"), 'sidebar có Sessions');
+assert.ok(!html.includes('Tasks gần đây') && !html.includes('sideTaskList') && !js.includes('loadSideTasks'), 'bỏ Tasks gần đây');
+assert.ok(html.includes('＋ Chat mới') && !html.includes('Task mới'), 'nút Chat mới');
+assert.ok(!js.includes('data-auth') && !/>Auth</.test(js), 'bỏ nút Auth worker');
+assert.ok(js.includes('Auth: qua Orchestra router') && js.includes('f.display'), 'worker có tên + dòng auth router');
+assert.ok(!html.includes('href="#/terminal"') && !html.includes('href="#/matrix"'), 'Terminal + Policy Matrix không còn trên nav');
+assert.ok(js.includes("['matrix', 'Policy Matrix']"), 'Policy Matrix là tab Settings');
+const nav = html.slice(html.indexOf('<nav id="nav">'), html.indexOf('</nav>'));
+assert.deepEqual([...nav.matchAll(/data-page="(\w+)"/g)].map((m) => m[1]), ['chat'], 'top nav: chỉ Chat');
+assert.ok(!html.includes('href="#/transcript"'), 'không còn link Transcript');
+const foot = html.slice(html.indexOf('id="sideFooter"'));
+assert.ok(foot.indexOf('href="#/dashboard"') > 0 && foot.indexOf('href="#/dashboard"') < foot.indexOf('id="btnSettings"'), 'Dashboard ngay trên Cài đặt');
+console.log('✓ sidebar: Sessions, Chat mới, nav chỉ Chat, Dashboard trên Cài đặt; Matrix tab; không Auth/Import/Terminal/Transcript');
+
+// Transcript là section trong Dashboard; #/transcript cũ → dashboard; top 20 (main giới hạn qua limit)
+const dash = js.slice(js.indexOf('async function renderDashboard'), js.indexOf('// ---------- Transcript'));
+assert.ok(dash.includes('id="transcript"') && dash.includes("renderTranscript($('#transcript'), tasks)"), 'Dashboard chứa section Transcript');
+assert.ok(/if \(hash === 'transcript'\) \{ openTranscript = true; location\.hash = '#\/dashboard'/.test(js) && !/transcript: renderTranscript/.test(js), '#/transcript → #/dashboard');
+assert.ok(/const TOP_N = 20;/.test(js) && dash.includes("api.invoke('tasks:list', { limit: TOP_N })"), 'tasks:list limit 20');
+console.log('✓ Transcript trong Dashboard, #/transcript redirect, top 20');
 
 // R3: OAuth — cảnh báo đỏ + checkbox bắt buộc trước khi lưu/đăng nhập
 assert.ok(js.includes("'oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'") && js.includes("'oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)'"), 'kind OAuth có label');
