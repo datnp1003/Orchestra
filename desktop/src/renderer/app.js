@@ -10,10 +10,11 @@ const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Bool
 let SETTINGS = null;
 let FLEET = [];
 let MODELS = { models: [], byWorker: {} };
+let BRAIN_MODELS = []; // model của Orchestra brain (gateway /v1/models)
 
 // ---------- event bus: đăng ký listener đúng 1 lần, route mới chỉ gắn handler ----------
 const handlers = {};
-for (const ch of ['dispatch:event', 'pipeline:log', 'install:log', 'chat:message', 'terminal:data', 'terminal:exit', 'update:status', 'nav']) {
+for (const ch of ['dispatch:event', 'pipeline:log', 'install:log', 'chat:message', 'chat:step', 'terminal:data', 'terminal:exit', 'update:status', 'nav']) {
   api.on(ch, (d) => handlers[ch]?.(d));
 }
 const on = (ch, fn) => { handlers[ch] = fn; };
@@ -33,6 +34,10 @@ async function loadModels() {
   MODELS = await api.invoke('models:list');
   renderChrome();
   return MODELS;
+}
+async function loadBrainModels() {
+  BRAIN_MODELS = (await api.invoke('brain:models')).models || [];
+  renderChrome();
 }
 // <option> model: '' = mặc định; worker rỗng (auto) = toàn bộ registry; model worker không chạy được → disabled + lý do
 function modelOptions(worker, cur, defLabel) {
@@ -60,19 +65,17 @@ function renderChrome() {
     pill.innerHTML = `<span class="dot ${n === FLEET.length ? 'ok' : 'err'}"></span>${n}/${FLEET.length} workers`;
   }
   // statusbar
-  $('#stWorker').textContent = `worker: ${SETTINGS?.orchestratorWorker ?? '—'} · model: ${SETTINGS?.orchestratorModel || 'mặc định'}`;
+  $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel ?? '—'}`;
   $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || '(chưa chọn)');
   const stFleet = $('#stFleet');
   if (FLEET.length) {
     const n = fleetInstalled();
     stFleet.innerHTML = `<span class="dot ${n ? 'ok' : 'err'}"></span> ${n}/${FLEET.length} workers`;
   }
-  // composer: chọn worker + model cho orchestrator
+  // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
   if (SETTINGS) {
-    const w = SETTINGS.orchestratorWorker;
-    const ids = [...new Set([w, ...FLEET.filter((f) => f.installed).map((f) => f.id)])];
-    $('#cbWorker').innerHTML = ids.map((id) => `<option ${id === w ? 'selected' : ''}>${esc(id)}</option>`).join('');
-    $('#cbModel').innerHTML = modelOptions(w, SETTINGS.orchestratorModel, '(mặc định CLI)');
+    const cur = SETTINGS.brainModel;
+    $('#cbModel').innerHTML = [...new Set([cur, ...BRAIN_MODELS])].map((id) => `<option ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
   }
 }
 
@@ -110,17 +113,16 @@ $('#repoSel').addEventListener('change', async (e) => {
   route(); // nạp lại trang hiện tại với repo mới
 });
 
-// đổi brain → lưu ngay (main reset chat session)
-async function setBrain(patch) {
-  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, ...patch });
+// đổi model Orchestra → lưu ngay (main reset hội thoại)
+$('#cbModel').addEventListener('change', async (e) => {
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
   renderChrome();
-}
-$('#cbWorker').addEventListener('change', (e) => {
-  const w = e.target.value;
-  const keep = (MODELS.byWorker[w] || []).some((m) => m.ok && m.id === SETTINGS.orchestratorModel);
-  setBrain({ orchestratorWorker: w, orchestratorModel: keep ? SETTINGS.orchestratorModel : '' });
+  if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
 });
-$('#cbModel').addEventListener('change', (e) => setBrain({ orchestratorModel: e.target.value }));
+$('#cbNew').addEventListener('click', async () => {
+  await api.invoke('chat:reset');
+  renderChat();
+});
 
 function logLine(s) {
   const el = $('#log');
@@ -142,7 +144,7 @@ async function renderChat() {
     $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
     return d;
   };
-  add('greet', '◆ Orchestrator sẵn sàng. Mô tả task hoặc hỏi về pipeline — dispatch chi tiết vẫn ở Dashboard.');
+  add('greet', '◆ Orchestra sẵn sàng. Mô tả task — Orchestra tự khảo sát repo và giao việc cho worker.');
   const input = $('#chatInput');
   const send = async () => {
     const t = input.value.trim();
@@ -154,12 +156,27 @@ async function renderChat() {
     await api.invoke('chat:exchange', { text: t });
   };
   $('#chatSend').onclick = send;
-  input.addEventListener('keydown', (e) => {
+  // gán property (không addEventListener): #chatInput sống qua các lần render → tránh gửi trùng
+  input.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  });
-  input.addEventListener('input', () => {
+  };
+  input.oninput = () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  };
+  // chèn trước bubble pending để '…đang xử lý' luôn ở cuối
+  const addStep = (cls, text) => {
+    const d = add(cls, text);
+    d.title = text; // dòng step bị ellipsis — hover xem đủ
+    const pending = $('#chatMsgs .pending');
+    if (pending) $('#chatMsgs').appendChild(pending);
+    return d;
+  };
+  on('chat:step', (s) => {
+    if (s.kind === 'tool_call') addStep('step', `⚙ ${s.name} ${JSON.stringify(s.input ?? {}).slice(0, 160)}`);
+    else if (s.kind === 'tool_result') addStep(s.ok ? 'step' : 'step err', `${s.ok ? '✓' : '✗'} ${s.name}: ${s.preview}`);
+    else if (s.kind === 'text') addStep('orch', s.text);
+    else addStep('step err', `✗ ${s.text}`);
   });
   on('chat:message', (m) => {
     const pending = $('#chatMsgs .pending');
@@ -285,8 +302,6 @@ async function renderSettings() {
       <div class="card">
         <label>Repos (mỗi dòng 1 đường dẫn)</label>
         <textarea id="sRepos" rows="4" class="mono">${esc(s.repos.join('\n'))}</textarea>
-        <label>Orchestrator worker (chat brain)</label>
-        <select id="sWorker">${[...new Set([s.orchestratorWorker, 'claude', 'codex', ...FLEET.filter((f) => f.installed).map((f) => f.id)])].map((id) => `<option ${id === s.orchestratorWorker ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>
         <label>Templates dir (để trống = mặc định)</label><input id="sTpl" value="${esc(s.templatesDir)}" />
         <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> Tự duyệt plan (pipeline không dừng hỏi)</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
@@ -309,6 +324,13 @@ async function renderSettings() {
         <div id="log" style="margin-top:10px"></div>
       </div>`)}
     ${pane('vault', `
+      <div class="card">
+        <h3>Orchestra brain (LLM API — Anthropic Messages compatible)</h3>
+        <div class="dim">Trạng thái: <span id="bStatus">…</span></div>
+        <label>Base URL</label><input id="bUrl" placeholder="https://gateway.example.com" />
+        <label>API key</label><input id="bKey" type="password" autocomplete="off" />
+        <button id="bSave">Lưu</button>
+      </div>
       <div class="card">
         <h3>Vault — API key / Custom provider (DPAPI)</h3>
         <label>Provider</label><select id="vProvider"><option>anthropic</option><option>openai</option></select>
@@ -345,8 +367,6 @@ async function renderSettings() {
     const next = {
       ...s,
       repos: $('#sRepos').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
-      orchestratorWorker: $('#sWorker').value,
-      orchestratorModel: $('#sWorker').value === s.orchestratorWorker ? s.orchestratorModel : '', // đổi worker → model về mặc định
       templatesDir: $('#sTpl').value.trim(),
       autoApprovePlan: $('#sAuto').checked,
       hooksEnabled: $('#sHooks').checked,
@@ -380,7 +400,17 @@ async function renderSettings() {
   page.querySelectorAll('[data-auth]').forEach((b) => {
     b.onclick = () => alert(`Login: mở terminal chạy CLI này (OAuth ${b.dataset.auth === 'claude' ? 'anthropic' : 'openai'}) — hoặc cấu hình key/provider ở tab Vault.`);
   });
-  // tab vault
+  // tab vault — Orchestra brain: key không bao giờ echo lại, chỉ hiện trạng thái
+  const brainStatus = (r) => {
+    $('#bStatus').textContent = (r.configured ? '✓ đã cấu hình' : '✗ chưa cấu hình') + (r.error ? ' — ' + r.error : '');
+  };
+  api.invoke('brain:config').then(brainStatus);
+  $('#bSave').onclick = async () => {
+    const r = await api.invoke('brain:config', { baseUrl: $('#bUrl').value.trim(), key: $('#bKey').value.trim() });
+    $('#bKey').value = '';
+    brainStatus(r);
+    if (!r.error) loadBrainModels();
+  };
   $('#vSave').onclick = async () => {
     const provider = $('#vProvider').value;
     const key = $('#vKey').value.trim();
@@ -475,14 +505,14 @@ window.addEventListener('hashchange', route);
 // ---------- init ----------
 (async () => {
   await loadSettings();
-  await Promise.all([loadFleet(), loadSideTasks(), loadModels()]);
+  await Promise.all([loadFleet(), loadSideTasks(), loadModels(), loadBrainModels()]);
   route();
 })();
 
 // Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
-  const settings = { activeRepo: repos[0], repos, orchestratorWorker: 'claude', orchestratorModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
+  const settings = { activeRepo: repos[0], repos, brainModel: 'worker-claude', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true },
@@ -501,6 +531,8 @@ function devStub() {
     if (ch === 'tasks:list') return tasks;
     if (ch === 'models:list') return { models: [{ id: 'opus-4.6', family: 'anthropic', cost_tier: 'high' }], byWorker: { claude: [{ id: 'opus-4.6', ok: true, channel: 'native', reason: 'native' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
+    if (ch === 'brain:models') return { models: ['worker-claude'] };
+    if (ch === 'brain:config') return { configured: false };
     if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
     return { ok: true };

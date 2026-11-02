@@ -29,6 +29,9 @@ export const IPC = {
   TERMINAL_KILL: 'terminal:kill',
   UPDATE_CHECK: 'update:check',
   MODELS_LIST: 'models:list',
+  BRAIN_MODELS: 'brain:models',
+  BRAIN_CONFIG: 'brain:config',
+  CHAT_RESET: 'chat:reset',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -42,6 +45,7 @@ export const EVENTS = {
   TERMINAL_DATA: 'terminal:data',
   TERMINAL_EXIT: 'terminal:exit',
   UPDATE_STATUS: 'update:status',
+  CHAT_STEP: 'chat:step',
 } as const;
 
 export const PAGES = ['dashboard', 'chat', 'transcript', 'matrix', 'settings', 'wizard'] as const;
@@ -50,9 +54,8 @@ export type Page = (typeof PAGES)[number];
 export interface AppSettings {
   repos: string[];
   activeRepo: string;
-  orchestratorWorker: string;
-  /** '' = model mặc định của CLI */
-  orchestratorModel: string;
+  /** model của Orchestra brain (LLM API, provider vault 'orchestra-brain') */
+  brainModel: string;
   autoApprovePlan: boolean;
   hooksEnabled: boolean;
   skillSync: boolean;
@@ -62,8 +65,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   repos: [],
   activeRepo: '',
-  orchestratorWorker: 'claude',
-  orchestratorModel: '',
+  brainModel: 'worker-claude',
   autoApprovePlan: false,
   hooksEnabled: true,
   skillSync: true,
@@ -75,8 +77,8 @@ export function validateSettings(raw: unknown): AppSettings {
   return {
     repos: Array.isArray(r.repos) ? r.repos.filter((x): x is string => typeof x === 'string' && x.length > 0) : [],
     activeRepo: typeof r.activeRepo === 'string' ? r.activeRepo : '',
-    orchestratorWorker: typeof r.orchestratorWorker === 'string' && r.orchestratorWorker ? r.orchestratorWorker : DEFAULT_SETTINGS.orchestratorWorker,
-    orchestratorModel: typeof r.orchestratorModel === 'string' ? r.orchestratorModel : '',
+    // orchestratorWorker/orchestratorModel (CLI brain cũ) trong settings file cũ: bỏ qua, không lỗi
+    brainModel: typeof r.brainModel === 'string' && r.brainModel.trim() ? r.brainModel.trim() : DEFAULT_SETTINGS.brainModel,
     autoApprovePlan: r.autoApprovePlan === true,
     hooksEnabled: r.hooksEnabled !== false,
     skillSync: r.skillSync !== false,

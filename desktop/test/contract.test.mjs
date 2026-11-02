@@ -14,16 +14,22 @@ assert.ok(Object.values(EVENTS).every((e) => !chans.includes(e)), 'EVENTS không
 console.log(`✓ contract: ${chans.length} channels unique + ${Object.keys(EVENTS).length} events`);
 
 // 2. validateSettings — merge defaults, chặn rác
-const v1 = validateSettings({ repos: ['', 'C:/x', 42], orchestratorWorker: '' });
+// settings cũ còn orchestratorWorker/orchestratorModel → bị bỏ, không lỗi
+const v1 = validateSettings({ repos: ['', 'C:/x', 42], orchestratorWorker: 'codex', orchestratorModel: 'x' });
 assert.deepEqual(v1.repos, ['C:/x'], 'repo rỗng/không string phải bị lọc');
-assert.equal(v1.orchestratorWorker, 'claude', 'worker rỗng → default');
 assert.equal(v1.hooksEnabled, true, 'hooksEnabled mặc định true');
+assert.ok(!('orchestratorWorker' in v1) && !('orchestratorModel' in v1), 'field CLI brain cũ bị bỏ');
 const v2 = validateSettings(null);
 assert.deepEqual(v2, DEFAULT_SETTINGS, 'null → defaults');
-assert.equal(v1.orchestratorModel, '', 'model thiếu → mặc định CLI');
-assert.equal(validateSettings({ orchestratorModel: 'opus-4.6' }).orchestratorModel, 'opus-4.6', 'giữ model');
-assert.equal(validateSettings({ orchestratorModel: 42 }).orchestratorModel, '', 'model rác → mặc định');
+assert.equal(DEFAULT_SETTINGS.brainModel, 'worker-claude', 'brainModel mặc định');
+assert.equal(v1.brainModel, 'worker-claude', 'brainModel thiếu → mặc định');
+assert.equal(validateSettings({ brainModel: ' cc/claude-sonnet-5-5 ' }).brainModel, 'cc/claude-sonnet-5-5', 'giữ model (trim)');
+for (const junk of [42, '', '  ', null]) assert.equal(validateSettings({ brainModel: junk }).brainModel, 'worker-claude', `brainModel rác ${JSON.stringify(junk)} → mặc định`);
 assert.ok(chans.includes('models:list'), 'có channel models:list');
+for (const c of ['brain:models', 'brain:config', 'chat:reset']) assert.ok(chans.includes(c), `có channel ${c}`);
+assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
+const evs = Object.values(EVENTS);
+assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');
 console.log('✓ validateSettings: filter + defaults đúng');
 
 // 2b. policy/models mặc định tìm được từ out/ (desktop + extension)

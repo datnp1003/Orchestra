@@ -23,4 +23,10 @@ console.log('✓ esc attribute-safe:', out);
 
 assert.ok(!js.includes("addEventListener('message'"), 'listener message (leak) phải bị xoá');
 console.log('✓ không còn window message listener');
+
+// M1: chat không chọn worker; chỉ model Orchestra
+assert.ok(!html.includes('cbWorker') && !js.includes('cbWorker'), 'composer không còn chọn worker');
+assert.ok(html.includes('id="cbModel"') && js.includes("'brain:models'"), 'composer có model Orchestra từ brain:models');
+assert.ok(!js.includes('orchestratorWorker'), 'renderer không dùng CLI brain cũ');
+console.log('✓ composer: chỉ chọn model Orchestra');
 console.log('RENDERER TEST PASS ✓');

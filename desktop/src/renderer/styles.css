@@ -153,6 +153,8 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .m.orch { background: var(--panel); border: 1px solid var(--line); align-self: flex-start; border-bottom-left-radius: 4px; }
 .m.result { background: #101014; border: 1px solid var(--line); font-family: var(--mono); font-size: 11px; align-self: stretch; max-width: 100%; color: #b8b8c4; }
 .m.greet { background: transparent; border: 1px dashed var(--line); color: var(--dim); align-self: stretch; max-width: 100%; }
+.m.step { padding: 1px 4px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); align-self: stretch; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m.step.err { color: var(--err); }
 .m.pending { color: var(--dim); font-style: italic; }
 .m.pending::after { content: "…"; animation: dots 1.2s steps(4) infinite; }
 @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
@@ -175,7 +177,7 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .composer-hints { display: flex; gap: 16px; padding: 6px 6px 0; font-size: 10.5px; color: var(--faint); }
 .composer-hints b { color: var(--dim); font-weight: 600; }
 #composerBrain { display: flex; gap: 6px; margin-left: auto; }
-#composerBrain select { width: auto; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
+#composerBrain select, #composerBrain button { width: auto; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
 
 /* ---------- log / terminal ---------- */
 #log, #term {

@@ -6,7 +6,8 @@ import { buildFleetStats, loadKB, addFeedback, recallKB } from '../../prototype/
 import { resolveModelFor, loadModels, type ModelChannel } from '../../prototype/src/models.js';
 import { protoAsset } from '../../prototype/src/paths.js';
 import { mergeBranch } from '../../prototype/src/worktree.js';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { globToRegex } from '../../prototype/src/dispatch.js';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
 import path from 'node:path';
@@ -367,6 +368,203 @@ export async function chatExchange(
   const follow = await orchestratorTurn(repo, summary, turn.session, opts.workerId ?? 'claude', opts.model);
   if (follow.text.trim()) emit({ kind: 'orch', text: follow.text });
   return { session: follow.session };
+}
+
+// ---------- M1: tool cho Orchestra brain (brain.ts) — worker chỉ chạm qua fleet_dispatch/fleet_pipeline ----------
+// Tier: T0 khảo sát (auto) · T1 đường guarded sẵn có (auto) · T2 cần user duyệt (approve)
+
+export const BRAIN_SYSTEM_PROMPT = `Bạn là Orchestra — agent điều phối. Bạn nói chuyện trực tiếp với user; các agent CLI (claude, codex, ...) chỉ là worker do bạn điều khiển qua tool.
+Quy tắc:
+1. Trả lời NGẮN GỌN bằng tiếng Việt.
+2. Bạn KHÔNG tự sửa code. Việc trong repo: khảo sát trước (repo_glob/repo_grep/repo_read/git_diff), rồi fleet_dispatch hoặc fleet_pipeline với scope glob rõ ràng.
+3. Scope chưa rõ → HỎI user, đừng đoán.
+4. Merge / đổi policy cần user duyệt — hệ thống tự hỏi khi bạn gọi tool.
+5. Báo kết quả ngắn: worker, task id, file thay đổi, ok/fail. Không bao giờ bảo user tự nói chuyện với worker.`;
+
+export function brainSystemPrompt(repo: string): string {
+  const kb = recallKB(repo, ['**'], 1500);
+  return kb.injected ? `${BRAIN_SYSTEM_PROMPT}\n\nKIẾN THỨC DỰ ÁN (project memory — dùng để xác định scope):\n${kb.injected}` : BRAIN_SYSTEM_PROMPT;
+}
+
+const strArr = { type: 'array', items: { type: 'string' } };
+const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
+export const BRAIN_TOOLS: { name: string; description: string; input_schema: Record<string, unknown> }[] = [
+  { name: 'repo_glob', description: 'Liệt kê file trong repo khớp glob (vd src/**/*.ts). Tối đa 200.', input_schema: obj({ pattern: { type: 'string' } }, ['pattern']) },
+  { name: 'repo_grep', description: 'Tìm regex (JS) trong file text của repo, lọc theo glob tuỳ chọn. Trả path:line. Tối đa 100.', input_schema: obj({ pattern: { type: 'string' }, glob: { type: 'string' } }, ['pattern']) },
+  { name: 'repo_read', description: 'Đọc file trong repo (path tương đối). offset = dòng bắt đầu (1-based), limit = số dòng (≤2000).', input_schema: obj({ path: { type: 'string' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, ['path']) },
+  { name: 'git_diff', description: 'git diff (stat + nội dung, cắt ngắn) so với ref tuỳ chọn (mặc định working tree vs HEAD).', input_schema: obj({ ref: { type: 'string' } }) },
+  { name: 'fleet_status', description: 'Trạng thái fleet worker + 5 task gần nhất.', input_schema: obj({}) },
+  { name: 'fleet_dispatch', description: 'Giao 1 task code cho worker (worktree riêng, có guard + scope check). scope BẮT BUỘC.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'id worker hoặc bỏ trống = auto theo policy' }, model: { type: 'string' }, acceptance: strArr }, ['goal', 'scope']) },
+  { name: 'fleet_pipeline', description: 'Chạy pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' } }, ['template', 'goal', 'scope']) },
+  { name: 'skills_sync', description: 'Sync project KB ra AGENTS.md + CLAUDE.md.', input_schema: obj({}) },
+  { name: 'fleet_merge', description: 'Merge branch của task vào main (CẦN user duyệt).', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
+  { name: 'policy_promote', description: 'Đưa worker lên #1 cho role trong policy (CẦN user duyệt).', input_schema: obj({ role: { type: 'string' }, cli: { type: 'string' } }, ['role', 'cli']) },
+];
+
+export interface BrainToolDeps {
+  /** T2: hỏi user — false = từ chối */
+  approve: (question: string) => Promise<boolean>;
+  /** pipeline plan approval */
+  askUser?: (q: string) => Promise<string>;
+  hooksEnabled?: boolean;
+  skillSync?: boolean;
+  templatesDir?: string;
+  autoApprovePlan?: boolean;
+  onLog?: (line: string) => void;
+}
+type ToolOut = { ok: boolean; content: string };
+
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.orchestra']);
+// ponytail: walk đồng bộ, trần 20k file — repo khổng lồ cần index/ripgrep
+function walkRepo(root: string, max = 20_000): string[] {
+  const out: string[] = [];
+  const stack = [''];
+  while (stack.length && out.length < max) {
+    const rel = stack.pop()!;
+    let ents;
+    try {
+      ents = readdirSync(path.join(root, rel), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of ents) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) stack.push(r);
+      } else if (e.isFile()) out.push(r);
+    }
+  }
+  return out.sort();
+}
+
+// globToRegex: '**/' cần ≥1 thư mục; khảo sát thì cho '**/' khớp cả 0 thư mục (src/**/*.ts ⊇ src/a.ts)
+function globMatcher(p: string): (f: string) => boolean {
+  const a = globToRegex(p);
+  const b = globToRegex(p.replace(/\*\*\//g, ''));
+  return (f) => a.test(f) || b.test(f);
+}
+
+/** path tương đối nằm trong repo → absolute; thoát ra ngoài → null */
+export function resolveInRepo(root: string, p: string): string | null {
+  if (path.isAbsolute(p) || /^[a-zA-Z]:/.test(p)) return null;
+  const abs = path.resolve(root, p);
+  const rel = path.relative(path.resolve(root), abs);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? abs : null;
+}
+
+const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
+const optStr = (v: unknown) => v === undefined || v === null || typeof v === 'string';
+const bad = (content: string): ToolOut => ({ ok: false, content });
+
+export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: string, input: unknown) => Promise<ToolOut> {
+  return async (name, raw) => {
+    const i = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    switch (name) {
+      case 'repo_glob': {
+        if (!isStr(i.pattern)) return bad('pattern phải là chuỗi không rỗng');
+        const hits = walkRepo(repo).filter(globMatcher(i.pattern));
+        return { ok: true, content: hits.slice(0, 200).join('\n') + (hits.length > 200 ? `\n…(+${hits.length - 200})` : '') || '(không có file khớp)' };
+      }
+      case 'repo_grep': {
+        if (!isStr(i.pattern) || !optStr(i.glob)) return bad('pattern phải là chuỗi; glob (tuỳ chọn) là chuỗi');
+        let re: RegExp;
+        try {
+          re = new RegExp(i.pattern);
+        } catch (err) {
+          return bad(`regex lỗi: ${(err as Error).message}`);
+        }
+        const g = isStr(i.glob) ? globMatcher(i.glob) : null;
+        const hits: string[] = [];
+        for (const f of walkRepo(repo)) {
+          if (hits.length >= 100) break;
+          if (g && !g(f)) continue;
+          const abs = path.join(repo, f);
+          if (statSync(abs).size > 1_000_000) continue;
+          const txt = readFileSync(abs, 'utf8');
+          if (txt.includes('\0')) continue; // binary
+          txt.split(/\r?\n/).forEach((l, n) => {
+            if (hits.length < 100 && re.test(l)) hits.push(`${f}:${n + 1}: ${l.trim().slice(0, 200)}`);
+          });
+        }
+        return { ok: true, content: hits.join('\n') || '(không khớp)' };
+      }
+      case 'repo_read': {
+        if (!isStr(i.path)) return bad('path phải là chuỗi');
+        const abs = resolveInRepo(repo, i.path);
+        if (!abs) return bad(`path ngoài repo: ${i.path}`);
+        if (!existsSync(abs) || !statSync(abs).isFile()) return bad(`không có file: ${i.path}`);
+        const offset = Number.isInteger(i.offset) && (i.offset as number) > 0 ? (i.offset as number) : 1;
+        const limit = Math.min(Number.isInteger(i.limit) && (i.limit as number) > 0 ? (i.limit as number) : 2000, 2000);
+        const lines = readFileSync(abs, 'utf8').split(/\r?\n/);
+        const body = lines.slice(offset - 1, offset - 1 + limit).map((l, n) => `${offset + n}\t${l}`).join('\n');
+        const capped = body.length > 100_000 ? `${body.slice(0, 100_000)}\n…(cắt 100KB)` : body;
+        return { ok: true, content: `${capped}\n(${lines.length} dòng tổng)` };
+      }
+      case 'git_diff': {
+        if (!optStr(i.ref) || (isStr(i.ref) && i.ref.startsWith('-'))) return bad('ref không hợp lệ');
+        const ref = isStr(i.ref) ? [i.ref] : [];
+        const stat = git(repo, ['diff', '--stat', ...ref]);
+        if (!stat.ok) return bad(stat.out.slice(0, 500));
+        const d = git(repo, ['diff', ...ref]).out;
+        return { ok: true, content: `${stat.out || '(không có thay đổi)'}\n\n${d.length > 15_000 ? `${d.slice(0, 15_000)}\n…(cắt)` : d}` };
+      }
+      case 'fleet_status':
+        return { ok: true, content: await executeAction(repo, { action: 'status' }) };
+      case 'skills_sync':
+        return { ok: true, content: await executeAction(repo, { action: 'sync_skills' }) };
+      case 'fleet_dispatch': {
+        if (!isStr(i.goal)) return bad('goal phải là chuỗi không rỗng');
+        if (!isStrArr(i.scope) || !i.scope.length) return bad('scope bắt buộc: mảng glob không rỗng');
+        if (!optStr(i.worker) || !optStr(i.model)) return bad('worker/model phải là chuỗi');
+        if (i.acceptance !== undefined && !isStrArr(i.acceptance)) return bad('acceptance phải là mảng chuỗi');
+        const r = await dispatchTracked(repo, {
+          node: 'implement', role: 'coder', goal: i.goal, scope: i.scope,
+          acceptance: (i.acceptance as string[] | undefined) ?? [],
+          pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
+          model: isStr(i.model) ? i.model : undefined,
+          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true,
+          onEvent: deps.onLog ? (e) => deps.onLog!(`[${e.t}] ${JSON.stringify(e).slice(0, 160)}`) : undefined,
+        });
+        const rec = r.result.record as Record<string, any> | undefined;
+        return {
+          ok: r.result.ok,
+          content: `dispatch ${r.result.ok ? 'OK' : 'FAILED'} task=${r.result.taskId} stage=${r.result.stage}${r.result.reason ? ` reason=${r.result.reason}` : ''} worker=${rec ? pickOf(rec) : '?'} files=[${(rec?.artifacts?.files_changed ?? []).join(', ')}] scope_ok=${rec?.scope_check?.ok !== false}`,
+        };
+      }
+      case 'fleet_pipeline': {
+        if (!isStr(i.template) || !/^[\w-]+$/.test(i.template)) return bad('template phải là tên (vd feature-dev, hotfix)');
+        if (!isStr(i.goal)) return bad('goal phải là chuỗi không rỗng');
+        if (!isStrArr(i.scope) || !i.scope.length) return bad('scope bắt buộc: mảng glob không rỗng');
+        if (!optStr(i.model)) return bad('model phải là chuỗi');
+        const dir = deps.templatesDir || protoAsset('templates');
+        const tpl = dir && path.join(dir, `${i.template}.yml`);
+        if (!tpl || !existsSync(tpl)) return bad(`không có template ${i.template}`);
+        const { runPipeline } = await import('../../prototype/src/orchestrator.js');
+        const r = await runPipeline({
+          repo, templatePath: tpl, goal: i.goal, scope: i.scope, acceptance: [],
+          model: isStr(i.model) ? i.model : undefined,
+          autoYes: deps.autoApprovePlan ?? false, askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
+        });
+        const nodes = Object.entries(r.nodes).map(([k, n]) => `${k}:${n.status}${n.worker ? `/${n.worker}` : ''}`).join(' ');
+        return { ok: r.ok, content: `pipeline ${r.runId} ${r.ok ? 'OK' : 'FAILED'} merged=${r.merged}${r.mergeConflict ? ' (conflict)' : ''} ${nodes}` };
+      }
+      case 'fleet_merge': {
+        if (!isStr(i.taskId)) return bad('taskId phải là chuỗi');
+        if (!(await deps.approve(`Orchestra muốn MERGE task ${i.taskId} vào nhánh chính. Đồng ý?`))) return bad('user từ chối');
+        const r = reviewMerge(repo, i.taskId, 'merge');
+        return { ok: r.ok, content: r.detail };
+      }
+      case 'policy_promote': {
+        if (!isStr(i.role) || !isStr(i.cli)) return bad('role và cli phải là chuỗi');
+        if (!(await deps.approve(`Orchestra muốn đưa ${i.cli} lên #1 cho role ${i.role} (ghi .orchestra/policy.yml). Đồng ý?`))) return bad('user từ chối');
+        const r = promoteWorker(repo, i.role, i.cli);
+        return { ok: r.ok, content: r.detail };
+      }
+      default:
+        return bad(`tool không tồn tại: ${name}`);
+    }
+  };
 }
 
 export function policyMatrixHtml(repo = FALLBACK_REPO, interactive = false): string {

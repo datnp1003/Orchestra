@@ -6,8 +6,9 @@ import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshot, tasksSnapshot, policyMatrixHtml, promoteWorker, mergeableTasks, reviewMerge,
-  dispatchTracked, conformanceBadge, modelsList,
+  dispatchTracked, conformanceBadge, modelsList, BRAIN_TOOLS, brainSystemPrompt, brainToolExecutor,
 } from '../../../extension/src/logic.js';
+import { runBrainTurn, listBrainModels, brainConfigured, brainCreds, BRAIN_PROVIDER, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
 import { syncSkills } from '../../../prototype/src/skillsync.js';
 import { runConformance } from '../../../prototype/src/conformance.js';
@@ -17,7 +18,7 @@ import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
 import { protoAsset } from '../../../prototype/src/paths.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
 
 export interface IpcContext {
   win: () => BrowserWindow | null;
@@ -39,6 +40,13 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return fn(repo);
   };
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
+  // hỏi user qua modal Electron — pipeline plan approval + tool T2 của brain
+  const ask = async (q: string, buttons: [string, string]): Promise<boolean> => {
+    ctx.notify('Orchestra — chờ duyệt', q);
+    const { dialog } = await import('electron');
+    const r = await dialog.showMessageBox(ctx.win()!, { type: 'question', title: 'Orchestra — chờ duyệt', message: q, buttons, defaultId: 0, cancelId: 1 });
+    return r.response === 0;
+  };
 
   ipcMain.handle(IPC.APP_INFO, () => ({
     version: app.getVersion(),
@@ -50,8 +58,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   ipcMain.handle(IPC.SETTINGS_SET, (_e, s: AppSettings) => {
     const prev = settings();
     const saved = saveSettings(ctx.settingsFile, s);
-    // session gắn với CLI/model — đổi brain thì bắt đầu session mới
-    if (prev.orchestratorWorker !== saved.orchestratorWorker || prev.orchestratorModel !== saved.orchestratorModel) chatSession = undefined;
+    if (prev.brainModel !== saved.brainModel) resetChat(); // đổi model brain → hội thoại mới
     return saved;
   });
   ipcMain.handle(IPC.MODELS_LIST, () => withRepo((repo) => modelsList(repo), () => modelsList()));
@@ -113,33 +120,77 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       // D1: approval qua modal của Desktop — không có stdin
       askUser: async (q) => {
         send(EVENTS.PIPELINE_LOG, `⏸ ${q}`);
-        ctx.notify('Orchestra — chờ duyệt', q);
-        const { dialog } = await import('electron');
-        const r2 = await dialog.showMessageBox(ctx.win()!, {
-          type: 'question',
-          title: 'Orchestra — chờ duyệt',
-          message: q,
-          buttons: ['Tiếp tục', 'Dừng'],
-          defaultId: 0,
-        });
-        return r2.response === 0 ? 'y' : 'n';
+        return (await ask(q, ['Tiếp tục', 'Dừng'])) ? 'y' : 'n';
       },
     });
     ctx.notify('Orchestra Pipeline', `${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} (merged=${r.merged})`);
     return { ok: r.ok, runId: r.runId, merged: r.merged, nodes: r.nodes };
   }, (error) => ({ ok: false, error })));
 
+  // M1: user chỉ nói chuyện với Orchestra (brain = LLM API + tool); CLI chỉ là worker qua fleet_* tool
   ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string }) => {
     const notify = (m: unknown) => send(EVENTS.CHAT_MESSAGE, m);
-    try {
-      const r = await chatExchangeFlow(requireRepo(settings()), p.text, settings(), notify);
-      return { session: r.session };
-    } catch (err) {
+    const fail = (error: string) => {
       // báo lỗi thành message — không để bubble '…đang xử lý' treo
-      const error = err instanceof Error ? err.message : String(err);
       notify({ kind: 'result', text: `✗ ${error}` });
       return { error };
+    };
+    if (typeof p?.text !== 'string' || !p.text.trim()) return fail('tin nhắn rỗng');
+    if (chatBusy) return fail('Orchestra đang xử lý lượt trước — chờ xong rồi nhắn tiếp');
+    const creds = getCreds();
+    if (!creds) return fail('Chưa cấu hình Orchestra brain — vào Cài đặt › Vault / API key › "Orchestra brain" nhập base URL + key');
+    chatBusy = true;
+    const conv = chat; // reset giữa lượt → kết quả lượt này không ghi đè hội thoại mới
+    try {
+      const s = settings();
+      const repo = requireRepo(s);
+      const r = await runBrainTurn({
+        ...creds,
+        history: conv.history,
+        userText: p.text,
+        model: s.brainModel,
+        system: brainSystemPrompt(repo),
+        tools: BRAIN_TOOLS,
+        execTool: brainToolExecutor(repo, {
+          approve: (q) => ask(q, ['Đồng ý', 'Từ chối']),
+          askUser: async (q) => ((await ask(q, ['Tiếp tục', 'Dừng'])) ? 'y' : 'n'),
+          hooksEnabled: s.hooksEnabled,
+          skillSync: s.skillSync,
+          templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
+          autoApprovePlan: s.autoApprovePlan,
+          onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
+        }),
+        onStep: (step) => send(EVENTS.CHAT_STEP, step),
+      });
+      persistChat(repo, conv, r.history.slice(conv.history.length));
+      conv.history = r.history;
+      notify({ kind: 'orch', text: r.text || '(không có phản hồi)' });
+      return { ok: true };
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      chatBusy = false;
     }
+  });
+  ipcMain.handle(IPC.CHAT_RESET, () => {
+    resetChat();
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.BRAIN_MODELS, async () => {
+    const creds = getCreds();
+    return creds ? listBrainModels(creds) : { models: [], error: 'chưa cấu hình Orchestra brain' };
+  });
+  // lưu base_url + key vào vault — chỉ trả trạng thái, không bao giờ echo key
+  ipcMain.handle(IPC.BRAIN_CONFIG, (_e, p?: { baseUrl?: string; key?: string }) => {
+    if (p?.key !== undefined) {
+      const baseUrl = String(p.baseUrl ?? '').trim();
+      const key = String(p.key).trim();
+      if (!/^https?:\/\/\S+$/.test(baseUrl) || !key) return { configured: brainConfigured(), error: 'cần base URL http(s) và key' };
+      const ok = vaultSet(BRAIN_PROVIDER, key, baseUrl);
+      credsCache = undefined;
+      if (!ok) return { configured: brainConfigured(), error: 'lưu vault thất bại' };
+    }
+    return { configured: brainConfigured() };
   });
 
   ipcMain.handle(IPC.INSTALL_WORKER, async (_e, id: string) => {
@@ -178,24 +229,27 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
 }
 
-// chat loop dùng chatExchange (logic.ts) — giữ session trong module scope (1 user 1 session)
-let chatSession: string | undefined;
-async function chatExchangeFlow(
-  repo: string,
-  text: string,
-  s: AppSettings,
-  notify: (m: unknown) => void,
-): Promise<{ session?: string }> {
-  const { chatExchange } = await import('../../../extension/src/logic.js');
-  const r = await chatExchange(repo, text, chatSession, {
-    workerId: s.orchestratorWorker,
-    model: s.orchestratorModel || undefined,
-    notify: notify as never,
-    hooksEnabled: s.hooksEnabled,
-    skillSync: s.skillSync,
-  });
-  chatSession = r.session ?? chatSession;
-  return r;
+// hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
+let chat: { history: Msg[]; startedAt: string } = { history: [], startedAt: '' };
+let chatBusy = false;
+const resetChat = () => {
+  chat = { history: [], startedAt: '' };
+};
+// đọc vault = spawn powershell → cache; brain:config xoá cache
+let credsCache: BrainCreds | null | undefined;
+const getCreds = (): BrainCreds | null => (credsCache ??= brainCreds());
+
+/** append message mới vào <repo>/.orchestra/chat/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */
+function persistChat(repo: string, conv: typeof chat, msgs: Msg[]): void {
+  try {
+    conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
+    const dir = path.join(repo, '.orchestra', 'chat');
+    mkdirSync(dir, { recursive: true });
+    const at = new Date().toISOString();
+    appendFileSync(path.join(dir, `${conv.startedAt}.jsonl`), msgs.map((m) => JSON.stringify({ at, ...m })).join('\n') + '\n', 'utf8');
+  } catch (err) {
+    console.log('[chat] persist lỗi:', err instanceof Error ? err.message : err);
+  }
 }
 
 // giữ import MANIFESTS cho wizard (đếm worker chưa cài)
