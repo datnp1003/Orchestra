@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runBrainTurn, listBrainModels } from '../dist/brain.js';
+import { t } from '../dist/i18n/index.js';
 
 const KEY = 'SECRET-123';
 function fakeFetch(responses) {
@@ -50,7 +51,7 @@ test('maxTurns cap', async () => {
     execTool: async () => ({ ok: true, content: 'x'.repeat(30_000) }), maxTurns: 3, fetchImpl: fn,
   });
   assert.equal(calls.length, 3);
-  assert.match(r.text, /chạm trần 3 lượt/);
+  assert.equal(r.text, t('brain.turnCap', { n: 3 }));
   assert.ok(calls[2].body.messages.at(-1).content[0].content.length < 21_000, 'tool_result bị cắt ~20k');
   assert.equal(r.history.at(-1).role, 'assistant');
 });
@@ -93,7 +94,7 @@ test('abort giữa tool → history hợp lệ (mọi tool_use có tool_result, 
   assert.deepEqual(h.map((m) => m.role), ['user', 'assistant', 'user', 'assistant']);
   assert.deepEqual(h[2].content.map((b) => [b.tool_use_id, b.is_error]), [['a', true], ['b', true]]);
   assert.equal(h[2].content[1].content, 'aborted');
-  assert.match(h[3].content[0].text, /đã dừng/);
+  assert.equal(h[3].content[0].text, t('brain.aborted'));
   // abort trước khi gọi API → fetch reject → vẫn trả history hợp lệ
   const ac2 = new AbortController();
   ac2.abort();

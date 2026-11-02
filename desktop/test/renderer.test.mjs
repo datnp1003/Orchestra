@@ -1,6 +1,6 @@
 // Renderer static check — node thường: CSP (script-src 'self') chặn inline handler, esc() phải attribute-safe
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const dir = new URL('../src/renderer/', import.meta.url);
 const js = readFileSync(new URL('app.js', dir), 'utf8');
@@ -37,7 +37,7 @@ assert.ok(js.includes("['providers', 'Providers']") && !js.includes("'vault'"), 
 for (const c of ["'brain:config'", "'vault:set'", "'vault:delete'"]) assert.ok(!js.includes(c), `renderer không gọi ${c}`);
 assert.ok(/id="prKey" type="password"/.test(js), 'key input type=password');
 assert.ok(!js.includes('providers:import') && !js.includes('prImport'), 'đã bỏ Import từ claude/codex config');
-for (const l of ['＋ Anthropic API', '＋ OpenAI API', '＋ Anthropic Compatible', '＋ OpenAI Compatible', 'Claude Code (Claude Pro/Max)', 'OpenAI Codex (ChatGPT Plus/Pro)', 'đã kết nối']) {
+for (const l of ['＋ Anthropic API', '＋ OpenAI API', '＋ Anthropic Compatible', '＋ OpenAI Compatible', 'Claude Code (Claude Pro/Max)', 'OpenAI Codex (ChatGPT Plus/Pro)', 'desktop.pr.connected']) {
   assert.ok(js.includes(l), `quick-add: ${l}`);
 }
 console.log('✓ Providers tab: password key, quick-add, không còn import/vault/brain:config');
@@ -45,9 +45,9 @@ console.log('✓ Providers tab: password key, quick-add, không còn import/vaul
 // UI feedback: sessions thay Tasks gần đây; nav gọn; Dashboard ngay trên Cài đặt; Matrix vào Settings
 assert.ok(html.includes('id="sideSessionList"') && js.includes("'chat:sessions'") && js.includes("'chat:open'"), 'sidebar có Sessions');
 assert.ok(!html.includes('Tasks gần đây') && !html.includes('sideTaskList') && !js.includes('loadSideTasks'), 'bỏ Tasks gần đây');
-assert.ok(html.includes('＋ Chat mới') && !html.includes('Task mới'), 'nút Chat mới');
+assert.ok(html.includes('data-i18n="desktop.newChat.label"') && !html.includes('Task mới'), 'nút Chat mới');
 assert.ok(!js.includes('data-auth') && !/>Auth</.test(js), 'bỏ nút Auth worker');
-assert.ok(js.includes('Auth: qua Orchestra router') && js.includes('f.display'), 'worker có tên + dòng auth router');
+assert.ok(js.includes('desktop.w.authRouter') && js.includes('f.display'), 'worker có tên + dòng auth router');
 assert.ok(!html.includes('href="#/terminal"') && !html.includes('href="#/matrix"'), 'Terminal + Policy Matrix không còn trên nav');
 assert.ok(js.includes("['matrix', 'Policy Matrix']"), 'Policy Matrix là tab Settings');
 const nav = html.slice(html.indexOf('<nav id="nav">'), html.indexOf('</nav>'));
@@ -66,9 +66,36 @@ console.log('✓ Transcript trong Dashboard, #/transcript redirect, top 20');
 
 // R3: OAuth — cảnh báo đỏ + checkbox bắt buộc trước khi lưu/đăng nhập
 assert.ok(js.includes("'oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'") && js.includes("'oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)'"), 'kind OAuth có label');
-assert.ok(/id="prRisk" class="risk"/.test(js) && js.includes('KHOÁ TÀI KHOẢN') && js.includes('giả danh client'), 'warning box');
-assert.ok(/id="prRiskOk" \/> Tôi hiểu rủi ro/.test(js) && /!\$\('#prRiskOk'\)\.checked/.test(js), 'checkbox Tôi hiểu rủi ro chặn lưu');
+assert.ok(/id="prRisk" class="risk"/.test(js) && js.includes("t('desktop.pr.risk' + i)"), 'warning box');
+assert.ok(js.includes(`id="prRiskOk" /> \${esc(t('desktop.pr.riskOk'))}`) && /!\$\('#prRiskOk'\)\.checked/.test(js), 'checkbox Tôi hiểu rủi ro chặn lưu');
 assert.ok(js.includes("'oauth:start'") && js.includes("'oauth:finish'") && js.includes('OAuth ⚠'), 'nút Đăng nhập + badge');
 assert.ok(!/\.(access|refresh)\b/.test(js), 'renderer không đụng token');
 console.log('✓ OAuth: warning + checkbox bắt buộc + login, không token');
+
+// i18n: chuỗi UI chỉ nằm trong dictionary — không còn ký tự tiếng Việt ngoài comment
+const VI = /[ăâđêôơưàáạảãầấậẩẫằắặẳẵèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i;
+// ponytail: strip comment bằng regex — không hiểu '//' trong string (vd 'https://…'); chuỗi đó chỉ làm scan bỏ sót phần sau, không báo sai
+const stripJs = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+const viHits = (name, s) => s.split(/\r?\n/).map((l, i) => [i + 1, l]).filter(([, l]) => VI.test(l)).map(([n, l]) => `${name}:${n}: ${l.trim()}`);
+const mainDir = new URL('../src/main/', import.meta.url);
+const hits = [
+  ...viHits('app.js', stripJs(js)),
+  ...viHits('index.html', html.replace(/<!--[\s\S]*?-->/g, '')),
+  ...readdirSync(mainDir).filter((f) => f.endsWith('.ts')).flatMap((f) => viHits(f, stripJs(readFileSync(new URL(f, mainDir), 'utf8')))),
+];
+assert.deepEqual(hits, [], 'chuỗi tiếng Việt hardcode — chuyển vào prototype/src/i18n');
+assert.ok(js.includes("api.invoke('i18n:get')") && /await loadI18n\(\);[^\n]*\r?\n\s*await loadSettings\(\);/.test(js), 'i18n load trước render đầu');
+assert.ok(js.includes("id=\"sLang\"") && js.includes('language: e.target.value'), 'Settings › Chung có chọn ngôn ngữ');
+const keys = [...js.matchAll(/\bt\('(desktop\.[\w.]+)'[,)]/g), ...html.matchAll(/data-i18n(?:-\w+)?="(desktop\.[\w.]+)"/g)].map((m) => m[1]);
+const { en } = await import('../out/prototype/src/i18n/en.js');
+assert.deepEqual(keys.filter((k) => !(k in en)), [], 'key renderer không có trong en.ts');
+console.log(`✓ i18n: không còn chuỗi tiếng Việt hardcode (app.js, index.html, main/*.ts); ${new Set(keys).size} key tĩnh đều có trong dict`);
+// i18n: hàm dịch global `t` không được bị shadow (biến/param tên t) — từng làm send() chat crash ngầm
+{
+  const lines = readFileSync(new URL('../src/renderer/app.js', import.meta.url), 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, ''));
+  const bad = lines.map((l, i) => [i + 1, l]).filter(([, l]) => /\b(?:const|let|var)\s+t\s*=|\(\s*t\s*[,)]|(?:^|[^\w.])t\s*=>/.test(l) && !/^\s*const t = \(key/.test(l)).map(([n]) => n);
+  assert.deepEqual(bad, [], `app.js shadow hàm t() ở dòng: ${bad}`);
+  console.log('✓ không shadow t()');
+}
+
 console.log('RENDERER TEST PASS ✓');

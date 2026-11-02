@@ -11,6 +11,7 @@ import {
   ANTHROPIC, OPENAI, pkceChallenge, pkce, anthropicAuthUrl, openaiAuthUrl, openaiLogin, exchangeAnthropic,
   getAccessToken, accountIdFromJwt, oauthStatus,
 } from '../dist/router/oauth.js';
+import { t } from '../dist/i18n/index.js';
 
 const REAL_SSE = readFileSync(new URL('./fixtures/codex-responses-stream.txt', import.meta.url), 'utf8');
 const CODEX = JSON.parse(readFileSync(new URL('./fixtures/codex-responses-request.json', import.meta.url), 'utf8'));
@@ -60,7 +61,7 @@ test('authorize URL đủ param', () => {
 test('exchange anthropic: JSON body, state phải khớp', async () => {
   const tok = await fake((req, res) => json(res, 200, { access_token: 'A1', refresh_token: 'R1', expires_in: 3600 }));
   try {
-    await assert.rejects(exchangeAnthropic('CODE#sai', { verifier: 'V', state: 'ST' }, `${tok.url}/t`), /state không khớp/);
+    await assert.rejects(exchangeAnthropic('CODE#sai', { verifier: 'V', state: 'ST' }, `${tok.url}/t`), { message: t('router.oauth.badCodeState') });
     assert.equal(tok.seen.length, 0);
     const c = await exchangeAnthropic('CODE#ST', { verifier: 'V', state: 'ST' }, `${tok.url}/t`);
     assert.deepEqual([c.access, c.refresh], ['A1', 'R1']);
@@ -95,7 +96,7 @@ test('openai login: callback state sai → 400, đúng → form exchange + accou
 
     const busy = http.createServer();
     await new Promise((r) => busy.listen(0, '127.0.0.1', r));
-    await assert.rejects(openaiLogin({ port: busy.address().port, open: () => {} }), /cổng \d+ đang bận \(codex login đang chạy\?\)/);
+    await assert.rejects(openaiLogin({ port: busy.address().port, open: () => {} }), { message: t('router.oauth.portBusy', { port: busy.address().port }) });
     busy.close();
   } finally {
     tok.srv.close();
@@ -134,7 +135,7 @@ test('refresh: single-flight, refresh token mới lưu vault, encoding đúng; 4
   try {
     const m = memStore({ p: JSON.stringify({ access: 'A0', refresh: 'R0', expiresAt: 0 }) });
     const store = createProviderStore({ file: path.join(mkdtempSync(path.join(os.tmpdir(), 'orch-oa-')), 'r.json'), ...m });
-    await assert.rejects(getAccessToken(store, { id: 'p', kind: 'oauth-anthropic' }, `${dead.url}/t`), /đăng nhập lại/);
+    await assert.rejects(getAccessToken(store, { id: 'p', kind: 'oauth-anthropic' }, `${dead.url}/t`), { message: t('router.oauth.loginExpired') });
     assert.equal(oauthStatus(m.vault.get('p')).oauthStatus, 'needsLogin');
     assert.equal(oauthStatus(null).oauthStatus, 'none');
   } finally {
@@ -149,8 +150,8 @@ test('riskAcknowledged: thiếu → không bật, save bị từ chối; key kh�
   assert.deepEqual(p.models, ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001']);
   assert.deepEqual(normalizeProvider({ id: 'cx', kind: 'oauth-openai', riskAcknowledged: true, formats: ['chat'] }).formats, ['responses']);
   const store = createProviderStore({ file: path.join(mkdtempSync(path.join(os.tmpdir(), 'orch-oa-')), 'r.json'), ...memStore() });
-  assert.throws(() => store.saveProvider({ id: 'cc', kind: 'oauth-anthropic' }), /Tôi hiểu rủi ro/);
-  assert.throws(() => store.saveProvider({ id: 'cc', kind: 'oauth-anthropic', riskAcknowledged: true }, 'sk-x'), /Đăng nhập/);
+  assert.throws(() => store.saveProvider({ id: 'cc', kind: 'oauth-anthropic' }), { message: t('router.providers.mustAckRisk', { id: 'cc' }) });
+  assert.throws(() => store.saveProvider({ id: 'cc', kind: 'oauth-anthropic', riskAcknowledged: true }, 'sk-x'), { message: t('router.providers.oauthNoKey', { id: 'cc' }) });
   assert.equal(store.saveProvider({ id: 'cc', kind: 'oauth-anthropic', riskAcknowledged: true }).enabled, true);
   assert.equal(store.listProviders().length, 1);
 });
@@ -162,9 +163,9 @@ test('routerModelOk với oauth', () => {
   assert.equal(routerModelOk('claude', 'cc/claude-sonnet-5-5', ps).ok, true);
   assert.equal(routerModelOk('codex', 'cc/claude-sonnet-5-5', ps).ok, true, 'codex → Responses→Chat→Messages');
   assert.equal(routerModelOk('codex', 'cx/gpt-6-sol', ps).ok, true);
-  assert.match(routerModelOk('claude', 'cx/gpt-6-sol', ps).reason, /chưa dịch Messages→Responses/);
-  assert.match(routerModelOk('claude', 'cc/x', [{ ...ant, needsLogin: true }]).reason, /đăng nhập/);
-  assert.match(routerModelOk('claude', 'cc/x', [normalizeProvider({ id: 'cc', kind: 'oauth-anthropic' })]).reason, /rủi ro/);
+  assert.equal(routerModelOk('claude', 'cx/gpt-6-sol', ps).reason, t('router.providers.noM2R', { id: 'cx' }));
+  assert.equal(routerModelOk('claude', 'cc/x', [{ ...ant, needsLogin: true }]).reason, t('router.providers.needsLogin', { id: 'cc' }));
+  assert.equal(routerModelOk('claude', 'cc/x', [normalizeProvider({ id: 'cc', kind: 'oauth-anthropic' })]).reason, t('router.providers.riskNotAck', { id: 'cc' }));
 });
 
 // ───── server: upstream nhận đúng header/body ─────
@@ -201,8 +202,8 @@ const call = (p, body) =>
 const lastUp = () => up.seen.at(-1);
 
 test('router: cảnh báo 1 lần cho mỗi provider OAuth bật, không log token', () => {
-  const w = logs.filter((l) => l.includes('CẢNH BÁO'));
-  assert.deepEqual(w.map((l) => /CẢNH BÁO: (\S+)/.exec(l)[1]).sort(), ['cc', 'cx', 'dead']);
+  const warns = (id) => logs.filter((l) => l === `[router] ${t('router.server.oauthWarn', { id })}`).length;
+  assert.deepEqual(['cc', 'cx', 'dead', 'raw'].map(warns), [1, 1, 1, 0]);
   assert.ok(!logs.join('\n').includes('ACC'));
 });
 
@@ -260,7 +261,7 @@ test('needsLogin → 401 rõ ràng, không gọi upstream; provider chưa xác n
   const n = up.seen.length;
   const r = await call('/v1/messages', { model: 'dead/claude-sonnet-5-5', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(r.status, 401);
-  assert.match((await r.json()).error.message, /OAuth hết hạn — đăng nhập lại trong Providers/);
+  assert.equal((await r.json()).error.message, `dead: ${t('router.oauth.loginExpired')}`);
   assert.equal(up.seen.length, n);
   const r2 = await call('/v1/messages', { model: 'raw/claude-sonnet-5-5', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(r2.status, 400);

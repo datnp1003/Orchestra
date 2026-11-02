@@ -1,6 +1,7 @@
 // M1 — Orchestra brain: agent loop riêng gọi LLM API (Anthropic Messages, tool calling).
 // CLI chỉ là worker, chỉ chạm được qua tool fleet_dispatch / fleet_pipeline.
 // R2a: gọi qua Orchestra router (baseUrl router, apiKey = token router) — key không log, không vào prompt/record/lỗi.
+import { t } from './i18n/index.js';
 
 export type Block =
   | { type: 'text'; text: string }
@@ -75,15 +76,14 @@ export interface BrainTurnOpts extends BrainCreds {
   fetchImpl?: FetchFn;
 }
 
-export const ABORTED_TEXT = '⏹ đã dừng';
-
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
   const history: Msg[] = [...o.history, { role: 'user', content: o.userText }];
   const maxTurns = o.maxTurns ?? 12;
   // dừng giữa chừng: history luôn kết thúc bằng assistant, mọi tool_use đều có tool_result
   const stopped = () => {
-    history.push({ role: 'assistant', content: [{ type: 'text', text: ABORTED_TEXT }] });
-    return { text: ABORTED_TEXT, history, aborted: true };
+    const text = t('brain.aborted');
+    history.push({ role: 'assistant', content: [{ type: 'text', text }] });
+    return { text, history, aborted: true };
   };
   for (let turn = 0; turn < maxTurns; turn++) {
     let r: any;
@@ -108,7 +108,7 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
     const uses = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     if (r?.stop_reason !== 'tool_use' || !uses.length) {
       // tool_use mồ côi (vd. max_tokens) không được nằm lại history — lượt sau API sẽ từ chối
-      history.push({ role: 'assistant', content: [{ type: 'text', text: text || '(trống)' }] });
+      history.push({ role: 'assistant', content: [{ type: 'text', text: text || '(empty)' }] });
       return { text, history };
     }
     history.push({ role: 'assistant', content });
@@ -127,14 +127,14 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
       } catch (err) {
         res = { ok: false, content: err instanceof Error ? err.message : String(err) };
       }
-      const c = res.content.length > MAX_RESULT ? `${res.content.slice(0, MAX_RESULT)}\n…(cắt, ${res.content.length} ký tự)` : res.content;
+      const c = res.content.length > MAX_RESULT ? `${res.content.slice(0, MAX_RESULT)}\n…(truncated, ${res.content.length} chars)` : res.content;
       o.onStep?.({ kind: 'tool_result', name: u.name, ok: res.ok, preview: c.slice(0, 200) });
       results.push({ type: 'tool_result', tool_use_id: u.id, content: c, ...(res.ok ? {} : { is_error: true }) });
     }
     history.push({ role: 'user', content: results });
     if (o.signal?.aborted) return stopped();
   }
-  const text = `Đã chạm trần ${maxTurns} lượt tool — dừng lượt này. Nhắn tiếp để Orchestra làm tiếp.`;
+  const text = t('brain.turnCap', { n: maxTurns });
   o.onStep?.({ kind: 'error', text });
   history.push({ role: 'assistant', content: [{ type: 'text', text }] }); // giữ user/assistant xen kẽ cho lượt sau
   return { text, history };

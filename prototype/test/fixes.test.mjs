@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveGuardHook, spawnArgs, runHeadless } from '../dist/runner.js';
 import { routerModelOk } from '../dist/router/providers.js';
+import { t } from '../dist/i18n/index.js';
 import { getManifest } from '../dist/manifests.js';
 import { shouldCommit } from '../dist/dispatch.js';
 import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '../dist/worktree.js';
@@ -119,11 +120,11 @@ test('routerModelOk', () => {
   assert.equal(routerModelOk('claude', 'o/m', ps).ok, true);
   assert.equal(routerModelOk('codex', 'o/m', ps).ok, true);
   assert.equal(routerModelOk('codex', 'a/m', ps).ok, true);
-  assert.match(routerModelOk('codex', 'a/m', ps).reason, /router dịch Responses/);
+  assert.equal(routerModelOk('codex', 'a/m', ps).reason, t('router.providers.codexTranslated', { id: 'a', fmt: 'messages' }));
   assert.equal(routerModelOk('codex', 'x/m', [{ id: 'x', kind: 'openai', baseUrl: 'x', formats: [], enabled: true }]).ok, false);
   assert.equal(routerModelOk('claude', 'off/m', ps).ok, false);
   assert.equal(routerModelOk('claude', 'nope/m', ps).ok, false);
-  assert.match(routerModelOk('gemini', 'a/m', ps).reason, /chưa hỗ trợ router/);
+  assert.equal(routerModelOk('gemini', 'a/m', ps).reason, t('router.providers.cliUnsupported', { cli: 'gemini' }));
 });
 
 test('runHeadless: abort → kill_reason aborted', async (t) => {

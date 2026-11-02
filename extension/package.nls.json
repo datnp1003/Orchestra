@@ -1,0 +1,19 @@
+{
+  "ext.description": "IDE agent orchestrator — coordinates agent CLIs (claude, codex, ...) as workers in a gated pipeline",
+  "view.chat": "Chat",
+  "view.fleet": "Fleet",
+  "view.tasks": "Tasks",
+  "config.defaultRepo": "Default repo when the workspace has no .orchestra/ (empty = use the prototype demo-repo)",
+  "config.autoApprovePlan": "Run Pipeline: auto-approve the plan node without stopping to ask (not recommended for real repos)",
+  "config.hooksEnabled": "Pre-execution guard hook — blocks git push, network patterns and path escapes BEFORE the command runs",
+  "config.skillSync": "Sync .orchestra/kb → AGENTS.md + CLAUDE.md before each dispatch so workers read the project memory",
+  "config.templatesDir": "Pipeline templates directory (empty = templates bundled with the extension)",
+  "config.orchestratorWorker": "CLI used as the Orchestrator brain in Chat (runs read-only, resumes the session to remember the conversation)",
+  "cmd.dispatch": "Orchestra: Dispatch Task",
+  "cmd.runPipeline": "Orchestra: Run Pipeline",
+  "cmd.showMatrix": "Orchestra: Show Policy Matrix",
+  "cmd.reviewMerge": "Orchestra: Review && Merge",
+  "cmd.syncSkills": "Orchestra: Sync Skills (KB → AGENTS.md/CLAUDE.md)",
+  "cmd.installWorker": "Orchestra: Install Worker (npm)",
+  "cmd.refreshViews": "Orchestra: Refresh"
+}

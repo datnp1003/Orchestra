@@ -1,6 +1,7 @@
 // Session chat — parse jsonl để resume (hàm thuần, không fs)
 import assert from 'node:assert/strict';
 import { parseChatSession, SESSION_ID_RE } from '../out/desktop/src/main/chatSessions.js';
+import { setLocale } from '../out/prototype/src/i18n/index.js';
 
 const at = '2026-11-02T00:00:00.000Z';
 const L = (role, content) => JSON.stringify({ at, role, content });
@@ -30,7 +31,10 @@ assert.deepEqual(s.messages, [
 assert.equal(s.title.length, 60);
 assert.ok(long.startsWith(s.title.slice(0, -1)) && s.title.endsWith('…'), 'title từ user message đầu');
 assert.equal(s.turns, 1);
+setLocale('vi');
 assert.deepEqual(parseChatSession(''), { history: [], messages: [], title: '(trống)', turns: 0 });
+setLocale('en');
+assert.equal(parseChatSession('').title, '(empty)', 'title rỗng theo locale');
 console.log('✓ parseChatSession: thinking bỏ, tool_use treo bỏ, title, tool_result-only bỏ');
 
 for (const bad of ['../x', 'a/b', 'a\\b', '']) assert.ok(!SESSION_ID_RE.test(bad), `id ${bad} bị chặn`);

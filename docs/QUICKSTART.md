@@ -1,60 +1,65 @@
-# Orchestra — Quickstart (15 phút)
+# Orchestra — Quickstart (15 minutes)
 
-Orchestra = IDE agent **orchestrator**: bạn chat, nó lập plan, giao việc cho các agent CLI
-(Claude Code, Codex...) chạy trong pipeline có gate, tự test, tự review chéo, rồi mới merge.
+English | [Tiếng Việt](QUICKSTART.vi.md)
+
+Orchestra = an IDE agent **orchestrator**: you chat, it plans, then hands work to agent CLIs
+(Claude Code, Codex...) running in a gated pipeline that tests itself and cross-reviews before merging.
 
 ---
 
-## Bước 1 — Cài (3 phút)
+## Step 1 — Install (3 minutes)
 
-**Desktop app** (khuyên dùng):
+**Desktop app** (recommended):
 ```
-Chạy installer: desktop/release/Orchestra Desktop Setup 0.1.0.exe
+Run the installer: desktop/release/Orchestra Desktop Setup 0.2.0.exe
 ```
-**Hoặc VS Code extension**: cài `extension/orchestra-0.2.4.vsix` qua Extensions → Install from VSIX.
+**Or the VS Code extension**: install `extension/orchestra-0.2.4.vsix` via Extensions → Install from VSIX.
 
-**Hoặc CLI** (dùng trong terminal):
+**Or the CLI** (in a terminal):
 ```bash
 cd Orchestra/prototype && npm install && npm run build
-node dist/cli.js list          # xem fleet
+node dist/cli.js list          # show the fleet
 ```
 
-Yêu cầu máy: **Node.js ≥ 20** + git. Worker CLI (claude/codex) cài ngay trong app
-(Wizard → Install) — không cần cài trước.
+Requirements: **Node.js ≥ 20** + git. Worker CLIs (claude/codex) are installed from inside the app
+(Settings → Workers → Install) — no need to install them beforehand.
 
-## Bước 2 — Đăng nhập worker (5 phút)
+## Step 2 — Add a router provider (5 minutes)
 
-Fleet panel/Wizard → worker chưa có key → **Auth**:
-- **OAuth subscription** (dùng gói Claude/OpenAI của bạn): bấm Login → terminal mở →
-  trình duyệt xác nhận. *Lưu ý: OAuth chỉ cho provider của chính CLI đó.*
-- **API key / Custom provider**: dán key (+ base URL nếu dùng gateway riêng) → lưu vào
-  vault DPAPI — inject tự động lúc spawn, không đụng config CLI.
+The desktop app starts the **Orchestra router** (a local LLM proxy) automatically; the brain and every
+worker CLI go through it — no per-CLI login needed. Settings → **Providers** → add a provider:
+- **API key / your own gateway**: pick a kind (`anthropic`, `openai`, `*-compatible`), paste the key
+  (+ base URL if you use a gateway) → the key is stored only in the vault; CLI configs are untouched.
+- **OAuth subscription** (Claude Pro/Max or ChatGPT Plus/Pro): pick an `oauth-*` kind,
+  read and tick the risk warning → sign in in the browser → paste the code.
 
-Kiểm tra: Fleet hiện `✓ claude 2.1.x auth=ok` (codex) — claude hiển thị `unknown` đến khi
-chạy task đầu.
+Check: Settings → Workers lists installed CLIs with "Auth: via Orchestra router"; the model dropdown in the
+chat composer is populated from the providers you added.
 
-## Bước 3 — Task đầu tiên (5 phút)
+CLI only: `node dist/cli.js router` (providers in `~/.orchestra/router.json`).
 
-1. Settings → thêm repo của bạn → Set active
-2. **Chat** (khuyên dùng): gõ *"thêm <tính năng> vào <chỗ>*" — orchestrator tự khảo sát repo,
-   tự xác định scope, tự chọn worker → bấm duyệt action
-3. Pipeline tự chạy: **plan → implement → verify → review (CLI khác) → merge**
-4. Bạn chỉ chốt 2 cổng: **duyệt plan** (modal) và **merge** (Review & Merge)
+## Step 3 — First task (5 minutes)
 
-## Bước 4 — Hiểu gì đang chạy
+1. Settings → General → add your repo → pick the active repo in the top-right dropdown
+2. **Chat** (recommended): type *"add <feature> to <place>"* — the orchestrator surveys the repo,
+   determines the scope, picks a worker → you approve the action
+3. The pipeline runs on its own: **plan → implement → verify → review (different CLI) → merge**
+4. You only sign off on 2 gates: **approve the plan** (modal) and **merge**
 
-| Thứ bạn thấy | Nghĩa là |
+## Step 4 — What you are seeing
+
+| What you see | Meaning |
 |---|---|
-| `gate ✓ tests.green` | Runner **tự chạy test suite** — không tin lời worker |
-| `review: cross-CLI` | CLI khác họ review code cho CLI viết — bắt bug mà self-review bỏ sót |
-| `scope_check: PASS` | Worker chỉ được chạm file trong phạm vi brief |
-| Worktree `.orchestra/wt/` | Mọi thay đổi cách ly — merge mới vào main |
+| `gate ✓ tests.green` | The runner **runs the test suite itself** — it does not trust the worker's word |
+| `review: cross-CLI` | A CLI from a different family reviews the code the other CLI wrote — catches bugs self-review misses |
+| `scope_check: PASS` | The worker only touched files within the brief's scope |
+| Worktree `.orchestra/wt/` | All changes are isolated — they reach main only on merge |
 
-## Bước 5 — Cấu hình nâng cao
+## Step 5 — Advanced configuration
 
-- **Model theo role**: `.orchestra/policy.yml` → `bindings.coder[0].worker.model`
-- **Skill/knowledge**: `.orchestra/kb/*.md` → tự sync thành `AGENTS.md`/`CLAUDE.md` cho worker
-- **Pipeline riêng**: copy `prototype/templates/feature-dev.yml` → `.orchestra/pipelines/`
-- **Memory**: task records ở `.orchestra/tasks/`, chưng cất bằng `node dist/cli.js retro <repo>`
+- **Model per role**: `.orchestra/policy.yml` → `bindings.coder[0].worker.model` (or Settings → Policy Matrix)
+- **Skills/knowledge**: `.orchestra/kb/*.md` → auto-synced into `AGENTS.md`/`CLAUDE.md` for workers
+- **Custom pipeline**: copy `prototype/templates/feature-dev.yml` → `.orchestra/pipelines/`
+- **Memory**: task records live in `.orchestra/tasks/`; distill them with `node dist/cli.js retro <repo>`
 
-Chi tiết đầy đủ: `docs/` (4 spec + roadmap + desktop-plan + E2E gate).
+Full details: `docs/` (4 specs + roadmap + desktop-plan + E2E gate).

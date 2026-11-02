@@ -20,6 +20,7 @@ import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } f
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
 import { parseChatSession, SESSION_ID_RE } from './chatSessions.js';
+import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -56,6 +57,8 @@ export interface IpcContext {
   settingsFile: string;
   notify: (title: string, body: string) => void;
   protoDir: string;
+  /** settings đổi language → main dựng lại phần tĩnh (tray menu) */
+  onLocaleChange?: () => void;
 }
 
 export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
@@ -73,11 +76,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
   // hỏi user qua modal Electron — pipeline plan approval + tool T2 của brain
   const ask = async (q: string, buttons: [string, string]): Promise<boolean> => {
-    ctx.notify('Orchestra — chờ duyệt', q);
+    ctx.notify(t('desktop.approval.title'), q);
     const { dialog } = await import('electron');
-    const r = await dialog.showMessageBox(ctx.win()!, { type: 'question', title: 'Orchestra — chờ duyệt', message: q, buttons, defaultId: 0, cancelId: 1 });
+    const r = await dialog.showMessageBox(ctx.win()!, { type: 'question', title: t('desktop.approval.title'), message: q, buttons, defaultId: 0, cancelId: 1 });
     return r.response === 0;
   };
+  const askContinue = async (q: string) => ((await ask(q, [t('desktop.approval.continue'), t('desktop.approval.stop')])) ? 'y' : 'n');
 
   ipcMain.handle(IPC.APP_INFO, () => ({
     version: app.getVersion(),
@@ -86,10 +90,16 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   }));
 
   ipcMain.handle(IPC.SETTINGS_GET, () => settings());
+  // renderer chỉ cần desktop.* — lỗi từ main đã dịch sẵn trước khi gửi
+  ipcMain.handle(IPC.I18N_GET, () => ({ locale: settings().language, dict: messages('desktop.') }));
   ipcMain.handle(IPC.SETTINGS_SET, (_e, s: AppSettings) => {
     const prev = settings();
     const saved = saveSettings(ctx.settingsFile, s);
     if (prev.brainModel !== saved.brainModel) resetChat(); // đổi model brain → hội thoại mới
+    if (prev.language !== saved.language) {
+      setLocale(saved.language);
+      ctx.onLocaleChange?.();
+    }
     return saved;
   });
   ipcMain.handle(IPC.MODELS_LIST, async () => {
@@ -107,8 +117,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   // R3 OAuth: token chỉ vào vault; anthropic = user dán code#state, openai = callback 127.0.0.1:1455
   const oauthProvider = (id: unknown) => {
     const p = store.listProviders().find((x) => x.id === id);
-    if (!p || !isOAuth(p.kind)) throw new Error(`không có provider OAuth ${String(id)}`);
-    if (!p.riskAcknowledged) throw new Error(`${p.id}: chưa xác nhận rủi ro OAuth`);
+    if (!p || !isOAuth(p.kind)) throw new Error(t('desktop.err.noOAuthProvider', { id: String(id) }));
+    if (!p.riskAcknowledged) throw new Error(t('desktop.err.riskNotAck', { id: p.id }));
     return p;
   };
   ipcMain.handle(IPC.OAUTH_START, async (_e, a: { id: string }) => {
@@ -132,7 +142,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     try {
       const p = oauthProvider(a?.id);
       const k = oauthPending.get(p.id);
-      if (!k) throw new Error('chưa bấm Đăng nhập');
+      if (!k) throw new Error(t('desktop.err.loginNotStarted'));
       const c = await exchangeAnthropic(String(a?.code ?? ''), k);
       oauthPending.delete(p.id);
       store.setKey(p.id, JSON.stringify(c));
@@ -153,7 +163,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   // gọi thẳng upstream đúng như router làm (header auth giống hệt) — bỏ qua cache 5' của router để thấy lỗi thật
   ipcMain.handle(IPC.PROVIDERS_TEST, async (_e, id: string) => {
     const p = store.listProviders().find((x) => x.id === id);
-    if (!p) return { ok: false, count: 0, error: `không có provider ${id}` };
+    if (!p) return { ok: false, count: 0, error: t('desktop.err.noProvider', { id }) };
     if (p.models) return { ok: true, count: p.models.length };
     try {
       const r = await fetch(`${p.baseUrl}/v1/models`, { headers: authHeaders(p.kind, store.getKey(p.id)), signal: AbortSignal.timeout(15_000) });
@@ -225,7 +235,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       // D1: approval qua modal của Desktop — không có stdin
       askUser: async (q) => {
         send(EVENTS.PIPELINE_LOG, `⏸ ${q}`);
-        return (await ask(q, ['Tiếp tục', 'Dừng'])) ? 'y' : 'n';
+        return askContinue(q);
       },
     });
     ctx.notify('Orchestra Pipeline', `${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} (merged=${r.merged})`);
@@ -240,11 +250,11 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       notify({ kind: 'result', text: `✗ ${error}` });
       return { error };
     };
-    if (typeof p?.text !== 'string' || !p.text.trim()) return fail('tin nhắn rỗng');
-    if (chatBusy) return fail('Orchestra đang xử lý lượt trước — chờ xong rồi nhắn tiếp');
+    if (typeof p?.text !== 'string' || !p.text.trim()) return fail(t('desktop.chat.err.empty'));
+    if (chatBusy) return fail(t('desktop.chat.err.busy'));
     const creds = routerCreds();
-    if (!creds) return fail('Orchestra router chưa chạy');
-    if (!settings().brainModel) return fail('chọn Model Orchestra ở composer');
+    if (!creds) return fail(t('desktop.err.routerDown'));
+    if (!settings().brainModel) return fail(t('desktop.chat.err.noModel'));
     chatBusy = true;
     const ac = new AbortController();
     chatAbort = ac;
@@ -266,12 +276,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         history: conv.history,
         userText: p.text,
         model: s.brainModel,
-        system: brainSystemPrompt(repo),
+        system: brainSystemPrompt(repo, s.language),
         tools: BRAIN_TOOLS,
         signal: ac.signal,
         execTool: brainToolExecutor(repo, {
-          approve: (q) => ask(q, ['Đồng ý', 'Từ chối']),
-          askUser: async (q) => ((await ask(q, ['Tiếp tục', 'Dừng'])) ? 'y' : 'n'),
+          approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),
+          askUser: askContinue,
           hooksEnabled: s.hooksEnabled,
           skillSync: s.skillSync,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
@@ -284,7 +294,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       });
       persistChat(repo, conv, r.history.slice(conv.history.length));
       conv.history = r.history;
-      notify({ kind: 'orch', text: r.text || '(không có phản hồi)' });
+      notify({ kind: 'orch', text: r.text || t('desktop.chat.noReply') });
       return { ok: true };
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
@@ -310,11 +320,11 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, () => []));
   ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { id: string }) => withRepo((repo) => {
-    if (chatBusy) return { ok: false, error: 'Orchestra đang xử lý lượt trước — chờ xong rồi mở session khác' };
+    if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
     const id = String(p?.id ?? '');
-    if (!SESSION_ID_RE.test(id)) return { ok: false, error: 'session id không hợp lệ' };
+    if (!SESSION_ID_RE.test(id)) return { ok: false, error: t('desktop.chat.err.badSession') };
     const file = path.join(repo, '.orchestra', 'chat', `${id}.jsonl`);
-    if (!existsSync(file)) return { ok: false, error: `không có session ${id}` };
+    if (!existsSync(file)) return { ok: false, error: t('desktop.chat.err.noSession', { id }) };
     const { history, messages } = parseChatSession(readFileSync(file, 'utf8'));
     chat = { history, startedAt: id };
     return { ok: true, messages };
@@ -325,7 +335,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
   ipcMain.handle(IPC.BRAIN_MODELS, async () => {
     const creds = routerCreds();
-    return creds ? listBrainModels(creds) : { models: [], error: 'Orchestra router chưa chạy' };
+    return creds ? listBrainModels(creds) : { models: [], error: t('desktop.err.routerDown') };
   });
 
   ipcMain.handle(IPC.INSTALL_WORKER, async (_e, id: string) => {
@@ -379,7 +389,7 @@ function persistChat(repo: string, conv: typeof chat, msgs: Msg[]): void {
     const at = new Date().toISOString();
     appendFileSync(path.join(dir, `${conv.startedAt}.jsonl`), msgs.map((m) => JSON.stringify({ at, ...m })).join('\n') + '\n', 'utf8');
   } catch (err) {
-    console.log('[chat] persist lỗi:', err instanceof Error ? err.message : err);
+    console.log('[chat] persist failed:', err instanceof Error ? err.message : err);
   }
 }
 
@@ -462,11 +472,11 @@ export function setupAutoUpdater(getWin: () => BrowserWindow | null, notify: (t:
     .then(({ autoUpdater }) => {
       autoUpdater.autoDownload = true;
       autoUpdater.on('checking-for-update', () => console.log('[updater] checking…'));
-      autoUpdater.on('update-available', (i) => notify('Orchestra — có bản mới', `v${i.version} đang tải…`));
-      autoUpdater.on('update-not-available', () => console.log('[updater] đã là bản mới'));
-      autoUpdater.on('error', (err) => console.log('[updater] lỗi (bình thường khi chưa publish GitHub Releases):', String(err).slice(0, 120)));
+      autoUpdater.on('update-available', (i) => notify(t('desktop.notify.updateAvailable'), t('desktop.notify.updateDownloading', { version: i.version })));
+      autoUpdater.on('update-not-available', () => console.log('[updater] up to date'));
+      autoUpdater.on('error', (err) => console.log('[updater] error (normal before GitHub Releases are published):', String(err).slice(0, 120)));
       autoUpdater.on('update-downloaded', (i) => {
-        notify('Orchestra — bản mới đã tải', `v${i.version} — restart để cập nhật`);
+        notify(t('desktop.notify.updateDownloaded'), t('desktop.notify.restartToUpdate', { version: i.version }));
         getWin()?.webContents.send(EVENTS.UPDATE_STATUS, { status: 'downloaded', version: i.version });
       });
       autoUpdater.checkForUpdatesAndNotify().catch(() => {});

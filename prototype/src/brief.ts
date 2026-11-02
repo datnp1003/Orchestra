@@ -1,4 +1,6 @@
 // TaskBrief — theo Worker Protocol spec v0.1 §7 (luật B1–B4)
+import { t } from './i18n/index.js';
+
 export type NodeType =
   | 'plan'
   | 'implement'
@@ -47,17 +49,17 @@ export function validateBrief(b: TaskBrief): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (!b.goal.trim()) errors.push('B1: goal rỗng');
+  if (!b.goal.trim()) errors.push(t('core.brief.noGoal'));
 
   // B1: hàng rào bắt buộc, node plan là ngoại lệ (brief của plan chính là task gốc)
   if (b.node !== 'plan' && b.files_in_scope.length === 0) {
-    errors.push('B1: files_in_scope rỗng — brief thiếu hàng rào, từ chối dispatch');
+    errors.push(t('core.brief.noScope'));
   }
   if (!b.acceptance_criteria.length) {
-    warnings.push('B1: acceptance_criteria rỗng — gate sẽ không có gì để chấm');
+    warnings.push(t('core.brief.noAcceptance'));
   }
   if (b.node === 'plan' && b.files_in_scope.length === 0) {
-    warnings.push('plan không có scope gợi ý — worker sẽ tự khảo sát toàn repo');
+    warnings.push(t('core.brief.planNoScope'));
   }
   return { ok: errors.length === 0, errors, warnings };
 }

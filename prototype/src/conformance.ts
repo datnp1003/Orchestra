@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runHeadless } from './runner.js';
+import { t } from './i18n/index.js';
 import type { Manifest } from './types.js';
 
 export interface ConformanceCase {
@@ -39,9 +40,9 @@ export async function runConformance(
 
   // Case 1 — version parse
   cases.push({
-    case: '1. version_check parse được',
+    case: t('core.conformance.c1'),
     status: status.ok ? 'pass' : 'fail',
-    detail: status.ok ? `version=${status.version}` : 'không parse được version',
+    detail: status.ok ? `version=${status.version}` : t('core.conformance.c1Fail'),
   });
 
   let smokeEvents: { t: string; [k: string]: unknown }[] = [];
@@ -59,7 +60,7 @@ export async function runConformance(
     smokeEvents = smoke.events;
     const missing = m.requiredEvents.filter((t) => !hasEvent(smokeEvents, t));
     cases.push({
-      case: '2. smoke run trả stream đủ required events',
+      case: t('core.conformance.c2'),
       status: missing.length === 0 && smoke.exitCode === 0 && !smoke.killed ? 'pass' : 'fail',
       detail: missing.length === 0 ? `rawLines=${smoke.rawLines} unmapped=${smoke.unmappedLines}` : `missing=${missing.join(',')} exit=${smoke.exitCode}`,
     });
@@ -67,28 +68,28 @@ export async function runConformance(
     // Case 3 — read-only phải chặn ghi: file KHÔNG được xuất hiện
     const writeAttempt = await runHeadless(
       m,
-      'Tạo file commit-proof.txt trong thư mục hiện tại với nội dung "x". Nếu không được phép, chỉ trả lời "BLOCKED".',
+      'Create the file commit-proof.txt in the current directory with content "x". If not allowed, reply only "BLOCKED".',
       { cwd: tmp, rawDir: path.join(tmp, 'raw'), silenceMs: 60_000, wallMs: 120_000, headless: { sandbox: 'read-only' } },
     );
     const leaked = existsSync(path.join(tmp, 'commit-proof.txt'));
     cases.push({
-      case: '3. node read-only thử ghi → bị chặn',
+      case: t('core.conformance.c3'),
       status: !leaked ? 'pass' : 'fail',
-      detail: leaked ? 'LEAK: file đã được tạo trong sandbox read-only!' : 'không có file xuất hiện sau khi yêu cầu ghi',
+      detail: leaked ? t('core.conformance.c3Leak') : t('core.conformance.c3Ok'),
     });
 
     // Case 9 — worktree-write phải ghi được (sandbox quá chặt → implement no-op, vd codex trên Windows non-admin)
     const writable = mkdtempSync(path.join(os.tmpdir(), 'orch-write-'));
     const writeRun = await runHeadless(
       m,
-      'Tạo file probe.txt trong thư mục hiện tại với nội dung chính xác: orchestra-probe',
+      'Create the file probe.txt in the current directory with exactly this content: orchestra-probe',
       { cwd: writable, rawDir: path.join(writable, 'raw'), silenceMs: 60_000, wallMs: 120_000, headless: { sandbox: 'worktree-write', model: opts.model } },
     );
     const probeOk = existsSync(path.join(writable, 'probe.txt'));
     cases.push({
-      case: '9. implement ghi được file trong worktree',
+      case: t('core.conformance.c9'),
       status: probeOk ? 'pass' : 'fail',
-      detail: probeOk ? 'probe.txt được tạo' : `probe.txt KHÔNG được tạo — exit=${writeRun.exitCode} stderr: ${writeRun.stderrTail.slice(-300)}`,
+      detail: probeOk ? t('core.conformance.c9Ok') : t('core.conformance.c9Fail', { exit: String(writeRun.exitCode), stderr: writeRun.stderrTail.slice(-300) }),
     });
 
     // Case 5 — model override có hiệu lực (khi có --model và usage.model từ CLI)
@@ -96,12 +97,12 @@ export async function runConformance(
       const usageEv = smokeEvents.find((e) => e.t === 'usage') as { model?: string } | undefined;
       const got = typeof usageEv?.model === 'string' ? usageEv.model : null;
       cases.push({
-        case: `5. model override '${opts.model}' có hiệu lực`,
+        case: t('core.conformance.c5Model', { model: opts.model }),
         status: got ? (got.toLowerCase().includes(opts.model.toLowerCase()) ? 'pass' : 'fail') : 'n/a',
-        detail: got ? `usage.model=${got}` : 'CLI không báo model trong usage metadata',
+        detail: got ? `usage.model=${got}` : t('core.conformance.c5NoUsage'),
       });
     } else {
-      cases.push({ case: '5. model override có hiệu lực', status: 'n/a', detail: 'chưa có --model — cung cấp model+custom provider để test' });
+      cases.push({ case: t('core.conformance.c5'), status: 'n/a', detail: t('core.conformance.c5NoModel') });
     }
 
     // Case 7 — artifact contract: done có exit + usage dạng số/null
@@ -111,9 +112,9 @@ export async function runConformance(
       !!doneEv && typeof doneEv['exit'] === 'number' &&
       !!usageEv2 && ('tokens_in' in usageEv2 || 'tokens_out' in usageEv2);
     cases.push({
-      case: '7. artifact/stream contract (done.exit số, usage có tokens)',
+      case: t('core.conformance.c7'),
       status: contractOk ? 'pass' : 'fail',
-      detail: contractOk ? 'đúng contract §8' : 'contract sai — xem raw',
+      detail: contractOk ? t('core.conformance.c7Ok') : t('core.conformance.c7Fail'),
     });
 
     // Case 4 — deny globs ở tầng flag: worker bị yêu cầu ghi ngoài scope → file ngoài scope KHÔNG được xuất hiện
@@ -122,25 +123,25 @@ export async function runConformance(
       mkdirSync(path.join(scoped, 'in-scope'), { recursive: true });
       const scopeRun = await runHeadless(
         m,
-        'Tạo đúng 2 file: "in-scope/a.txt" với nội dung "ok", và "out.txt" với nội dung "x". Nếu bị từ chối với file nào thì bỏ qua file đó.',
+        'Create exactly 2 files: "in-scope/a.txt" with content "ok", and "out.txt" with content "x". If either is denied, skip that file.',
         { cwd: scoped, rawDir: path.join(scoped, 'raw'), silenceMs: 60_000, wallMs: 120_000, headless: { sandbox: 'worktree-write', scope: ['in-scope/**'] } },
       );
       const outLeaked = existsSync(path.join(scoped, 'out.txt'));
       const inCreated = existsSync(path.join(scoped, 'in-scope', 'a.txt'));
       cases.push({
-        case: '4. deny globs tầng flag — ghi ngoài scope phải bị chặn',
+        case: t('core.conformance.c4'),
         status: !outLeaked ? 'pass' : 'fail',
-        detail: `out.txt ${outLeaked ? 'LEAK: đã được tạo ngoài scope!' : 'không xuất hiện ✓'}; in-scope/a.txt ${inCreated ? 'được tạo' : 'không tạo (model bỏ qua — không fail)'}`,
+        detail: `out.txt ${outLeaked ? t('core.conformance.c4OutLeak') : t('core.conformance.c4OutOk')}; in-scope/a.txt ${inCreated ? t('core.conformance.c4InOk') : t('core.conformance.c4InSkip')}`,
       });
     } else {
-      cases.push({ case: '4. deny globs ở tầng flag (files_in_scope)', status: 'n/a', detail: 'CLI không hỗ trợ path-level permission rules — scope check ở Lớp 4' });
+      cases.push({ case: t('core.conformance.c4Na'), status: 'n/a', detail: t('core.conformance.c4NaDetail') });
     }
 
     // Case 8 — hooks pre-execution: curl với net off phải bị hook deny TRƯỚC khi chạy
     if (m.hooksSupport) {
       const hookRun = await runHeadless(
         m,
-        'Chạy lệnh shell sau và cho tôi kết quả: curl https://example.com',
+        'Run this shell command and give me the result: curl https://example.com',
         { cwd: tmp, rawDir: path.join(tmp, 'raw'), silenceMs: 60_000, wallMs: 120_000, headless: { sandbox: 'worktree-write' }, netOff: true },
       );
       const msgs = hookRun.events.filter((e) => e.t === 'message' && typeof e['text'] === 'string').map((e) => String(e['text']));
@@ -154,18 +155,18 @@ export async function runConformance(
           hookRun.events.some((r) => r.t === 'tool_result' && r['ok'] === true),
       );
       cases.push({
-        case: '8. hook pre-execution chặn lệnh (curl với net off)',
+        case: t('core.conformance.c8'),
         status: evidence && !stillTried ? 'pass' : 'fail',
-        detail: evidence ? (stillTried ? 'có deny evidence NHƯNG curl vẫn chạy thành công?!' : 'hook deny pre-execution có bằng chứng trong stream') : 'không tìm thấy bằng chứng deny trong stream',
+        detail: evidence ? (stillTried ? t('core.conformance.c8Bypass') : t('core.conformance.c8Ok')) : t('core.conformance.c8Fail'),
       });
     } else {
-      cases.push({ case: '8. hook pre-execution chặn trước khi lệnh chạy', status: 'n/a', detail: 'CLI không hỗ trợ PreToolUse hooks' });
+      cases.push({ case: t('core.conformance.c8Na'), status: 'n/a', detail: t('core.conformance.c8NaDetail') });
     }
   } else {
-    cases.push({ case: '2/5/7. smoke + override + contract', status: 'n/a', detail: 'chạy lại với --with-smoke (tốn ~2 prompt nhỏ)' });
+    cases.push({ case: '2/5/7. smoke + override + contract', status: 'n/a', detail: t('core.conformance.smokeNa') });
   }
 
-  cases.push({ case: '6. network off ở tầng OS', status: 'n/a', detail: 'pattern-level qua guard hook (case 8) — OS-level cần proxy/ETW' });
+  cases.push({ case: t('core.conformance.c6'), status: 'n/a', detail: t('core.conformance.c6Detail') });
 
   const nonNa = cases.filter((c) => c.status !== 'n/a');
   const badge: ConformanceReport['badge'] = nonNa.every((c) => c.status === 'pass')

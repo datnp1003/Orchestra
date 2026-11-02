@@ -1,91 +1,92 @@
 # Orchestra Pipeline DSL — Spec v0.1
+> English only (canonical). Vietnamese UI strings live in prototype/src/i18n/vi.ts.
 
-Ngôn ngữ khai báo quy trình cho IDE agent dạng orchestrator, điều phối các agent CLI
-(Claude Code, Codex, OpenCode, ...) như worker.
+A declarative workflow language for an orchestrator-style IDE agent that coordinates agent CLIs
+(Claude Code, Codex, OpenCode, ...) as workers.
 
 ---
 
-## 1. Nguyên tắc thiết kế (bất biến)
+## 1. Design principles (invariant)
 
-1. **Node khai báo role, không khai báo lệnh.** DSL không nói "chạy claude với prompt X" —
-   nó nói "cần một `coder`". Việc chọn CLI/model là việc của Router + Role Policy.
-2. **`verify` là node bắt buộc.** Mọi pipeline phải có đúng một node `type: verify`,
-   không được đặt điều kiện (`when`), không được xoá. User chỉ được *thêm* kiểm tra, không được bớt.
-3. **Cross-review.** Node kiểm tra (verify/review) phải chạy trên CLI khác với node implement
-   (khai báo `distinct_worker_from`). Nếu fleet không đủ CLI → escalate hỏi user.
-4. **Runner deterministic, Orchestrator là LLM.** Router/gate/merge là code thuần — pipeline
-   chạy được kể cả khi LLM orchestrator lỗi hoặc offline (chế độ reduced: dùng pipeline mặc định).
-5. **Agent đề xuất, người dùng chốt.** Mọi thay đổi pipeline (kể cả do retrospective đề xuất)
-   là một git diff trên file template — duyệt = merge.
-6. **Fix loop luôn có chặn trên.** Mọi vòng lặp sửa lỗi giới hạn số lần, hết lượt → hỏi user.
+1. **Nodes declare roles, not commands.** The DSL doesn't say "run claude with prompt X" —
+   it says "I need a `coder`". Choosing the CLI/model is the job of the Router + Role Policy.
+2. **`verify` is a mandatory node.** Every pipeline must have exactly one `type: verify` node,
+   which cannot be conditional (`when`) and cannot be deleted. Users may only *add* checks, never remove them.
+3. **Cross-review.** Checking nodes (verify/review) must run on a different CLI than the implement node
+   (declared via `distinct_worker_from`). If the fleet doesn't have enough CLIs → escalate to the user.
+4. **The runner is deterministic, the Orchestrator is an LLM.** Router/gate/merge are plain code — the pipeline
+   still runs even when the LLM orchestrator fails or is offline (reduced mode: use the default pipeline).
+5. **The agent proposes, the user decides.** Every pipeline change (including those proposed by the retrospective)
+   is a git diff on the template file — approve = merge.
+6. **Fix loops are always bounded.** Every fix loop has a retry limit; when exhausted → ask the user.
 
-## 2. Vị trí file & thứ tự ưu tiên
+## 2. File locations & precedence
 
 ```
 .orchestra/
-  config.yml              # policy cấp project: integration, budget mặc định
+  config.yml              # project-level policy: integration, default budget
   pipelines/
-    feature-dev.yml       # template pipeline (project scope, đi theo git)
+    feature-dev.yml       # pipeline template (project scope, tracked in git)
     hotfix.yml
     refactor.yml
-  episodic.sqlite         # memory tầng 2 (task records)
-  kb/                     # memory tầng 3 — project memory, markdown, review qua git
+  episodic.sqlite         # memory tier 2 (task records)
+  kb/                     # memory tier 3 — project memory, markdown, reviewed via git
 ~/.zcode/
-  pipelines/              # template pipeline global (mọi project)
-  policy.yml              # Role Policy + User memory pointer (tầng 4, 5)
+  pipelines/              # global pipeline templates (all projects)
+  policy.yml              # Role Policy + User memory pointer (tiers 4, 5)
 ```
 
-Ưa tiên khi resolve pipeline id: **project > global**. Template trong repo → được version,
-diff-review được, share cả team.
+Precedence when resolving a pipeline id: **project > global**. Templates in the repo → versioned,
+diff-reviewable, shared with the whole team.
 
-## 3. Khái niệm cốt lõi
+## 3. Core concepts
 
-| Khái niệm | Ý nghĩa |
+| Concept | Meaning |
 |---|---|
-| **Pipeline** | 1 file YAML = 1 quy trình cho 1 task. `applies_to` quyết định task loại nào tự dùng pipeline này. |
-| **Node** | Một bước trong DAG. Có `type` (ngữ nghĩa built-in), `role` (ai đảm nhiệm), `needs` (phụ thuộc), artifact vào/ra, `gate`, `on_fail`. |
-| **Role** | Nhãn ngữ nghĩa: `planner`, `coder`, `verifier`, `reviewer`, ... Router map role → CLI/model qua Role Policy. |
-| **Worker** | Một agent CLI cụ thể + model cụ thể, được Router chọn lúc dispatch. |
-| **Artifact** | Sản phẩm có kiểu của node: `plan`, `diff`, `test_report`, `verdict`, ... Node nhận artifact từ node nó `needs`. |
-| **Gate** | Điều kiện qua cửa — đánh giá bằng code deterministic, không phải LLM. |
-| **Brief** | Gói đầu vào cho worker: params + artifact upstream + memory inject. Brief là interface duy nhất giữa orchestrator và worker. |
+| **Pipeline** | 1 YAML file = 1 workflow for 1 task. `applies_to` decides which task types use this pipeline automatically. |
+| **Node** | One step in the DAG. Has a `type` (built-in semantics), `role` (who does it), `needs` (dependencies), input/output artifacts, `gate`, `on_fail`. |
+| **Role** | Semantic label: `planner`, `coder`, `verifier`, `reviewer`, ... The Router maps role → CLI/model via the Role Policy. |
+| **Worker** | A specific agent CLI + specific model, chosen by the Router at dispatch. |
+| **Artifact** | A node's typed product: `plan`, `diff`, `test_report`, `verdict`, ... A node receives artifacts from the nodes it `needs`. |
+| **Gate** | A pass condition — evaluated by deterministic code, not by an LLM. |
+| **Brief** | The input package for a worker: params + upstream artifacts + memory inject. The brief is the only interface between orchestrator and worker. |
 
-## 4. Node types chuẩn
+## 4. Standard node types
 
-| Type | Ngữ nghĩa built-in | Outputs mặc định |
+| Type | Built-in semantics | Default outputs |
 |---|---|---|
-| `plan` | Đọc code + brief, sinh plan & acceptance criteria. Thường `approval: required`. | `plan` |
-| `implement` | Code trong worktree riêng. `self_test: true` → coder tự chạy test trước khi báo xong (kết quả chỉ mang tính tham khảo). | `diff`, `self_test_report` |
-| `verify` | **Bắt buộc.** Chạy test suite độc lập trên trạng thái merge-rehearsal của worktree. Không tin `self_test_report`. | `test_report` |
-| `review` | Đánh giá diff theo checklist + `test_report`. Sinh verdict. | `verdict`, `review_comments` |
-| `check` | Phân tích LLM có chủ đích (hiệu năng, a11y, ...) sinh báo cáo. | `report` |
-| `run` | Lệnh deterministic, KHÔNG dùng LLM (lint, benchmark, scanner). | `report` |
-| `merge_gate` | Chỉ orchestrator chạy: tổng hợp gate, quyết định auto-merge hay hỏi user. | `merge_result` |
+| `plan` | Reads code + brief, produces a plan & acceptance criteria. Usually `approval: required`. | `plan` |
+| `implement` | Codes in its own worktree. `self_test: true` → the coder runs tests itself before reporting done (result is advisory only). | `diff`, `self_test_report` |
+| `verify` | **Mandatory.** Runs the test suite independently on the worktree's merge-rehearsal state. Does not trust `self_test_report`. | `test_report` |
+| `review` | Evaluates the diff against a checklist + `test_report`. Produces a verdict. | `verdict`, `review_comments` |
+| `check` | Targeted LLM analysis (performance, a11y, ...) producing a report. | `report` |
+| `run` | Deterministic command, NO LLM (lint, benchmark, scanner). | `report` |
+| `merge_gate` | Run only by the orchestrator: aggregates gates, decides auto-merge or ask the user. | `merge_result` |
 
-## 5. Cú pháp
+## 5. Syntax
 
-### 5.1 Đầy đủ — `feature-dev.yml`
+### 5.1 Full — `feature-dev.yml`
 
 ```yaml
 id: feature-dev
 version: 1
 name: "Feature development"
 applies_to:
-  task_type: [feature, chore]        # task loại nào tự khớp pipeline này
+  task_type: [feature, chore]        # which task types automatically match this pipeline
 
-params:                              # truyền lúc dispatch
-  - name: target                     # mô tả tính năng
+params:                              # passed at dispatch
+  - name: target                     # feature description
     required: true
   - name: e2e
     default: true
   - name: max_files_changed
     default: 30
 
-memory:                              # hook vào memory interface
-  brief_inject:                      # luôn bơm vào mọi brief
-    - project_memory                 # tầng 3 (kb/)
-    - user_memory                    # tầng 5
-  retrieval:                         # tra khi cần, theo node
+memory:                              # hooks into the memory interface
+  brief_inject:                      # always injected into every brief
+    - project_memory                 # tier 3 (kb/)
+    - user_memory                    # tier 5
+  retrieval:                         # looked up on demand, per node
     - node: plan
       sources: [episodic, semantic, fleet]
       query: "{{ params.target }}"
@@ -94,24 +95,24 @@ nodes:
   - id: plan
     type: plan
     role: planner
-    approval: required               # dừng, user duyệt plan mới chạy tiếp
+    approval: required               # stop; continue only after the user approves the plan
     outputs: [plan]
 
   - id: implement
     type: implement
     needs: [plan]
     role: coder
-    isolation: worktree              # mỗi task 1 worktree (mặc định)
-    self_test: true                  # test lần 1 do coder tự chạy
+    isolation: worktree              # 1 worktree per task (default)
+    self_test: true                  # first test pass run by the coder itself
     budget: { usd: 2.00, minutes: 30 }
     outputs: [diff, self_test_report]
     on_fail: { action: retry, max_retries: 1, then: ask_user }
 
   - id: verify
-    type: verify                     # bắt buộc — schema cấm xoá & cấm when
+    type: verify                     # mandatory — schema forbids deletion & forbids when
     needs: [implement]
     role: verifier
-    distinct_worker_from: [implement] # phải là CLI khác với coder
+    distinct_worker_from: [implement] # must be a different CLI than the coder
     inputs: [diff]
     outputs: [test_report]
     gate:
@@ -119,21 +120,21 @@ nodes:
       - if: params.e2e
         then: e2e.green
     on_fail:
-      action: spawn_fix              # spawn node fix kèm context node fail
+      action: spawn_fix              # spawn a fix node with the failed node's context
       max_retries: 2
       then: ask_user
 
-  - id: security                     # node có điều kiện — chỉ chạy khi chạm path nhạy cảm
+  - id: security                     # conditional node — runs only when sensitive paths are touched
     when:
       paths: ["src/payment/**", "src/auth/**"]
-    type: run                        # deterministic, không tốn LLM token
+    type: run                        # deterministic, costs no LLM tokens
     command: "semgrep scan --config auto --error src/"
     needs: [verify]
     outputs: [scan_report]
 
   - id: review
     type: review
-    needs: [verify, security]        # security bị skip → cạnh này tự coi là thoả
+    needs: [verify, security]        # security skipped → this edge is treated as satisfied
     role: reviewer
     distinct_worker_from: [implement]
     inputs: [diff, test_report]
@@ -145,19 +146,19 @@ nodes:
   - id: merge_gate
     type: merge_gate
     needs: [review]
-    policy: auto_if                  # tự merge khi đủ điều kiện, ngược lại hỏi user
+    policy: auto_if                  # auto-merge when conditions hold, otherwise ask the user
     conditions:
       - all_gates_passed
       - files_changed <= {{ params.max_files_changed }}
     else: ask_user
 ```
 
-### 5.2 Tối giản — `hotfix.yml`
+### 5.2 Minimal — `hotfix.yml`
 
 ```yaml
 id: hotfix
 version: 1
-name: "Hotfix nhanh"
+name: "Quick hotfix"
 applies_to: { task_type: [hotfix, bug] }
 
 params:
@@ -182,28 +183,28 @@ nodes:
   - id: merge_gate
     type: merge_gate
     needs: [verify]
-    policy: ask_always               # hotfix: luôn chốt bằng tay
+    policy: ask_always               # hotfix: always approved by hand
 ```
 
-## 6. Ngữ nghĩa thực thi
+## 6. Execution semantics
 
 ### 6.1 Skip propagation
-Node có `when:` không khớp → bị **skip**, không fail. Node phụ thuộc vào nó coi cạnh đó
-là thoả. (Đơn giản, dự đoán được — không cần cú pháp dependency-optional.)
+A node whose `when:` doesn't match → is **skipped**, not failed. Nodes depending on it treat that edge
+as satisfied. (Simple, predictable — no dependency-optional syntax needed.)
 
-### 6.2 `on_fail` — vòng sửa lỗi có chặn
+### 6.2 `on_fail` — bounded fix loop
 
-| action | Ý nghĩa |
+| action | Meaning |
 |---|---|
-| `retry` | Chạy lại chính node đó (spawn worker mới, cùng brief). |
-| `spawn_fix` | Spawn node `fix` mới, kèm artifact của node fail (diff, test_report, review_comments) làm context. Đếm chung vào `max_retries` của node gốc. |
-| `ask_user` | Dừng pipeline, hiện trạng thái + đề xuất, chờ user. |
-| `abort` | Huỷ task, worktree giữ lại để debug. |
+| `retry` | Rerun the same node (spawn a new worker, same brief). |
+| `spawn_fix` | Spawn a new `fix` node with the failed node's artifacts (diff, test_report, review_comments) as context. Counts toward the original node's `max_retries`. |
+| `ask_user` | Stop the pipeline, show status + suggestions, wait for the user. |
+| `abort` | Cancel the task, keep the worktree for debugging. |
 
-Fix node là node động (không có trong YAML tĩnh) — DAG tĩnh phải luôn phi chu trình;
-vòng lặp chỉ tồn tại lúc runtime và bị chặn bởi `max_retries`.
+Fix nodes are dynamic (not in the static YAML) — the static DAG must always be acyclic;
+loops only exist at runtime and are bounded by `max_retries`.
 
-### 6.3 Gate expressions — tập đóng, không shell
+### 6.3 Gate expressions — closed set, no shell
 
 ```
 tests.green            e2e.green            verdict.approved
@@ -211,70 +212,70 @@ verdict.changes_requested                   files_changed <= N
 coverage >= 0.8        scan.critical == 0   budget.spent_usd <= X
 if: <param/expr>  then: <expr>
 ```
-Chỉ được tham chiếu artifact đã khai báo và params. Không được gọi lệnh, không được
-đọc file ngoài artifact — gate phải tái lập được (reproducible) từ task record.
+May only reference declared artifacts and params. No command calls, no reading
+files outside artifacts — gates must be reproducible from the task record.
 
-### 6.4 Routing lúc dispatch — 3 lớp quyết định
+### 6.4 Routing at dispatch — 3 decision layers
 
 ```
-Node khai báo role ──► Role Policy (matrix role → CLI/model, có track record tầng 7)
-                   ──► worker_hint trong node (override nhẹ: prefer/avoid)
-                   ──► pin: {cli, model}    (ép cứng — chỉ dùng khi debug)
+Node declares role ──► Role Policy (matrix role → CLI/model, with tier-7 track record)
+                   ──► worker_hint in the node (light override: prefer/avoid)
+                   ──► pin: {cli, model}    (hard pin — debugging only)
 ```
 
-Router sau đó kiểm tra ràng buộc `distinct_worker_from`: nếu fleet chỉ còn 1 CLI khả dụng
-→ **không âm thầm bỏ qua**, escalate `ask_user` với cảnh báo mất cross-review.
+The Router then checks the `distinct_worker_from` constraint: if the fleet has only 1 available CLI left
+→ **never silently skip it**, escalate `ask_user` with a loss-of-cross-review warning.
 
-### 6.5 Brief của mỗi node được ghép từ
+### 6.5 Each node's brief is assembled from
 
-1. `params` (mục tiêu, ràng buộc)
-2. Artifacts từ các node `needs`
-3. `memory.brief_inject` (project + user memory) + retrieval riêng của node
-4. Node contract: phải trả artifact nào, gate nào sẽ được dùng để chấm
-   → worker biết "bài thi" của mình ngay từ đầu.
+1. `params` (goal, constraints)
+2. Artifacts from the `needs` nodes
+3. `memory.brief_inject` (project + user memory) + the node's own retrieval
+4. Node contract: which artifacts it must return, which gates will grade it
+   → the worker knows its "exam" from the start.
 
-## 7. Schema validation — luật cứng (kiểm tra khi load)
+## 7. Schema validation — hard rules (checked on load)
 
-| # | Luật |
+| # | Rule |
 |---|---|
-| V1 | Đúng một node `type: verify`. Không có → từ chối pipeline. |
-| V2 | Node `verify` không được có `when` và không được nằm sau điều kiện nào làm nó skip được. |
-| V3 | DAG tĩnh phi chu trình. |
-| V4 | Mọi artifact dùng làm input phải được node trong `needs` sản xuất. |
-| V5 | `distinct_worker_from` chỉ trỏ tới node trong cùng pipeline. |
-| V6 | `on_fail.spawn_fix` bắt buộc có `max_retries` và `then`. |
-| V7 | `merge_gate` bắt buộc có `policy` (`auto_if` cần `conditions`, `ask_always`/`ask_never` không cần). |
-| V8 | Node `run` phải có `command` và không được là node duy nhất quyết verdict của pipeline. |
-| V9 | `budget` thiếu → lấy mặc định từ Role Policy theo role; không có mặc định → từ chối (không chạy node không biết trần chi phí). |
-| V10 | Template thiếu `version` → từ chối. Thay đổi template không bump version → warning, không chặn. |
+| V1 | Exactly one `type: verify` node. None → pipeline rejected. |
+| V2 | The `verify` node may not have `when` and may not sit behind any condition that could skip it. |
+| V3 | The static DAG is acyclic. |
+| V4 | Every artifact used as input must be produced by a node in `needs`. |
+| V5 | `distinct_worker_from` may only point to nodes in the same pipeline. |
+| V6 | `on_fail.spawn_fix` requires `max_retries` and `then`. |
+| V7 | `merge_gate` requires `policy` (`auto_if` needs `conditions`, `ask_always`/`ask_never` don't). |
+| V8 | A `run` node must have `command` and may not be the only node deciding the pipeline's verdict. |
+| V9 | Missing `budget` → take the default from the Role Policy for the role; no default → rejected (never run a node with no known cost ceiling). |
+| V10 | Template missing `version` → rejected. Template changed without a version bump → warning, not blocked. |
 
-## 8. Hợp nhất nhiều pipeline (tầng compose) — `.orchestra/config.yml`
+## 8. Combining multiple pipelines (compose layer) — `.orchestra/config.yml`
 
-Phần này KHÔNG nằm trong pipeline (pipeline = 1 task). Điều phối nhiều task song song
-là policy cấp project:
+This part is NOT in the pipeline (pipeline = 1 task). Coordinating multiple parallel tasks
+is project-level policy:
 
 ```yaml
 integration:
-  merge_order: dag             # theo DAG phụ thuộc task; song song khác nhánh
+  merge_order: dag             # follow the task dependency DAG; parallel across branches
   after_each_merge:
-    run: verify                # integration test sau MỖI lần merge — bắt conflict ngữ nghĩa
+    run: verify                # integration test after EVERY merge — catches semantic conflicts
     role: verifier
-    distinct_worker_from: true # khác CLI với các coder liên quan nếu được
+    distinct_worker_from: true # different CLI from the involved coders if possible
   on_conflict:
-    action: spawn_resolver     # node merge-resolver, context = diff các task va chạm
+    action: spawn_resolver     # merge-resolver node, context = diffs of the colliding tasks
     max_loops: 2
     then: ask_user
   on_integration_fail:
-    action: spawn_fix          # phản hồi ngược về task gôc + report integration
+    action: spawn_fix          # feed back to the originating task + integration report
     max_loops: 2
     then: ask_user
 final:
   changelog: true
-  summary: true                # tổng hợp toàn phiên → episodic + hiển thị
+  summary: true                # whole-session summary → episodic + displayed
   cleanup_worktrees: on_green
 ```
 
-## 9. Artifact schemas (chuẩn hoá để gate code đọc được)
+## 9. Artifact schemas (normalized so gate code can read them)
 
 ```yaml
 Plan:         { goal, steps[], files_touched[], acceptance_criteria[], risks[] }
@@ -285,18 +286,18 @@ ScanReport:   { tool, findings[{severity, file, line, rule}], error_count }
 MergeResult:  { merged, order[], conflicts_resolved[], integration_reports[] }
 ```
 
-Node type chuẩn sinh đúng schema của nó; node `check`/`run` sinh `report` tự do
-nhưng gate chỉ đọc được field khai báo trong schema trên.
+Standard node types produce exactly their schema; `check`/`run` nodes produce a free-form `report`
+but gates can only read fields declared in the schemas above.
 
-## 10. Versioning & agent đề xuất
+## 10. Versioning & agent proposals
 
-- Template là file trong repo → mọi thay đổi qua git.
-- Retrospective job đề xuất sửa template → sinh PR/diff gắn nhãn `[orchestra-proposal]`
-  → user merge = chốt. Không tự ghi đè.
-- `version` tăng theo semver: patch = sửa text/gate số, minor = thêm node, major = đổi
-  luồng. Task đang chạy giữ nguyên bản template đã load lúc bắt đầu (snapshot vào task record).
+- Templates are files in the repo → every change goes through git.
+- The retrospective job proposes template edits → produces a PR/diff labeled `[orchestra-proposal]`
+  → user merge = decision. Never overwrites on its own.
+- `version` follows semver: patch = text/gate number tweaks, minor = new node, major = flow
+  change. A running task keeps the template version loaded at start (snapshotted into the task record).
 
-## 11. JSON Schema (khung rút gọn, dùng cho validation khi load)
+## 11. JSON Schema (abridged skeleton, used for validation on load)
 
 ```yaml
 type: object
@@ -314,7 +315,7 @@ properties:
   nodes:
     type: array
     minItems: 2
-    contains: { const: { type: verify } }     # V1 — kiểm tra chính xác ở logic, schema chỉ gợi ý
+    contains: { const: { type: verify } }     # V1 — checked precisely in logic, schema is only a hint
     items:
       type: object
       required: [id, type]
@@ -341,11 +342,11 @@ properties:
             then: { enum: [ask_user, abort, continue] }
 ```
 
-*(Luật V1–V10 kiểm tra bằng logic sau khi parse JSON Schema — schema chỉ chặn cấu trúc thô.)*
+*(Rules V1–V10 are checked in logic after JSON Schema parsing — the schema only blocks raw structure.)*
 
-## 12. Mở khoá sau v0.1 (không đưa vào bản này)
+## 12. Unlocked after v0.1 (not in this version)
 
-- Sub-pipeline / node `pipeline_ref` (gọi pipeline khác như node)
-- Node song song nội bộ (một node spawn nhiều worker thi nhau, lấy kết quả đầu qua gate — race mode)
-- Template marketplace + rating theo track record fleet
-- `when` mở rộng: metric repo (độ phức tạp, hot-path theo git history)
+- Sub-pipelines / `pipeline_ref` node (call another pipeline as a node)
+- Internal parallel nodes (one node spawns several competing workers, takes the first result through the gate — race mode)
+- Template marketplace + ratings by fleet track record
+- Extended `when`: repo metrics (complexity, hot paths from git history)

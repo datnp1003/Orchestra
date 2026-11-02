@@ -57,10 +57,10 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
     if (covered || g.tasks.length < 2) continue;
     const file = path.join(dir, `prop-${stamp}-kb-${moduleDir.replace('/', '-')}.md`);
     const body = [
-      `# [orchestra-proposal] KB entry mới cho module \`${moduleDir}/\``,
+      `# [orchestra-proposal] New KB entry for module \`${moduleDir}/\``,
       '',
-      `Bằng chứng: ${g.tasks.length} task đã chạm module này (${g.tasks.join(', ')}).`,
-      `Files thường chạm: ${[...g.files].slice(0, 8).join(', ')}`,
+      `Evidence: ${g.tasks.length} tasks touched this module (${g.tasks.join(', ')}).`,
+      `Frequently touched files: ${[...g.files].slice(0, 8).join(', ')}`,
       '',
       '```markdown',
       '---',
@@ -73,11 +73,11 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
       'pinned: false',
       '---',
       '',
-      `Module hoạt động gần đây (${g.tasks.length} task). Mục tiêu gần nhất: "${g.goals[g.goals.length - 1] ?? ''}".`,
-      'Cần user bổ sung quy ước/bẫy cụ thể trước khi pinned.',
+      `Recently active module (${g.tasks.length} tasks). Latest goal: "${g.goals[g.goals.length - 1] ?? ''}".`,
+      'User should add concrete conventions/pitfalls before pinning.',
       '```',
       '',
-      '→ User review rồi copy phần trong ``` vào `.orchestra/kb/` (merge = chốt, retro không tự ghi — M1).',
+      '→ User reviews, then copies the ``` block into `.orchestra/kb/` (merge = accept; retro never writes on its own — M1).',
     ].join('\n');
     writeFileSync(file, body, 'utf8');
     kbProposals.push(file);
@@ -102,16 +102,16 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
     if (gap < gapThreshold) continue;
     const file = path.join(dir, `prop-${stamp}-policy-${role}.md`);
     const body = [
-      `# [orchestra-proposal] Đề xuất đổi thứ tự binding cho role \`${role}\``,
+      `# [orchestra-proposal] Proposed binding order change for role \`${role}\``,
       '',
-      `| Worker | Dispatched | Passed | Tỉ lệ |`,
+      `| Worker | Dispatched | Passed | Rate |`,
       `|---|---|---|---|`,
       ...arr.map(([w, v]) => `| ${w} | ${v.n} | ${v.passed} | ${((v.passed / v.n) * 100).toFixed(0)}% |`),
       '',
-      `Chênh lệch ${(gap * 100).toFixed(0)} điểm % giữa \`${bestW}\` và \`${worstW}\` (n ≥ ${minSample}).`,
+      `Gap of ${(gap * 100).toFixed(0)} percentage points between \`${bestW}\` and \`${worstW}\` (n ≥ ${minSample}).`,
       '',
-      'Đề xuất: đưa `' + bestW + '` lên trước `' + worstW + '` trong `bindings.' + role + '` của policy.yml.',
-      '→ User merge = chốt; đóng proposal = hệ ghi nhận để không đề xuất lại trừ khi bằng chứng tăng (§6).',
+      'Proposal: move `' + bestW + '` ahead of `' + worstW + '` in `bindings.' + role + '` of policy.yml.',
+      '→ User merge = accept; closing the proposal = recorded so it is not re-proposed unless evidence grows (§6).',
     ].join('\n');
     writeFileSync(file, body, 'utf8');
     policyProposals.push(file);

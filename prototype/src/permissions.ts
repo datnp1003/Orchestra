@@ -16,21 +16,21 @@ export function permissionFor(node: NodeType): PermissionPlan {
       return {
         sandbox: 'read-only',
         net: false,
-        note: 'node phân tích — chỉ đọc, không tool ghi',
+        note: 'analysis node — read-only, no write tools',
       };
     case 'implement':
       return {
         sandbox: 'worktree-write',
         net: false,
-        note: 'ghi chỉ trong worktree; network off',
+        note: 'writes only inside the worktree; network off',
       };
     case 'verify':
       return {
         sandbox: 'worktree-write',
         net: false,
-        note: 'chỉ chạy test — allowlist Bash chi tiết ở P3',
+        note: 'run tests only — detailed Bash allowlist in P3',
       };
     default:
-      return { sandbox: 'read-only', net: false, note: 'mặc định an toàn' };
+      return { sandbox: 'read-only', net: false, note: 'safe default' };
   }
 }

@@ -27,7 +27,7 @@ const ADD_TYPE = "Add-Type -AssemblyName System.Security;";
 export function vaultSet(provider: string, secret: string, baseUrl?: string): boolean {
   if (process.platform !== 'win32') return false;
   mkdirSync(vaultDir(), { recursive: true });
-  const file = credPath(provider).replace(/'/g, "''");
+  const file = credPath(provider).replaceAll("'", "''");
   const script = [
     "$ErrorActionPreference='Stop'",
     ADD_TYPE,
@@ -54,7 +54,7 @@ function readRaw(provider: string): { secret: string; base_url: string | null } 
   const script = [
     "$ErrorActionPreference='Stop'",
     ADD_TYPE,
-    `[byte[]]$b=[IO.File]::ReadAllBytes('${file.replace(/'/g, "''")}')`,
+    `[byte[]]$b=[IO.File]::ReadAllBytes('${file.replaceAll("'", "''")}')`,
     '$u=[Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)',
     '[Console]::Out.Write([Text.Encoding]::UTF8.GetString($u))',
   ].join('; ');

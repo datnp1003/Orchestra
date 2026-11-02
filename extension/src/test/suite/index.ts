@@ -4,22 +4,22 @@ import * as vscode from 'vscode';
 
 export async function run(): Promise<void> {
   const ext = vscode.extensions.getExtension('orchestra-dev.orchestra');
-  assert.ok(ext, 'extension orchestra-dev.orchestra không tìm thấy');
+  assert.ok(ext, 'extension orchestra-dev.orchestra not found');
   await ext!.activate();
-  assert.ok(ext!.isActive, 'extension chưa active');
+  assert.ok(ext!.isActive, 'extension not active');
 
   const cmds = await vscode.commands.getCommands(true);
   for (const c of ['orchestra.dispatch', 'orchestra.runPipeline', 'orchestra.showMatrix', 'orchestra.refreshViews', 'orchestra._fleetSnapshot']) {
-    assert.ok(cmds.includes(c), `thiếu command ${c}`);
+    assert.ok(cmds.includes(c), `missing command ${c}`);
   }
 
   // Fleet snapshot — phải thấy CLI thật trên máy
   const fleet = (await vscode.commands.executeCommand('orchestra._fleetSnapshot')) as { id: string; installed: boolean; version?: string }[];
   assert.ok(Array.isArray(fleet) && fleet.length >= 2, `fleet snapshot: ${JSON.stringify(fleet)}`);
   const claude = fleet.find((f) => f.id === 'claude');
-  assert.ok(claude && claude.installed, 'claude phải installed');
+  assert.ok(claude && claude.installed, 'claude must be installed');
   const codex = fleet.find((f) => f.id === 'codex');
-  assert.ok(codex && codex.installed, 'codex phải installed');
+  assert.ok(codex && codex.installed, 'codex must be installed');
 
   // Tasks snapshot — demo repo có task records từ P2–P4
   const tasks = (await vscode.commands.executeCommand('orchestra._tasksSnapshot')) as number;

@@ -9,6 +9,7 @@ import { buildFleetStats, statsKey, type FleetStat } from './memory.js';
 import { routerModelOk } from './router/providers.js';
 import type { RouterInfo } from './types.js';
 import { protoAsset } from './paths.js';
+import { t } from './i18n/index.js';
 
 export interface BindingDef {
   worker: { cli: string; model?: string };
@@ -65,16 +66,16 @@ export function loadPolicy(repo?: string): LoadedPolicy {
 /** Luật P1–P8 (role-policy-spec §7) — phần áp dụng được ở P4 */
 export function validatePolicyFile(p: PolicyFile): string[] {
   const errors: string[] = [];
-  if (typeof p.version !== 'number' || p.version < 1) errors.push('P8/V10: policy thiếu version');
+  if (typeof p.version !== 'number' || p.version < 1) errors.push(t('core.policy.noVersion'));
 
   const w = p.routing?.weights;
   if (w) {
     const sum = Object.values(w).reduce((a, b) => a + b, 0);
-    if (Math.abs(sum - 1) > 0.001) errors.push(`P7: routing.weights tổng = ${sum}, phải = 1.0`);
+    if (Math.abs(sum - 1) > 0.001) errors.push(t('core.policy.weightsSum', { sum }));
   }
   for (const [role, binds] of Object.entries(p.bindings ?? {})) {
     for (const b of binds) {
-      if (!getManifest(b.worker.cli)) errors.push(`P2: binding '${role}' → manifest '${b.worker.cli}' không tồn tại`);
+      if (!getManifest(b.worker.cli)) errors.push(t('core.policy.noManifest', { role, cli: b.worker.cli }));
     }
   }
   return errors;
@@ -109,7 +110,7 @@ export function resolveWorker(
     const m = getManifest(opts.pin);
     const st = m ? checkStatus(m) : undefined;
     if (st?.installed) return { pick: opts.pin, reason: 'pinned (debug)', candidates: [opts.pin] };
-    return { reason: `pinned worker ${opts.pin} không khả dụng`, candidates: [] };
+    return { reason: t('core.policy.pinUnavailable', { pin: opts.pin }), candidates: [] };
   }
 
   // min_sample & decay từ policy hoặc mặc định
@@ -153,7 +154,7 @@ export function resolveWorker(
     .map((c) => {
       const s = stats?.get(statsKey(c.cli, role));
       let track = 0;
-      let trackPart = 'n<min_sample (chưa đủ số liệu)';
+      let trackPart = t('core.policy.minSample');
       if (s && s.dispatched >= minSample) {
         track = s.ema * 5;
         trackPart = `ema=${s.ema.toFixed(2)} (n=${s.dispatched}) ×5`;
@@ -169,7 +170,7 @@ export function resolveWorker(
 
   if (scored.length === 0) {
     return {
-      reason: `không còn ứng viên cho role '${role}' — escalate ask_user (Role Policy §4.4)`,
+      reason: t('core.policy.noCandidates', { role }),
       candidates: candidates.map((c) => c.cli),
     };
   }

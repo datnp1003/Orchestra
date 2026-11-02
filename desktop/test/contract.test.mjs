@@ -1,10 +1,11 @@
 // Unit test contract + settings store — node thường, không Electron
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo } from '../out/desktop/src/main/contract.js';
-import { loadSettings, saveSettings } from '../out/desktop/src/main/settingsStore.js';
+import { loadSettings, saveSettings, initLanguage } from '../out/desktop/src/main/settingsStore.js';
+import { setLocale } from '../out/prototype/src/i18n/index.js';
 
 // 1. channels unique + đầy đủ
 const chans = Object.values(IPC);
@@ -37,6 +38,13 @@ for (const c of ['brain:models', 'chat:reset', 'chat:cancel', 'providers:list', 
 }
 for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
 assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: có oauth:start + oauth:finish');
+assert.ok(chans.includes('i18n:get'), 'có channel i18n:get');
+// language: settings cũ không có field → fallback (main truyền locale OS), rác → fallback
+assert.equal(DEFAULT_SETTINGS.language, 'en');
+assert.equal(old.language, 'en', 'settings cũ thiếu language → en');
+assert.equal(validateSettings({}, 'vi').language, 'vi', 'fallback = locale OS');
+assert.equal(validateSettings({ language: 'vi' }).language, 'vi');
+assert.equal(validateSettings({ language: 'fr' }, 'vi').language, 'vi', 'giá trị lạ → fallback');
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
 assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');
@@ -66,12 +74,24 @@ assert.deepEqual(s2.repos, ['C:/a', 'C:/b']);
 writeFileSync(file, '{broken json');
 const s3 = loadSettings(file);
 assert.deepEqual(s3, DEFAULT_SETTINGS);
+// initLanguage: lần đầu → ghi locale OS; đã có language → giữ; file hỏng → không ghi đè
+const f2 = path.join(tmp, 'first.json');
+assert.equal(initLanguage(f2, 'vi').language, 'vi');
+assert.equal(loadSettings(f2).language, 'vi', 'đã ghi xuống file');
+assert.equal(initLanguage(f2, 'en').language, 'vi', 'không đè lựa chọn cũ');
+writeFileSync(f2, JSON.stringify({ repos: ['C:/old'] })); // settings cũ chưa có language
+assert.deepEqual([initLanguage(f2, 'vi').language, loadSettings(f2).repos], ['vi', ['C:/old']]);
+assert.equal(initLanguage(file, 'vi').language, 'en', 'file hỏng → defaults, không ghi');
+assert.equal(readFileSync(file, 'utf8'), '{broken json');
 rmSync(tmp, { recursive: true, force: true });
-console.log('✓ settingsStore: roundtrip + broken-file fallback');
+console.log('✓ settingsStore: roundtrip + broken-file fallback + initLanguage');
 
-// 4. requireRepo — chặn chạy trong process cwd khi chưa có repo
+// 4. requireRepo — chặn chạy trong process cwd khi chưa có repo (lỗi theo locale)
+setLocale('vi');
 assert.throws(() => requireRepo({ activeRepo: '', repos: [] }), /Chưa chọn repo/);
 assert.throws(() => requireRepo({ activeRepo: path.join(os.tmpdir(), 'orch-khong-ton-tai-xyz'), repos: [] }), /không tồn tại/);
+setLocale('en');
+assert.throws(() => requireRepo({ activeRepo: '', repos: [] }), /No repo selected/);
 const rdir = mkdtempSync(path.join(os.tmpdir(), 'orch-repo-'));
 assert.equal(requireRepo({ activeRepo: rdir, repos: [] }), rdir);
 assert.equal(requireRepo({ activeRepo: '', repos: [rdir] }), rdir, 'fallback repos[0]');

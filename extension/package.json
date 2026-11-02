@@ -1,7 +1,7 @@
 {
   "name": "orchestra",
   "displayName": "Orchestra",
-  "description": "IDE agent orchestrator — điều phối agent CLI (claude, codex, ...) như worker trong pipeline có gate",
+  "description": "%ext.description%",
   "publisher": "orchestra-dev",
   "version": "0.2.4",
   "private": true,
@@ -29,16 +29,16 @@
       "orchestra-sidebar": [
         {
           "id": "orchestra.chatView",
-          "name": "Chat",
+          "name": "%view.chat%",
           "type": "webview"
         },
         {
           "id": "orchestra.fleetView",
-          "name": "Fleet"
+          "name": "%view.fleet%"
         },
         {
           "id": "orchestra.tasksView",
-          "name": "Tasks"
+          "name": "%view.tasks%"
         }
       ]
     },
@@ -48,27 +48,27 @@
         "orchestra.defaultRepo": {
           "type": "string",
           "default": "",
-          "description": "Repo mặc định khi workspace không có .orchestra/ (để trống = dùng demo-repo của prototype)"
+          "description": "%config.defaultRepo%"
         },
         "orchestra.autoApprovePlan": {
           "type": "boolean",
           "default": false,
-          "description": "Run Pipeline: tự duyệt plan node, không dừng hỏi (không khuyến nghị cho repo thật)"
+          "description": "%config.autoApprovePlan%"
         },
         "orchestra.hooksEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Guard hook pre-execution — chặn git push, network pattern, path escape TRƯỚC khi lệnh chạy"
+          "description": "%config.hooksEnabled%"
         },
         "orchestra.skillSync": {
           "type": "boolean",
           "default": true,
-          "description": "Tự sync .orchestra/kb → AGENTS.md + CLAUDE.md trước mỗi dispatch để worker đọc project memory"
+          "description": "%config.skillSync%"
         },
         "orchestra.templatesDir": {
           "type": "string",
           "default": "",
-          "description": "Thư mục pipeline templates (để trống = templates đi kèm extension)"
+          "description": "%config.templatesDir%"
         },
         "orchestra.orchestratorWorker": {
           "type": "string",
@@ -77,38 +77,38 @@
             "claude",
             "codex"
           ],
-          "description": "CLI làm brain cho Orchestrator trong Chat (chạy read-only, session resume để nhớ hội thoại)"
+          "description": "%config.orchestratorWorker%"
         }
       }
     },
     "commands": [
       {
         "command": "orchestra.dispatch",
-        "title": "Orchestra: Dispatch Task"
+        "title": "%cmd.dispatch%"
       },
       {
         "command": "orchestra.runPipeline",
-        "title": "Orchestra: Run Pipeline"
+        "title": "%cmd.runPipeline%"
       },
       {
         "command": "orchestra.showMatrix",
-        "title": "Orchestra: Show Policy Matrix"
+        "title": "%cmd.showMatrix%"
       },
       {
         "command": "orchestra.reviewMerge",
-        "title": "Orchestra: Review && Merge"
+        "title": "%cmd.reviewMerge%"
       },
       {
         "command": "orchestra.syncSkills",
-        "title": "Orchestra: Sync Skills (KB → AGENTS.md/CLAUDE.md)"
+        "title": "%cmd.syncSkills%"
       },
       {
         "command": "orchestra.installWorker",
-        "title": "Orchestra: Install Worker (npm)"
+        "title": "%cmd.installWorker%"
       },
       {
         "command": "orchestra.refreshViews",
-        "title": "Orchestra: Refresh",
+        "title": "%cmd.refreshViews%",
         "icon": "$(refresh)"
       }
     ]

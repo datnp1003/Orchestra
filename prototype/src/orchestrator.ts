@@ -8,6 +8,7 @@ import { evalGates, type GateContext, type GateResult } from './gates.js';
 import { dispatch, type DispatchResult } from './dispatch.js';
 import { mergeBranch } from './worktree.js';
 import { spawnSync } from 'node:child_process';
+import { t } from './i18n/index.js';
 
 export interface RunPipelineOptions {
   repo: string;
@@ -78,7 +79,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
   const def: PipelineDef = loadPipeline(o.templatePath);
   const errors = validatePipeline(def);
   if (errors.length) {
-    throw new Error(`pipeline không hợp lệ:\n  - ${errors.join('\n  - ')}`);
+    throw new Error(t('core.orchestrator.invalidPipeline', { errors: errors.join('\n  - ') }));
   }
   const order = topoSort(def.nodes);
 
@@ -141,7 +142,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       case 'plan': {
         d = await dispatch({
           repo: o.repo, signal: o.signal, router: o.router, node:'plan', role: node.role ?? 'planner',
-          goal: `Lên plan (tối đa 8 bước, files_touched, risks) cho nhiệm vụ: ${o.goal}`,
+          goal: `Write a plan (max 8 steps, files_touched, risks) for the task: ${o.goal}`,
           scope: [], constraints: [], acceptance: [],
           excludeWorkers: exclude, wallMs: 180_000,
         });
@@ -150,10 +151,10 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         lastMsgOf[node.id] = text ?? '';
         workerOf[node.id] = pickWorker(d) ?? '';
         recordOf[node.id] = d.record;
-        log(`plan bởi ${workerOf[node.id]}:\n---\n${(text ?? '(không có nội dung)').slice(0, 1500)}\n---`);
+        log(t('core.orchestrator.planBy', { worker: workerOf[node.id]!, text: (text ?? t('core.orchestrator.noContent')).slice(0, 1500) }));
         if (node.approval === 'required') {
-          const ans = o.autoYes ? 'y' : await ask('Duyệt plan và chạy tiếp? [y/N] ');
-          if (ans !== 'y') { st.status = 'aborted'; aborted = true; persist(); return { ok: false, reason: 'user không duyệt plan' }; }
+          const ans = o.autoYes ? 'y' : await ask(t('core.orchestrator.approvePlan'));
+          if (ans !== 'y') { st.status = 'aborted'; aborted = true; persist(); return { ok: false, reason: t('core.orchestrator.planRejected') }; }
         }
         return { ok: true };
       }
@@ -174,21 +175,21 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         implWt = d.record.worktree as Wt;
         st.worktree = implWt.path;
         if (typeof d.record['session'] === 'string') lastSessionByNode[node.id] = d.record['session'];
-        log(`implement bởi ${workerOf[node.id]} → ${implWt.path}`);
+        log(t('core.orchestrator.implementBy', { worker: workerOf[node.id]!, path: implWt.path }));
         return { ok: true };
       }
 
       case 'verify': {
-        if (!implWt) return { ok: false, reason: 'verify chạy trước implement — DAG sai' };
+        if (!implWt) return { ok: false, reason: t('core.orchestrator.verifyBeforeImpl') };
         d = await dispatch({
           repo: o.repo, signal: o.signal, router: o.router, node:'verify', role: node.role ?? 'verifier',
-          goal: `Kiểm tra thay đổi cho nhiệm vụ: ${o.goal}`,
+          goal: `Verify the changes for the task: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
           promptOverride: [
-            `Trong worktree này đã có thay đổi cho nhiệm vụ: "${o.goal}".`,
-            def.test_command ? `Hãy chạy '${def.test_command}' để kiểm tra.` : 'Hãy kiểm tra thay đổi.',
-            'Đọc git diff --cached, báo cáo ngắn: có lỗi rõ ràng không, test có chạy được không.',
+            `This worktree already contains changes for the task: "${o.goal}".`,
+            def.test_command ? `Run '${def.test_command}' to check them.` : 'Check the changes.',
+            'Read git diff --cached and report briefly: any obvious bugs, and whether the tests run.',
           ].join('\n'),
         });
         if (!d.ok || !d.record) return fail(d);
@@ -199,17 +200,17 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       }
 
       case 'review': {
-        if (!implWt) return { ok: false, reason: 'review chạy trước implement — DAG sai' };
+        if (!implWt) return { ok: false, reason: t('core.orchestrator.reviewBeforeImpl') };
         d = await dispatch({
           repo: o.repo, signal: o.signal, router: o.router, node:'review', role: node.role ?? 'reviewer',
-          goal: `Review thay đổi cho nhiệm vụ: ${o.goal}`,
+          goal: `Review the changes for the task: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
           promptOverride: [
-            `Review thay đổi (git diff --cached) cho nhiệm vụ: "${o.goal}".`,
-            `Phạm vi được phép: ${scope.join(', ') || 'toàn repo'}.`,
-            'Checklist: đúng yêu cầu, không sửa ngoài phạm vi, chất lượng code, rủi ro.',
-            'BẮT BUỘC: dòng cuối cùng của câu trả lời phải là "VERDICT: approved" hoặc "VERDICT: changes_requested".',
+            `Review the changes (git diff --cached) for the task: "${o.goal}".`,
+            `Allowed scope: ${scope.join(', ') || 'whole repo'}.`,
+            'Checklist: meets the requirements, no edits outside scope, code quality, risks.',
+            'REQUIRED: the last line of your answer must be "VERDICT: approved" or "VERDICT: changes_requested".',
           ].join('\n'),
         });
         if (!d.ok || !d.record) return fail(d);
@@ -220,7 +221,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       }
 
       case 'run': {
-        if (!node.command) return { ok: false, reason: `node run '${node.id}' thiếu command` };
+        if (!node.command) return { ok: false, reason: t('core.orchestrator.runNoCommand', { id: node.id }) };
         const r = spawnSync(node.command, { cwd: implWt?.path ?? o.repo, encoding: 'utf8', shell: true, windowsHide: true, timeout: 120_000 });
         log(`run '${node.command}' → exit=${r.status}`);
         return r.status === 0 ? { ok: true } : { ok: false, reason: `${node.command} exit=${r.status}: ${String(r.stdout ?? r.stderr ?? '').slice(-300)}` };
@@ -238,21 +239,21 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         const outcome = evalGates(node.gate, ctx);
         st.gates = outcome.results;
         for (const g of outcome.results) log(`gate ${g.ok ? '✓' : '✗'} ${g.gate} — ${g.detail}`);
-        if (!outcome.ok) return { ok: false, reason: 'merge gate không đạt' };
-        if (!implWt) return { ok: false, reason: 'không có worktree để merge' };
+        if (!outcome.ok) return { ok: false, reason: t('core.orchestrator.mergeGateFailed') };
+        if (!implWt) return { ok: false, reason: t('core.orchestrator.noWorktree') };
         const m = mergeBranch(o.repo, implWt.branch);
         if (!m.ok) { mergeConflict = true; return { ok: false, reason: `merge conflict: ${m.out.slice(-300)}` }; }
         merged = true;
-        log(`merged ${implWt.branch} vào main ✓`);
+        log(t('core.orchestrator.merged', { branch: implWt.branch }));
         return { ok: true };
       }
 
       default:
-        return { ok: false, reason: `node type '${node.type}' chưa hỗ trợ trong P3 runner` };
+        return { ok: false, reason: t('core.orchestrator.unsupportedType', { type: node.type }) };
     }
 
     function fail(dd: DispatchResult): { ok: false; reason: string } {
-      return { ok: false, reason: dd.reason ?? `dispatch stage=${dd.stage} thất bại` };
+      return { ok: false, reason: dd.reason ?? t('core.orchestrator.dispatchFailed', { stage: String(dd.stage) }) };
     }
   };
 
@@ -273,7 +274,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
     // skip propagation theo when.paths (đối chiếu run scope)
     if (node.when?.paths && o.scope && o.scope.length) {
       const overlap = node.when.paths.some((p) => o.scope!.includes(p));
-      if (!overlap) { st.status = 'skipped'; log(`skip ${nodeId} (when không khớp scope)`); persist(); continue; }
+      if (!overlap) { st.status = 'skipped'; log(t('core.orchestrator.skip', { id: nodeId })); persist(); continue; }
     }
 
     log(`▶ node ${nodeId} (${node.type})`);
@@ -302,7 +303,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         for (const g of outcome.results) log(`gate ${g.ok ? '✓' : '✗'} ${g.gate} — ${g.detail}`);
         if (!outcome.ok) {
           res.ok = false;
-          res.reason = `gate không đạt: ${outcome.results.filter((r) => !r.ok).map((r) => r.gate).join(', ')}`;
+          res.reason = t('core.orchestrator.gateFailed', { gates: outcome.results.filter((r) => !r.ok).map((r) => r.gate).join(', ') });
         }
       }
 
@@ -316,7 +317,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       }
 
       st.error = res.reason;
-      log(`✗ node ${nodeId} (lần ${attempt}): ${res.reason}`);
+      log(t('core.orchestrator.nodeFailed', { id: nodeId, attempt, reason: String(res.reason) }));
 
       const of = node.on_fail;
       if (!of) { st.status = 'failed'; aborted = true; persist(); break; }
@@ -333,21 +334,21 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         log(`spawn fix #${fixAttempts} cho ${nodeId}`);
         const fix = await dispatch({
           repo: o.repo, signal: o.signal, router: o.router, node:'implement', role: 'fixer',
-          goal: `Sửa theo feedback: ${res.reason ?? ''}`,
+          goal: `Fix according to feedback: ${res.reason ?? ''}`,
           scope: o.scope ?? [], constraints: [], acceptance: [],
           reuseWorktree: implWt, wallMs: 240_000, model: o.model,
           promptOverride: [
-            `Feedback từ bước kiểm tra: "${lastMsgOf[nodeId] ?? res.reason ?? ''}"`,
-            `Nhiệm vụ gốc: "${o.goal}". Phạm vi: ${(o.scope ?? []).join(', ')}.`,
-            'Sửa trong worktree hiện tại cho đến khi feedback được xử lý.',
+            `Feedback from the check step: "${lastMsgOf[nodeId] ?? res.reason ?? ''}"`,
+            `Original task: "${o.goal}". Scope: ${(o.scope ?? []).join(', ')}.`,
+            'Fix in the current worktree until the feedback is addressed.',
           ].join('\n'),
         });
-        if (!fix.ok) log(`fix thất bại: ${fix.reason}`);
+        if (!fix.ok) log(t('core.orchestrator.fixFailed', { reason: String(fix.reason) }));
         continue; // chạy lại node (vd review chấm lại)
       }
 
       if (of.action === 'ask_user') {
-        const ans = o.autoYes ? 'y' : await ask(`Node ${nodeId} fail. Thử lại? [y/N] `);
+        const ans = o.autoYes ? 'y' : await ask(t('core.orchestrator.askRetry', { id: nodeId }));
         if (ans !== 'y') { st.status = 'failed'; aborted = true; persist(); break; }
         continue;
       }
@@ -359,10 +360,10 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       break;
     }
 
-    async function thenAction(t: 'ask_user' | 'abort' | 'continue' | undefined): Promise<void> {
-      if (t === 'continue') return;
-      if (t === 'ask_user' && !o.autoYes) {
-        const ans = await ask(`Node ${nodeId} hết lượt retry. Tiếp tục bỏ qua? [y/N] `);
+    async function thenAction(then: 'ask_user' | 'abort' | 'continue' | undefined): Promise<void> {
+      if (then === 'continue') return;
+      if (then === 'ask_user' && !o.autoYes) {
+        const ans = await ask(t('core.orchestrator.askSkip', { id: nodeId }));
         if (ans === 'y') { st.status = 'failed'; nodeDone = true; return; }
       }
       st.status = 'failed';

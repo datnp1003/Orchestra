@@ -1,6 +1,7 @@
 // IPC contract — thuần, KHÔNG import electron (unit test được bằng node thường)
 // Mỗi channel map 1:1 vào 1 hàm của logic.ts — Desktop không viết logic mới (plan §5)
 import { existsSync } from 'node:fs';
+import { t, type Locale } from '../../../prototype/src/i18n/index.js';
 
 export const IPC = {
   APP_INFO: 'app:info',
@@ -39,6 +40,7 @@ export const IPC = {
   CHAT_CANCEL: 'chat:cancel',
   CHAT_SESSIONS: 'chat:sessions',
   CHAT_OPEN: 'chat:open',
+  I18N_GET: 'i18n:get',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -69,6 +71,8 @@ export interface AppSettings {
   hooksEnabled: boolean;
   skillSync: boolean;
   templatesDir: string;
+  /** ngôn ngữ UI; thiếu (settings cũ / lần đầu) → fallbackLang (main: detectLocale(app.getLocale())) */
+  language: Locale;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -80,9 +84,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hooksEnabled: true,
   skillSync: true,
   templatesDir: '',
+  language: 'en',
 };
 
-export function validateSettings(raw: unknown): AppSettings {
+export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SETTINGS.language): AppSettings {
   const r = (raw ?? {}) as Partial<AppSettings>;
   return {
     repos: Array.isArray(r.repos) ? r.repos.filter((x): x is string => typeof x === 'string' && x.length > 0) : [],
@@ -95,14 +100,15 @@ export function validateSettings(raw: unknown): AppSettings {
     hooksEnabled: r.hooksEnabled !== false,
     skillSync: r.skillSync !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
+    language: r.language === 'en' || r.language === 'vi' ? r.language : fallbackLang,
   };
 }
 
 /** repo active (hoặc repos[0]) — throw nếu trống/không tồn tại, tránh chạy trong process cwd */
 export function requireRepo(s: Pick<AppSettings, 'activeRepo' | 'repos'>): string {
   const repo = s.activeRepo || s.repos[0] || '';
-  if (!repo) throw new Error('Chưa chọn repo — thêm repo ở Cài đặt');
-  if (!existsSync(repo)) throw new Error(`Repo không tồn tại: ${repo}`);
+  if (!repo) throw new Error(t('desktop.err.noRepo'));
+  if (!existsSync(repo)) throw new Error(t('desktop.err.repoMissing', { repo }));
   return repo;
 }
 

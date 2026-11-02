@@ -3,15 +3,15 @@ version: 1
 
 roles:
   coder:
-    description: "Implement trong worktree"
+    description: "Implement in a worktree"
     permission_profile: worktree-write
     budget: { usd: 2.00, minutes: 8 }
   planner:
-    description: "Đọc code, sinh plan"
+    description: "Read code, produce a plan"
     permission_profile: readonly
     budget: { usd: 1.00, minutes: 5 }
   verifier:
-    description: "Chạy test suite độc lập"
+    description: "Run the test suite independently"
     permission_profile: verify-only
     budget: { usd: 0.50, minutes: 4 }
   reviewer:
@@ -19,14 +19,14 @@ roles:
     permission_profile: readonly
     budget: { usd: 1.00, minutes: 4 }
   fixer:
-    description: "Sửa theo feedback verify/review"
+    description: "Fix based on verify/review feedback"
     permission_profile: worktree-write
     budget: { usd: 1.00, minutes: 4 }
 
 bindings:
   coder:
-    # model trong binding = gán model riêng cho CLI đó khi đảm nhiệm role này
-    # (để trống = CLI dùng model mặc định của nó; override từng lần: dispatch --model)
+    # model in a binding = a dedicated model for that CLI when it fills this role
+    # (empty = the CLI's own default model; per-run override: dispatch --model)
     - worker: { cli: codex }        # , model: worker-codex }
       boost_when: { tags: [refactor, backend, performance] }
     - worker: { cli: claude }       # , model: worker-claude }
@@ -46,7 +46,7 @@ bindings:
 
 routing:
   weights: { track_record: 0.4, health: 0.2, cost: 0.2, preference: 0.1, speed: 0.1 }
-  min_sample: 5        # P4: hạ để demo được với số liệu mô phỏng (mặc định spec là 10)
+  min_sample: 5        # P4: lowered so the demo works with simulated data (spec default is 10)
   decay_days: 30
   budget_mode: balanced
 

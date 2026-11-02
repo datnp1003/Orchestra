@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals, startOrchestraRouter, stopOrchestraRouter } from './ipc.js';
 import { IPC } from './contract.js';
-import { loadSettings } from './settingsStore.js';
+import { initLanguage } from './settingsStore.js';
+import { t, setLocale, detectLocale } from '../../../prototype/src/i18n/index.js';
 
 // D1-fix: dùng app.getAppPath() — dev = desktop/, packaged = asar root (paths nhất quán 2 môi trường)
 const appRoot = app.getAppPath();
@@ -13,7 +14,7 @@ const settingsFile = path.join(app.getPath('userData'), 'orchestra-settings.json
 
 // icon từ file (PNG base64 cũ hỏng → nativeImage rỗng → tray/taskbar không có icon)
 const ICON = nativeImage.createFromPath(path.join(appRoot, 'assets', 'icon.png'));
-if (ICON.isEmpty()) console.error('[orchestra] assets/icon.png không load được — tray sẽ không hiện');
+if (ICON.isEmpty()) console.error('[orchestra] assets/icon.png failed to load — tray icon will be missing');
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -50,15 +51,14 @@ if (!gotLock) {
     });
   };
 
-  const createTray = (): void => {
-    tray = new Tray(ICON.resize({ width: 16, height: 16 }));
-    tray.setToolTip('Orchestra Desktop');
-    tray.setContextMenu(
+  // gọi lại khi đổi ngôn ngữ (ipc onLocaleChange) — menu tray dựng tĩnh
+  const buildTrayMenu = (): void => {
+    tray?.setContextMenu(
       Menu.buildFromTemplate([
-        { label: 'Mở Orchestra', click: () => (win ? win.focus() : createWindow()) },
+        { label: t('desktop.tray.open'), click: () => (win ? win.focus() : createWindow()) },
         { type: 'separator' },
         {
-          label: 'Trạng thái Fleet',
+          label: t('desktop.tray.fleet'),
           click: () => {
             if (win) {
               win.focus();
@@ -67,9 +67,14 @@ if (!gotLock) {
           },
         },
         { type: 'separator' },
-        { label: 'Thoát', click: () => app.quit() },
+        { label: t('desktop.tray.quit'), click: () => app.quit() },
       ]),
     );
+  };
+  const createTray = (): void => {
+    tray = new Tray(ICON.resize({ width: 16, height: 16 }));
+    tray.setToolTip('Orchestra Desktop');
+    buildTrayMenu();
     // click trái tray → focus/hiện cửa sổ
     tray.on('click', () => {
       if (win) win.focus();
@@ -78,10 +83,10 @@ if (!gotLock) {
   };
 
   app.whenReady().then(async () => {
-    // smoke settings sớm — fail nhanh nếu userData không ghi được
-    loadSettings(settingsFile);
+    // smoke settings sớm — fail nhanh nếu userData không ghi được; lần đầu: ngôn ngữ theo locale OS
+    setLocale(initLanguage(settingsFile, detectLocale(app.getLocale())).language);
     // R2a: router trước IPC — chat/dispatch đầu tiên đã có router; lỗi (router.json hỏng…) không chặn app
-    await startOrchestraRouter(settingsFile).catch((err) => console.error('[router] không khởi động được:', err));
+    await startOrchestraRouter(settingsFile).catch((err) => console.error('[router] failed to start:', err));
     wireIpc(ipcMain, {
       win: () => win,
       settingsFile,
@@ -89,6 +94,7 @@ if (!gotLock) {
         if (Notification.isSupported()) new Notification({ title, body }).show();
       },
       protoDir,
+      onLocaleChange: buildTrayMenu,
     });
     wireTerminals(ipcMain, {
       win: () => win,

@@ -31,7 +31,7 @@ test('repo_read chặn thoát repo', async (t) => {
   assert.equal((await x('repo_read', {})).ok, false);
   const r = await x('repo_read', { path: 'a.txt', offset: 2, limit: 1 });
   assert.ok(r.ok);
-  assert.match(r.content, /^2\tl2\n\(3 dòng tổng\)$/);
+  assert.match(r.content, /^2\tl2\n\(3 lines total\)$/);
 });
 
 test('repo_glob / repo_grep trên temp dir, bỏ .git/node_modules', async (t) => {
@@ -81,7 +81,7 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
 
   const asked = [];
   const no = await exec(repo, async (q) => (asked.push(q), false))('fleet_merge', { taskId: 't-1' });
-  assert.deepEqual(no, { ok: false, content: 'user từ chối' });
+  assert.deepEqual(no, { ok: false, content: 'user declined' });
   assert.equal(asked.length, 1);
   assert.equal(merged(), false, 'không được merge khi user từ chối');
 
@@ -93,7 +93,7 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
   assert.equal(merged(), true);
 
   const pr = await exec(repo, async () => false)('policy_promote', { role: 'coder', cli: 'codex' });
-  assert.deepEqual(pr, { ok: false, content: 'user từ chối' });
+  assert.deepEqual(pr, { ok: false, content: 'user declined' });
 });
 
 // repo main + branch orchestra/task-<id> đổi feature.ts + record (+ patch file) + "worktree" có package.json tuỳ chọn
@@ -152,7 +152,7 @@ test('fleet_merge gate: no_change / không file / scope fail → từ chối, kh
     const { repo, id, merged } = taskRepo(t, { record });
     const r = await exec(repo, async () => assert.fail('không được hỏi approve'))('fleet_merge', { taskId: id });
     assert.equal(r.ok, false, JSON.stringify(record));
-    assert.match(r.content, /không merge/);
+    assert.match(r.content, /^not merging/);
     assert.equal(merged(), false);
   }
 });

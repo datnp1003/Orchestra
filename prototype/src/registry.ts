@@ -1,4 +1,5 @@
 import { spawnSync, spawn, type ChildProcess } from 'node:child_process';
+import { t } from './i18n/index.js';
 
 // ---------- P6.3: installer — Worker Protocol §3/§4 ----------
 // npm là kênh chuẩn phân phối agent CLI (claude/codex/opencode đều có package npm).
@@ -11,12 +12,12 @@ export function installWorker(
   return new Promise((resolve) => {
     const log = (s: string) => onLog?.(s);
     if (!m.install?.npm) {
-      resolve({ ok: false, detail: `manifest '${m.id}' không khai install — chưa có kênh phân phối` });
+      resolve({ ok: false, detail: t('core.registry.noInstall', { id: m.id }) });
       return;
     }
     const npmCheck = spawnSync('npm', ['--version'], { encoding: 'utf8', windowsHide: true, shell: true, timeout: 30_000 });
     if (npmCheck.status !== 0) {
-      resolve({ ok: false, detail: 'npm không có trên PATH — cài Node.js (https://nodejs.org) trước khi cài worker' });
+      resolve({ ok: false, detail: t('core.registry.noNpm') });
       return;
     }
     log(`npm install -g ${m.install.npm} …`);
@@ -34,7 +35,7 @@ export function installWorker(
       const s = d.toString().trim();
       if (s) log(s.slice(0, 200));
     });
-    child.on('error', (err) => resolve({ ok: false, detail: `spawn npm lỗi: ${err.message}` }));
+    child.on('error', (err) => resolve({ ok: false, detail: t('core.registry.spawnFail', { err: err.message }) }));
     child.on('close', (code) => {
       if (code !== 0) {
         resolve({ ok: false, detail: `npm install exit=${code}: ${tail.slice(-300)}` });
@@ -42,18 +43,18 @@ export function installWorker(
       }
       const v = tryRun(m.versionCmd, 60_000);
       if (!v.ok) {
-        resolve({ ok: true, detail: `cài xong NHƯNG chưa thấy '${m.bin}' trên PATH — mở terminal mới hoặc restart VS Code để PATH cập nhật, rồi chạy '${m.bin}' để login` });
+        resolve({ ok: true, detail: t('core.registry.notOnPath', { bin: m.bin }) });
         return;
       }
-      resolve({ ok: true, detail: `cài xong: ${m.bin} ${v.out.split(/\r?\n/)[0]}` });
+      resolve({ ok: true, detail: t('core.registry.installed', { bin: m.bin, version: v.out.split(/\r?\n/)[0] ?? '' }) });
     });
   });
 }
 
 export function uninstallWorker(m: import('./types.js').Manifest): { ok: boolean; detail: string } {
-  if (!m.install?.npm) return { ok: false, detail: `manifest '${m.id}' không khai install.npm` };
+  if (!m.install?.npm) return { ok: false, detail: t('core.registry.noInstallNpm', { id: m.id }) };
   const r = spawnSync('npm', ['uninstall', '-g', m.install.npm], { encoding: 'utf8', windowsHide: true, shell: true, timeout: 120_000 });
-  return { ok: r.status === 0, detail: r.status === 0 ? `đã gỡ ${m.install.npm}` : `npm uninstall exit=${r.status}` };
+  return { ok: r.status === 0, detail: r.status === 0 ? t('core.registry.uninstalled', { pkg: m.install.npm }) : `npm uninstall exit=${r.status}` };
 }
 
 export interface WorkerStatus {

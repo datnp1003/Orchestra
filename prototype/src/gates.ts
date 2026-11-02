@@ -2,6 +2,7 @@
 // chỉ được tham chiếu artifact/params đã khai báo. Gate chạy bằng code, không LLM.
 import { spawnSync } from 'node:child_process';
 import type { GateExpr } from './pipeline.js';
+import { t } from './i18n/index.js';
 
 export interface GateContext {
   repo: string;
@@ -27,7 +28,7 @@ export interface GatesOutcome {
 
 function runTests(ctx: GateContext): GateResult {
   if (!ctx.testCommand) {
-    return { gate: 'tests.green', ok: false, detail: 'pipeline thiếu test_command' };
+    return { gate: 'tests.green', ok: false, detail: t('core.gates.noTestCommand') };
   }
   const r = spawnSync(ctx.testCommand, {
     cwd: ctx.wtPath,
@@ -56,7 +57,7 @@ function evalOne(expr: GateExpr, ctx: GateContext): GateResult {
   if (expr === 'tests.green') return runTests(ctx);
 
   if (expr === 'all_gates_passed') {
-    return { gate: expr, ok: true, detail: 'vốn là tổng của các gate trước — luôn true tới merge_gate' };
+    return { gate: expr, ok: true, detail: t('core.gates.allPassed') };
   }
 
   const verdictMatch = /^verdict\.(approved|changes_requested|blocked)$/.exec(expr);
@@ -65,7 +66,7 @@ function evalOne(expr: GateExpr, ctx: GateContext): GateResult {
     // message cuối của node nào chứa dòng VERDICT — quét các node đã chạy
     const text = ctx.lastMessage('__current__') ?? '';
     const m = /VERDICT:\s*(approved|changes_requested|blocked)/i.exec(text);
-    if (!m) return { gate: expr, ok: false, detail: 'không tìm thấy dòng VERDICT trong output reviewer' };
+    if (!m) return { gate: expr, ok: false, detail: t('core.gates.noVerdict') };
     const got = m[1]!.toLowerCase();
     return { gate: expr, ok: got === want, detail: `reviewer verdict=${got}` };
   }
@@ -80,7 +81,7 @@ function evalOne(expr: GateExpr, ctx: GateContext): GateResult {
     return { gate: expr, ok, detail: `files_changed=${count}` };
   }
 
-  return { gate: expr, ok: false, detail: 'gate không thuộc tập đóng hỗ trợ (P3)' };
+  return { gate: expr, ok: false, detail: t('core.gates.unsupported') };
 }
 
 export function evalGates(gates: GateExpr[] | undefined, ctx: GateContext): GatesOutcome {

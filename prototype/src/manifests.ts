@@ -309,10 +309,10 @@ const codex: Manifest = {
   experimental: true,
   notes: [
     'conformance pin: 0.164.0',
-    'event format exec --json là experimental — unmapped lines là tín hiệu cần sửa adapter',
-    '--skip-git-repo-check: prototype chạy ngoài git repo',
-    'Windows non-admin: workspace-write fail (restricted-token sandbox) → worktree-write dùng danger-full-access; isolation = git worktree + guard.cjs + scope check (Lớp 4) + fs cross-check (Lớp 3)',
-    'guard.cjs là chặn mức pattern (lệnh shell + path trong apply_patch), KHÔNG phải OS sandbox; hook phụ thuộc --dangerously-bypass-hook-trust',
+    'exec --json event format is experimental — unmapped lines signal the adapter needs fixing',
+    '--skip-git-repo-check: prototype runs outside a git repo',
+    'Windows non-admin: workspace-write fails (restricted-token sandbox) → worktree-write uses danger-full-access; isolation = git worktree + guard.cjs + scope check (Layer 4) + fs cross-check (Layer 3)',
+    'guard.cjs blocks at pattern level (shell commands + paths in apply_patch), NOT an OS sandbox; hook depends on --dangerously-bypass-hook-trust',
   ],
 };
 
@@ -339,8 +339,8 @@ const antigravity: Manifest = {
   model_slots: { main: true, fast: false, plan: false },
   experimental: true,
   notes: [
-    'chưa cài trên máy dev — manifest thể hiện luật phân phối: CHỈ native google (OAuth gemini)',
-    'custom endpoint: KHÔNG hỗ trợ — model family khác không phân phối được cho CLI này',
+    'not installed on the dev machine — manifest expresses the distribution rule: native google ONLY (OAuth gemini)',
+    'custom endpoint: NOT supported — other model families cannot be distributed to this CLI',
     'conformance: untested (placeholder)',
   ],
 };

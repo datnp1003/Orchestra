@@ -19,6 +19,7 @@ import {
   responsesToChatRequest,
   type ToolNames,
 } from './translate.js';
+import { t } from '../i18n/index.js';
 
 export interface RouterOptions {
   store: { listProviders(): ProviderConfig[]; getKey(id: string): string | null; setKey(id: string, value: string): void };
@@ -86,7 +87,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
   const warnOAuth = (p: ProviderConfig) => {
     if (!isOAuth(p.kind) || warned.has(p.id)) return;
     warned.add(p.id);
-    opts.onLog?.(`[router] CẢNH BÁO: ${p.id} dùng OAuth subscription — rủi ro điều khoản/khoá tài khoản`);
+    opts.onLog?.(`[router] ${t('router.server.oauthWarn', { id: p.id })}`);
   };
   enabled().forEach(warnOAuth);
   const resolve = (model: unknown): { p: ProviderConfig; model: string } | null => {
@@ -116,7 +117,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
 
   async function proxy(req: http.IncomingMessage, res: http.ServerResponse, url: URL, log: { provider?: string; model?: string }) {
     const clientFmt = ROUTES[url.pathname];
-    if (req.method !== 'POST' || !clientFmt) throw new HttpError(404, 'not_found', `không có route ${req.method} ${url.pathname}`);
+    if (req.method !== 'POST' || !clientFmt) throw new HttpError(404, 'not_found', t('router.server.noRoute', { method: String(req.method), path: url.pathname }));
     const raw = await readBody(req);
     // phần body thừa: node tự đọc bỏ sau khi trả 413 (client đã qua auth) — cắt socket thì client chỉ thấy ECONNRESET
     if (!raw) throw new HttpError(413, 'request_too_large', 'body > 20 MB');
@@ -124,12 +125,12 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     try {
       body = JSON.parse(raw.toString('utf8'));
     } catch {
-      throw new HttpError(400, 'invalid_request_error', 'body không phải JSON');
+      throw new HttpError(400, 'invalid_request_error', t('router.server.notJson'));
     }
-    if (!body || typeof body !== 'object') throw new HttpError(400, 'invalid_request_error', 'body phải là JSON object');
+    if (!body || typeof body !== 'object') throw new HttpError(400, 'invalid_request_error', t('router.server.notObject'));
     const def = typeof opts.defaultModel === 'function' ? opts.defaultModel() : opts.defaultModel;
     const r = resolve(body.model) ?? (def ? resolve(def) : null);
-    if (!r) throw new HttpError(400, 'model_not_found', `model không route được: ${String(body.model)} (dùng <provider>/<model>)`);
+    if (!r) throw new HttpError(400, 'model_not_found', t('router.server.badModel', { model: String(body.model) }));
     const { p, model } = r;
     Object.assign(log, { provider: p.id, model });
 
@@ -142,7 +143,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       target = `${url.pathname}${url.search}`; // giữ query (claude gửi ?beta=true)
       upstreamBody = { ...body, model };
     } else if (url.pathname === '/v1/messages/count_tokens') {
-      throw new HttpError(404, 'not_found', `provider ${p.id} không hỗ trợ count_tokens`);
+      throw new HttpError(404, 'not_found', t('router.server.noCountTokens', { id: p.id }));
     } else if (clientFmt === 'messages' && p.formats.includes('chat')) {
       mode = 'm2c';
       target = '/v1/chat/completions';
@@ -158,7 +159,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       target = mode === 'r2c' ? '/v1/chat/completions' : '/v1/messages';
       upstreamBody = mode === 'r2c' ? r.req : chatToMessagesRequest(r.req, model);
     } else {
-      throw new HttpError(400, 'unsupported_route', `provider ${p.id} (${p.formats.join(',')}) không nhận ${clientFmt}`);
+      throw new HttpError(400, 'unsupported_route', t('router.server.unsupported', { id: p.id, formats: p.formats.join(','), fmt: clientFmt }));
     }
 
     const headers: Record<string, string> = { ...authHeaders(p.kind, opts.store.getKey(p.id)), 'content-type': 'application/json' };
@@ -187,7 +188,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     // codex backend bị ép stream — client không stream nhận JSON gom từ response.completed
     if (p.kind === 'oauth-openai' && !body.stream && up.ok) {
       const done = completedFromSse(await up.text());
-      if (!done) throw new HttpError(502, 'upstream_error', 'upstream không gửi response.completed');
+      if (!done) throw new HttpError(502, 'upstream_error', t('router.server.noCompleted'));
       sendJson(res, 200, { ...done, model: body.model });
       return;
     }
@@ -201,7 +202,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     }
     if (!body.stream) {
       const j = await up.json().catch(() => null);
-      if (!j) throw new HttpError(502, 'upstream_error', 'upstream trả JSON không hợp lệ');
+      if (!j) throw new HttpError(502, 'upstream_error', t('router.server.badJson'));
       const out =
         mode === 'm2c' ? chatToMessagesResponse(j)
         : mode === 'c2m' ? messagesToChatResponse(j)
@@ -241,8 +242,8 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     try {
       // chống DNS rebinding: trang web trỏ domain → 127.0.0.1 sẽ có Host khác
       const host = req.headers.host;
-      if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) throw new HttpError(403, 'forbidden', 'Host không hợp lệ');
-      if (!tokenOk(req, tokenBuf)) throw new HttpError(401, 'authentication_error', 'thiếu hoặc sai token router');
+      if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) throw new HttpError(403, 'forbidden', t('router.server.badHost'));
+      if (!tokenOk(req, tokenBuf)) throw new HttpError(401, 'authentication_error', t('router.server.badToken'));
       if (req.method === 'GET' && url.pathname === '/v1/models') await listModels(res);
       else await proxy(req, res, url, log);
     } catch (err) {

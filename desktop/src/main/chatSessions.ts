@@ -1,5 +1,6 @@
 // Session chat — parse <repo>/.orchestra/chat/<id>.jsonl (thuần, không fs) để resume hội thoại brain
 import type { Block, Msg } from '../../../prototype/src/brain.js';
+import { t } from '../../../prototype/src/i18n/index.js';
 
 export interface ChatView {
   role: 'user' | 'orch' | 'step';
@@ -56,7 +57,7 @@ export function parseChatSession(text: string): ChatSession {
   return {
     history,
     messages,
-    title: first.length > 60 ? first.slice(0, 59) + '…' : first || '(trống)',
+    title: first.length > 60 ? first.slice(0, 59) + '…' : first || t('desktop.chat.untitled'),
     turns: messages.filter((m) => m.role === 'user').length,
   };
 }

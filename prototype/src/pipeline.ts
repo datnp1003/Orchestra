@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import * as yaml from 'js-yaml';
 import type { NodeType } from './brief.js';
+import { t } from './i18n/index.js';
 
 export type GateExpr = string | { if: string; then: string };
 
@@ -44,7 +45,7 @@ export interface PipelineDef {
 
 export function loadPipeline(path: string): PipelineDef {
   const raw = yaml.load(readFileSync(path, 'utf8')) as PipelineDef;
-  if (!raw || typeof raw !== 'object') throw new Error('pipeline file rỗng/không hợp lệ');
+  if (!raw || typeof raw !== 'object') throw new Error(t('core.pipeline.fileInvalid'));
   return raw;
 }
 
@@ -55,32 +56,32 @@ export function validatePipeline(d: PipelineDef): string[] {
   const ids = new Set(d.nodes.map((n) => n.id));
 
   // V10
-  if (typeof d.version !== 'number' || d.version < 1) errors.push('V10: thiếu version');
+  if (typeof d.version !== 'number' || d.version < 1) errors.push(t('core.pipeline.v10'));
 
   // V1: đúng một node verify
   const verifyNodes = d.nodes.filter((n) => n.type === 'verify');
-  if (verifyNodes.length !== 1) errors.push(`V1: pipeline phải có đúng 1 node verify (thấy ${verifyNodes.length})`);
+  if (verifyNodes.length !== 1) errors.push(t('core.pipeline.v1', { n: verifyNodes.length }));
 
   for (const n of d.nodes) {
-    if (!NODE_TYPES.includes(n.type)) errors.push(`${n.id}: type không hợp lệ '${n.type}'`);
+    if (!NODE_TYPES.includes(n.type)) errors.push(t('core.pipeline.badType', { id: n.id, type: n.type }));
     // V2: verify không được có when
-    if (n.type === 'verify' && n.when) errors.push(`V2: node verify không được có 'when' (${n.id})`);
+    if (n.type === 'verify' && n.when) errors.push(t('core.pipeline.v2', { id: n.id }));
     // needs phải trỏ tới node tồn tại
     for (const dep of n.needs ?? []) {
-      if (!ids.has(dep)) errors.push(`${n.id}: needs '${dep}' không tồn tại`);
+      if (!ids.has(dep)) errors.push(t('core.pipeline.needsMissing', { id: n.id, dep }));
     }
     // V5: distinct_worker_from phải trỏ tới node trong pipeline
     for (const ref of n.distinct_worker_from ?? []) {
-      if (!ids.has(ref)) errors.push(`V5: ${n.id}.distinct_worker_from '${ref}' không tồn tại`);
+      if (!ids.has(ref)) errors.push(t('core.pipeline.v5', { id: n.id, ref }));
     }
     // V6: spawn_fix bắt buộc max_retries + then
     if (n.on_fail?.action === 'spawn_fix' && (n.on_fail.max_retries === undefined || !n.on_fail.then)) {
-      errors.push(`V6: ${n.id}.on_fail.spawn_fix cần max_retries và then`);
+      errors.push(t('core.pipeline.v6', { id: n.id }));
     }
     // V7: merge_gate cần policy; auto_if cần conditions
-    if (n.type === 'merge_gate' && !n.gate) errors.push(`V7: merge_gate '${n.id}' thiếu conditions`);
+    if (n.type === 'merge_gate' && !n.gate) errors.push(t('core.pipeline.v7', { id: n.id }));
     // V9: budget (warning-format nhưng đưa vào errors list riêng sẽ chặt hơn — P3: warning)
-    if (n.type === 'implement' && !n.budget) errors.push(`V9: node implement '${n.id}' thiếu budget`);
+    if (n.type === 'implement' && !n.budget) errors.push(t('core.pipeline.v9', { id: n.id }));
   }
 
   // V3: DAG phi chu trình — topoSort sẽ throw; thử trước để báo lỗi rõ
@@ -118,7 +119,7 @@ export function topoSort(nodes: NodeDef[]): string[] {
   }
   if (order.length !== nodes.length) {
     const cyclic = nodes.filter((n) => !order.includes(n.id)).map((n) => n.id);
-    throw new Error(`DAG có chu trình, liên quan node: ${cyclic.join(', ')}`);
+    throw new Error(t('core.pipeline.cycle', { nodes: cyclic.join(', ') }));
   }
   return order;
 }

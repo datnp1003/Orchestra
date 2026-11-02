@@ -1,69 +1,71 @@
 # Orchestra Role Policy — Spec v0.1
 
-Mảnh nối giữa Pipeline DSL (node khai báo `role`) và Worker Protocol (manifest khai báo khả năng).
-Role Policy trả lời: **node này cần role X → worker nào (CLI + model), với quyền gì, trần chi phí nào,
-và ai là phương án dự phòng.** Resolution là code deterministic — LLM chỉ gợi ý, không quyết cuối.
+> English only (canonical).
+
+The link between the Pipeline DSL (nodes declare a `role`) and the Worker Protocol (manifests declare capabilities).
+Role Policy answers: **this node needs role X → which worker (CLI + model), with what permissions, what cost ceiling,
+and who is the fallback.** Resolution is deterministic code — the LLM only suggests, it never makes the final call.
 
 ---
 
-## 1. Nguyên tắc (bất biến)
+## 1. Principles (invariants)
 
-1. **Router quyết bằng code, Orchestrator gợi ý bằng ngữ nghĩa.** Orchestrator gắn tags cho task
-   (`ui`, `payment`, `refactor`...); router dùng tags để boost điểm — nhưng lựa chọn cuối deterministic
-   và được ghi log cùng lý do. Re-run cùng điều kiện → cùng worker.
-2. **Policy là file trong git, không phải state ẩn.** Mỗi thay đổi policy là một diff review được.
-   Retrospective đề xuất bằng PR, người dùng merge = chốt. Không tự ghi đè, không auto-apply.
-3. **Mọi role phải có trần chi phí** (luật V9 của DSL spec) và **profile quyền** — không có mặc định ngầm.
-4. **Cross-review là ràng buộc của hệ thống, không phải gu của model.** Router loại worker đã dùng
-   cho node bị `distinct_worker_from` trỏ tới — trước cả khi chấm điểm.
-5. **Suy giảm có kiểm soát (graceful degradation).** Không bao giờ âm thầm bỏ ràng buộc: fleet thiếu
-   phương án → escalate `ask_user` kèm cảnh báo rõ (vd mất cross-review).
+1. **The router decides in code, the Orchestrator suggests semantically.** The Orchestrator tags the task
+   (`ui`, `payment`, `refactor`...); the router uses the tags to boost scores — but the final choice is deterministic
+   and is logged together with its reason. Re-run under the same conditions → same worker.
+2. **Policy is a file in git, not hidden state.** Every policy change is a reviewable diff.
+   Retrospectives propose via PR; the user merging = sign-off. No silent overwrites, no auto-apply.
+3. **Every role must have a cost ceiling** (DSL spec rule V9) and a **permission profile** — no implicit defaults.
+4. **Cross-review is a system constraint, not a model's taste.** The router excludes the worker already used
+   for the node referenced by `distinct_worker_from` — before any scoring.
+5. **Controlled degradation (graceful degradation).** Never silently drop a constraint: if the fleet lacks
+   an option → escalate `ask_user` with a clear warning (e.g. losing cross-review).
 
-## 2. Vị trí file & ưu tiên
+## 2. File location & precedence
 
 ```
-~/.zcode/policy.yml          # global — gu cá nhân, matrix mặc định
-.orchestra/policy.yml        # project — override theo repo (đi theo git, share team)
+~/.zcode/policy.yml          # global — personal taste, default matrix
+.orchestra/policy.yml        # project — per-repo override (lives in git, shared with the team)
 ```
 
-Merge theo key: project đè global từng mục (role → bindings thay nguyên khối, không gộp sâu).
+Merge by key: project overrides global item by item (role → bindings replaced as a whole block, no deep merge).
 
-## 3. Schema đầy đủ — `policy.yml`
+## 3. Full schema — `policy.yml`
 
 ```yaml
 version: 1
 
-roles:                                 # định nghĩa role + mặc định
+roles:                                 # role definitions + defaults
   planner:
-    description: "Đọc code, sinh plan + acceptance criteria"
+    description: "Read code, produce plan + acceptance criteria"
     permission_profile: readonly
     budget: { usd: 1.00, minutes: 20 }
   coder:
-    description: "Implement trong worktree"
+    description: "Implement in the worktree"
     permission_profile: worktree-write
     budget: { usd: 2.00, minutes: 30 }
   verifier:
-    description: "Chạy test suite độc lập"
+    description: "Run the test suite independently"
     permission_profile: verify-only
     budget: { usd: 0.50, minutes: 15 }
   reviewer:
-    description: "Review diff cross-CLI"
+    description: "Cross-CLI diff review"
     permission_profile: readonly
     budget: { usd: 1.00, minutes: 20 }
   researcher:
-    description: "Tìm hiểu yêu cầu, thư viện, so sánh phương án"
+    description: "Investigate requirements, libraries, compare options"
     permission_profile: readonly
     budget: { usd: 0.80, minutes: 25 }
-  fixer:                               # node fix động (spawn_fix) kế thừa role của node gốc
-    description: "Sửa theo feedback verify/review"
+  fixer:                               # dynamic fix node (spawn_fix) inherits the original node's role
+    description: "Fix based on verify/review feedback"
     permission_profile: worktree-write
     budget: { usd: 1.00, minutes: 20 }
   resolver:                            # merge conflict resolver (compose layer)
-    description: "Giải conflict khi merge nhiều task"
+    description: "Resolve conflicts when merging multiple tasks"
     permission_profile: worktree-write
     budget: { usd: 1.50, minutes: 30 }
 
-# Matrix: role → danh sách ứng viên theo thứ tự ưu tiên (score sắp lúc dispatch)
+# Matrix: role → candidate list in priority order (scored at dispatch time)
 bindings:
   coder:
     - worker: { cli: codex,    model: gpt-5.3-codex }
@@ -71,7 +73,7 @@ bindings:
     - worker: { cli: claude,   model: opus-4.6 }
       boost_when: { tags: [ui, architecture, payment] }
     - worker: { cli: opencode, model: kimi-k2.5 }
-      when: { budget_tier: low }          # chỉ xét khi user chọn chế độ tiết kiệm
+      when: { budget_tier: low }          # only considered when the user picks economy mode
   verifier:
     - worker: { cli: claude, model: sonnet-4.6 }
     - worker: { cli: opencode, model: deepseek-v4 }
@@ -80,12 +82,12 @@ bindings:
     - worker: { cli: gemini, model: gemini-3-pro }
   planner:
     - worker: { cli: claude, model: opus-4.6 }
-    - worker: { cli: gemini, model: gemini-3-pro }      # 1M context cho repo lớn
+    - worker: { cli: gemini, model: gemini-3-pro }      # 1M context for large repos
   researcher:
     - worker: { cli: gemini, model: gemini-3-pro }      # big-context
     - worker: { cli: opencode, model: deepseek-v4 }
 
-# Profile quyền — được Worker Protocol §9 Lớp 1 dịch thành flag lúc spawn
+# Permission profiles — translated into flags at spawn by Worker Protocol §9 Layer 1
 permission_profiles:
   readonly:
     sandbox: read_only
@@ -96,115 +98,115 @@ permission_profiles:
     sandbox: worktree_only
     allow: [Read, Grep, Glob, Write, Edit, "Bash(test,build)"]
     deny:  ["git push", "package-install", "curl"]
-    net: false                          # node khai báo net: true mới mở — profile không mở hộ
+    net: false                          # only a node declaring net: true opens it — the profile never does
   verify-only:
     sandbox: worktree_only
     allow: [Read, "Bash(test)"]
     deny:  [Write, Edit]
     net: false
 
-routing:                                # trọng số chấm điểm ứng viên
+routing:                                # candidate scoring weights
   weights: { track_record: 0.4, health: 0.2, cost: 0.2, preference: 0.1, speed: 0.1 }
-  min_sample: 10                        # dưới N lần chạy, track record chưa đáng tin
-  decay: 30d                            # track record giảm theo thời gian
-  budget_mode: balanced                 # balanced | performance | low  (user chỉnh 1 chạm)
+  min_sample: 10                        # below N runs, the track record is not yet trustworthy
+  decay: 30d                            # track record decays over time
+  budget_mode: balanced                 # balanced | performance | low  (user toggles in one click)
 
 fleet_constraints:
-  cross_review: required                # bắt buộc ≥2 CLI khác họ trong fleet cho verifier/reviewer
-  max_parallel_tasks: 3                 # trần song song toàn cục (quota/budget)
-  reserved_for_review: []              # có thể reserve 1 CLI chỉ làm review
+  cross_review: required                # requires ≥2 CLIs of different families in the fleet for verifier/reviewer
+  max_parallel_tasks: 3                 # global parallelism ceiling (quota/budget)
+  reserved_for_review: []              # may reserve 1 CLI for review only
 ```
 
-## 4. Thuật toán resolve (runner, deterministic)
+## 4. Resolve algorithm (runner, deterministic)
 
 ```
 resolve(role, node, task):
   1. candidates = bindings[role]
-       lọc: CLI installed ∧ auth_ok ∧ conformance ≠ fail
-            model khả dụng (manifest.custom_provider ∨ model native)
-            model_slots hỗ trợ slot node yêu cầu (nếu node dùng slot)
-            permission profile thỏa được bởi `guarantee` của CLI
-            KHÔNG trùng worker đã gán cho node trong distinct_worker_from (cùng task)
-  2. score(c) = w·track_record(c, role, task_type)      # tầng 7 fleet memory
+       filter: CLI installed ∧ auth_ok ∧ conformance ≠ fail
+            model available (manifest.custom_provider ∨ native model)
+            model_slots support the slot the node requires (if the node uses a slot)
+            permission profile satisfiable by the CLI's `guarantee`
+            NOT the same worker already assigned to the node in distinct_worker_from (same task)
+  2. score(c) = w·track_record(c, role, task_type)      # layer 7 fleet memory
              + w·health(c)                              # conformance + smoke badge
-             + w·(1 − cost_norm(c))                     # theo budget_mode
-             + w·preference(c)                          # boost_when tags khớp, user_overrides
+             + w·(1 − cost_norm(c))                     # per budget_mode
+             + w·preference(c)                          # boost_when tags match, user_overrides
              + w·speed(c)
-  3. pick = argmax; ghi log: {pick, candidates, scores, tags, reason}
-  4. rỗng → escalate: nới ràng buộc nào KHÔNG được — hỏi user:
-       "Không có CLI thứ hai cho cross-review node 'verify'.
-        Tiếp tục với cùng CLI (mất kiểm chứng chéo)? / Dừng task."
+  3. pick = argmax; log: {pick, candidates, scores, tags, reason}
+  4. empty → escalate: never relax a constraint on its own — ask the user:
+       "No second CLI for cross-review of node 'verify'.
+        Continue with the same CLI (lose cross-checking)? / Stop the task."
 ```
 
-Điểm lưu ý thiết kế:
+Design notes:
 
-- **Override từ DSL node**: `worker.hint.prefer/avoid` cộng/trừ điểm; `worker.hint.pin` ép cứng
-  (chỉ dùng debug — router vẫn log "pinned" để audit).
-- **budget_mode**: `low` tự động nghiêng về worker rẻ + cho phép ứng viên có `when: budget_tier: low`;
-  `performance` bỏ qua cost weight. 1 chọn dropdown trong UI, không phải sửa YAML.
-- **Log quyết định là artifact**: mỗi dispatch ghi `{pick, scores, reason}` vào task record —
-  retrospective đọc được *vì sao* worker X được chọn hôm đó.
+- **Overrides from the DSL node**: `worker.hint.prefer/avoid` add/subtract score; `worker.hint.pin` forces
+  (debug only — the router still logs "pinned" for audit).
+- **budget_mode**: `low` automatically leans toward cheap workers + allows candidates with `when: budget_tier: low`;
+  `performance` ignores the cost weight. One dropdown choice in the UI, no YAML editing.
+- **The decision log is an artifact**: every dispatch writes `{pick, scores, reason}` into the task record —
+  retrospectives can read *why* worker X was chosen that day.
 
-## 5. Track record (fleet memory — tầng 7)
+## 5. Track record (fleet memory — layer 7)
 
-Runner tổng hợp từ episodic records, **không qua LLM** — đây là bảng số liệu, không phải ký ức:
+The runner aggregates from episodic records, **without an LLM** — this is a table of numbers, not a memory:
 
 ```jsonc
 {
-  "worker": "codex", "role": "coder", "task_type": "feature",   // key tra cứu
+  "worker": "codex", "role": "coder", "task_type": "feature",   // lookup key
   "window": "30d",
   "dispatched": 14, "gate_passed": 11, "first_try_pass": 9,
   "retries_avg": 0.4, "overreach_blocks": 1,
   "avg_cost_usd": 1.7, "avg_minutes": 22,
-  "user_override_to": 2,      // user đổi sang worker khác sau khi thấy kết quả — tín hiệu âm
-  "user_override_from": 0,    // user đổi sang worker này — tín hiệu dương
-  "ema_score": 0.78           # decay 30d, cập nhật sau mỗi task
+  "user_override_to": 2,      // user switched to another worker after seeing the result — negative signal
+  "user_override_from": 0,    // user switched to this worker — positive signal
+  "ema_score": 0.78           # 30d decay, updated after every task
 }
 ```
 
-Nguồn tín hiệu (tự nhiên phát sinh trong quy trình, không ai phải đánh giá tay):
+Signal sources (arise naturally from the workflow, nobody has to rate by hand):
 
-| Tín hiệu | Trọng số cảm nhận |
+| Signal | Perceived weight |
 |---|---|
-| `first_try_pass` (qua gate không cần retry/fix) | dương mạnh nhất |
-| `user_override_from` → worker này | dương |
-| `user_override_to` (bỏ worker này) | âm |
-| `overreach_blocks` | âm — worker hay vượt quyền |
-| cost/minutes trên trung bình role | âm nhẹ |
+| `first_try_pass` (passed the gate without retry/fix) | strongest positive |
+| `user_override_from` → this worker | positive |
+| `user_override_to` (dropped this worker) | negative |
+| `overreach_blocks` | negative — worker tends to exceed its permissions |
+| cost/minutes above the role average | slightly negative |
 
-`min_sample: 10`: dưới 10 lần chạy, `ema_score` không vào routing — dùng `strengths` của
-manifest + `boost_when` làm ưu tiên ban đầu. Fleet mới = gu cấu hình; fleet cũ = số liệu tự chứng.
+`min_sample: 10`: below 10 runs, `ema_score` does not enter routing — the manifest's `strengths`
++ `boost_when` serve as the initial priority. New fleet = configured taste; mature fleet = self-proven numbers.
 
-## 6. Learning loop — từ track record đến policy
+## 6. Learning loop — from track record to policy
 
 ```
-episodic + feedback events ─► runner tổng hợp track record (hàng đêm / sau N task)
+episodic + feedback events ─► runner aggregates track record (nightly / after N tasks)
         │
-        └─► retrospective job (LLM) đọc track record + log routing
-              → sinh PROPOSAL (PR gắn [orchestra-proposal]):
-                  - đề xuất đổi thứ tự bindings ("codex fail 40% task UI, n=12
-                    → đề xuất hạ claude lên #1 cho coder khi tag=ui")
-                  - đề xuất thêm/sửa permission profile, budget
-              → user review diff → merge = chốt | đóng = bỏ qua (ghi nhận để không đề xuất lại)
+        └─► retrospective job (LLM) reads track record + routing log
+              → produces a PROPOSAL (PR tagged [orchestra-proposal]):
+                  - suggest reordering bindings ("codex fails 40% of UI tasks, n=12
+                    → suggest promoting claude to #1 for coder when tag=ui")
+                  - suggest adding/changing permission profiles, budgets
+              → user reviews the diff → merge = sign-off | close = skip (recorded so it is not proposed again)
 ```
 
-Điều kiện đề xuất: `n ≥ min_sample` và chênh lệch có ý nghĩa (vd ≥ 20 điểm % first_try_pass).
-Mỗi đề xuất phải kèm bằng chứng số liệu — không được đề xuất theo "cảm nhận".
+Proposal conditions: `n ≥ min_sample` and a meaningful difference (e.g. ≥ 20 percentage points of first_try_pass).
+Every proposal must come with numeric evidence — no proposals based on "feel".
 
-## 7. Validation rules (luật cứng khi load policy)
+## 7. Validation rules (hard rules when loading the policy)
 
-| # | Luật |
+| # | Rule |
 |---|---|
-| P1 | Mọi role được DSL template tham chiếu phải có định nghĩa trong `roles` (cảnh báo nếu thiếu `bindings` — dispatch sẽ escalate) |
-| P2 | Mọi binding phải trỏ tới manifest tồn tại trong registry |
-| P3 | `fleet_constraints.cross_review: required` → fleet phải có ≥2 CLI khác *họ* (không phải 2 version của 1 CLI) khả dụng cho verifier/reviewer, ngược lại cảnh báo đỏ trên matrix |
-| P4 | `permission_profiles` cấm `sandbox: danger_full_access` và cấm `net: true` mặc định cho role ghi (luật của Worker Protocol) |
-| P5 | Mọi role bắt buộc có `budget` (V9) |
-| P6 | Model trong binding phải thỏa `custom_provider` của manifest và `model_slots` của slot yêu cầu |
-| P7 | `weights` trong `routing` phải tổng = 1.0 |
-| P8 | Thay đổi policy không bump `version` → warning (như DSL V10) |
+| P1 | Every role referenced by a DSL template must be defined in `roles` (warn if `bindings` is missing — dispatch will escalate) |
+| P2 | Every binding must point to a manifest that exists in the registry |
+| P3 | `fleet_constraints.cross_review: required` → the fleet must have ≥2 CLIs of different *families* (not 2 versions of 1 CLI) available for verifier/reviewer, otherwise a red warning on the matrix |
+| P4 | `permission_profiles` forbid `sandbox: danger_full_access` and forbid default `net: true` for writing roles (Worker Protocol rule) |
+| P5 | Every role must have a `budget` (V9) |
+| P6 | The model in a binding must satisfy the manifest's `custom_provider` and the required slot's `model_slots` |
+| P7 | `weights` in `routing` must sum to 1.0 |
+| P8 | Policy change without a `version` bump → warning (like DSL V10) |
 
-## 8. UI trên matrix (khái niệm)
+## 8. Matrix UI (concept)
 
 ```
               codex/gpt-5.3-c  claude/opus-4.6  opencode/kimi  gemini-3-pro
@@ -213,14 +215,14 @@ verifier      —                ● #1 (0.91)      ○ #2 (0.74)    —
 reviewer      —                ● #1             —              ○ #2
 planner       —                ● #1             —              ○ #2 (1M ctx)
 researcher    —                —                ○ #2           ● #1
-              ● được chọn  ○ dự phòng  badge: ✓ conformance  ⚠ untested  ✗ auth/quota
+              ● selected  ○ fallback  badge: ✓ conformance  ⚠ untested  ✗ auth/quota
 ```
 
-- Cell là **duy nhất nguồn chân truth**: click → sửa `policy.yml` → diff → save. Không có state ẩn trong UI.
-- Badge lấy từ registry health; cell mờ khi CLI fail conformance/smoke.
-- Toggle `budget_mode` + trần `$` mỗi role đặt ngay trên matrix.
+- The cell is the **single source of truth**: click → edit `policy.yml` → diff → save. No hidden state in the UI.
+- Badges come from registry health; a cell is dimmed when the CLI fails conformance/smoke.
+- The `budget_mode` toggle + per-role `$` ceiling sit right on the matrix.
 
-## 9. JSON Schema (khung rút gọn)
+## 9. JSON Schema (condensed skeleton)
 
 ```yaml
 type: object
@@ -234,7 +236,7 @@ properties:
       required: [permission_profile, budget]
       properties:
         description: { type: string }
-        permission_profile: { type: string }      # phải tồn tại trong permission_profiles
+        permission_profile: { type: string }      # must exist in permission_profiles
         budget: { type: object, required: [usd, minutes] }
   bindings:
     type: object
@@ -258,9 +260,9 @@ properties:
       budget_mode: { enum: [balanced, performance, low] }
 ```
 
-## 10. Mở sau v0.1
+## 10. Open after v0.1
 
-- A/B routing: chạy song song 2 worker cùng node, lấy kết quả tốt qua gate (tốn 2× — chỉ cho role quan trọng)
-- Policy theo thư mục/module (`coder` khác nhau cho `src/ui/**` và `src/core/**`)
-- Import rating từ marketplace role-pack (kết hợp với track record cục bộ)
-- Skill-sync per role: role nào gắn skill pack nào (điểm nối với ý #3 của ý tưởng gốc)
+- A/B routing: run 2 workers in parallel on the same node, keep the better result via the gate (costs 2× — only for critical roles)
+- Per-directory/module policy (different `coder` for `src/ui/**` and `src/core/**`)
+- Import ratings from marketplace role-packs (combined with the local track record)
+- Per-role skill-sync: which role gets which skill pack (link to idea #3 of the original concept)

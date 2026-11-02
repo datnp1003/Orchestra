@@ -10,6 +10,9 @@ import path from 'node:path';
 import { FALLBACK_REPO, fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, reviewMerge, promoteWorker, dispatchTracked, conformanceBadge, orchestratorTurn, executeAction, parseOrchestraActions } from './logic.js';
 import { syncSkills } from '../../prototype/src/skillsync.js';
 import type { Manifest } from '../../prototype/src/types.js';
+import { t, setLocale, detectLocale } from '../../prototype/src/i18n/index.js';
+
+const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function cfg<T>(key: string, fallback: T): T {
   return vscode.workspace.getConfiguration('orchestra').get<T>(key, fallback);
@@ -33,7 +36,7 @@ class FleetItem extends vscode.TreeItem {
     // P6.3: chưa cài → click item = cài qua npm
     if (!s.installed) {
       this.command = { command: 'orchestra.installWorker', title: 'Install worker', arguments: [s.id] };
-      this.tooltip += '\n\nChưa cài — click để cài qua npm.';
+      this.tooltip += `\n\n${t('ext.fleet.notInstalledTip')}`;
     }
   }
 }
@@ -161,8 +164,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
   #input { flex: 1; background: #2d2d2d; color: #d4d4d4; border: 1px solid #444; border-radius: 4px; padding: 6px; font-size: 12px; resize: none; height: 44px; }
   button { background: #0e639c; color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
 </style></head>
-<body><div id="msgs"><div class="m orch">Orchestra Orchestrator sẵn sàng. Nói tự nhiên: "thêm cổng ZaloPay vào src/payment", "trạng thái fleet?", "chạy pipeline hotfix cho..." — tôi sẽ phát hành action và worker sẽ làm.</div></div>
-<div id="bar"><textarea id="input" placeholder="Nhắn cho orchestrator… (Enter để gửi)"></textarea><button id="send">Gửi</button></div>
+<body><div id="msgs"><div class="m orch">${t('ext.chat.welcome')}</div></div>
+<div id="bar"><textarea id="input" placeholder="${t('ext.chat.placeholder')}"></textarea><button id="send">${t('ext.chat.send')}</button></div>
 <script>
   const vs = acquireVsCodeApi();
   const msgs = document.getElementById('msgs');
@@ -191,14 +194,14 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
         if (actions.length) {
           const results: string[] = [];
           for (const a of actions) {
-            void view.webview.postMessage({ kind: 'typing', text: `thực thi ${a.action}…` });
+            void view.webview.postMessage({ kind: 'typing', text: t('ext.chat.running', { action: a.action }) });
             try {
               results.push(await executeAction(repo, a));
             } catch (err) {
-              results.push(`${a.action} lỗi: ${err instanceof Error ? err.message : String(err)}`);
+              results.push(`${a.action} error: ${errMsg(err)}`);
             }
           }
-          const summary = `[orchestra-runner] Kết quả các action:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
+          const summary = `[orchestra-runner] Action results:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
           void view.webview.postMessage({ kind: 'result', text: summary });
           // feedback kết quả vào session — orchestrator biết chuyện gì vừa xảy ra
           const follow = await orchestratorTurn(repo, summary, this.sessionId, cfg<string>('orchestratorWorker', 'claude'));
@@ -206,7 +209,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
           if (follow.text.trim()) void view.webview.postMessage({ kind: 'orch', text: follow.text });
         }
       } catch (err) {
-        void view.webview.postMessage({ kind: 'result', text: `lỗi orchestrator: ${err instanceof Error ? err.message : String(err)}` });
+        void view.webview.postMessage({ kind: 'result', text: t('ext.chat.error', { err: errMsg(err) }) });
       } finally {
         this.busy = false;
         vscode.commands.executeCommand('orchestra.refreshViews');
@@ -217,6 +220,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
 
 // ---------- activation ----------
 export function activate(context: vscode.ExtensionContext): void {
+  setLocale(detectLocale(vscode.env.language));
   const fleetProvider = new FleetProvider();
   const tasksProvider = new TasksProvider(repoRoot);
 
@@ -237,15 +241,15 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('orchestra.dispatch', async () => {
       const repo = repoRoot();
-      const goal = await vscode.window.showInputBox({ prompt: 'Mục tiêu task?', placeHolder: 'Thêm cổng thanh toán X theo pattern Y' });
+      const goal = await vscode.window.showInputBox({ prompt: t('ext.dispatch.goalPrompt'), placeHolder: t('ext.dispatch.goalPlaceholder') });
       if (!goal) return;
-      const scope = await vscode.window.showInputBox({ prompt: 'Phạm vi file (glob, cách nhau bởi dấu phẩy)?', value: 'src/payment/**' });
+      const scope = await vscode.window.showInputBox({ prompt: t('ext.dispatch.scopePrompt'), value: 'src/payment/**' });
       if (scope === undefined) return;
       const workerPick = await vscode.window.showQuickPick(['auto (Role Policy)', ...MANIFESTS.map((m) => m.id)], { title: 'Worker' });
       if (!workerPick) return;
       const model = await vscode.window.showInputBox({
-        prompt: 'Model riêng? (để trống = theo binding trong policy.yml)',
-        placeHolder: 'vd: worker-codex, gpt-5.3-codex, opus-4.6…',
+        prompt: t('ext.dispatch.modelPrompt'),
+        placeHolder: t('ext.dispatch.modelPlaceholder'),
       });
       const panel = transcriptPanel(goal.slice(0, 40));
       const onEvent = (e: { t: string; [k: string]: unknown }) => void panel.webview.postMessage({ kind: 'event', t: e.t, payload: e });
@@ -267,7 +271,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const overrideMsg = r.override.startsWith('override') ? ` (${r.override})` : '';
         vscode.window.showInformationMessage(`Orchestra dispatch ${r.result.ok ? 'OK' : 'FAILED'} — ${r.result.taskId}${overrideMsg}`);
       } catch (err) {
-        vscode.window.showErrorMessage(`Orchestra dispatch lỗi: ${err instanceof Error ? err.message : String(err)}`);
+        vscode.window.showErrorMessage(t('ext.dispatch.error', { err: errMsg(err) }));
       }
       vscode.commands.executeCommand('orchestra.refreshViews');
     }),
@@ -277,11 +281,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('orchestra.runPipeline', async () => {
       const repo = repoRoot();
-      const goal = await vscode.window.showInputBox({ prompt: 'Mục tiêu pipeline?' });
+      const goal = await vscode.window.showInputBox({ prompt: t('ext.pipeline.goalPrompt') });
       if (!goal) return;
       const tpl = await vscode.window.showQuickPick(['feature-dev', 'hotfix'], { title: 'Template' });
       if (!tpl) return;
-      const scope = await vscode.window.showInputBox({ prompt: 'Scope glob?', value: 'src/payment/**' });
+      const scope = await vscode.window.showInputBox({ prompt: t('ext.pipeline.scopePrompt'), value: 'src/payment/**' });
       if (scope === undefined) return;
       const panel = transcriptPanel(`pipeline ${tpl}`);
       try {
@@ -295,10 +299,10 @@ export function activate(context: vscode.ExtensionContext): void {
           autoYes: cfg<boolean>('autoApprovePlan', false),
           onLog: (line) => void panel.webview.postMessage({ kind: 'log', line }),
         });
-        await panel.webview.postMessage({ kind: 'log', line: `KẾT QUẢ: ${r.ok ? 'OK' : 'FAILED'} merged=${r.merged}` });
+        await panel.webview.postMessage({ kind: 'log', line: t('ext.pipeline.result', { status: r.ok ? 'OK' : 'FAILED', merged: String(r.merged) }) });
         vscode.window.showInformationMessage(`Orchestra pipeline ${r.runId}: ${r.ok ? 'OK' : 'FAILED'}`);
       } catch (err) {
-        vscode.window.showErrorMessage(`Orchestra pipeline lỗi: ${err instanceof Error ? err.message : String(err)}`);
+        vscode.window.showErrorMessage(t('ext.pipeline.error', { err: errMsg(err) }));
       }
       vscode.commands.executeCommand('orchestra.refreshViews');
     }),
@@ -333,7 +337,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const repo = repoRoot();
       const candidates = mergeableTasks(repo);
       if (!candidates.length) {
-        vscode.window.showInformationMessage('Orchestra: không có task nào chờ merge.');
+        vscode.window.showInformationMessage(t('ext.review.none'));
         return;
       }
       const pick = await vscode.window.showQuickPick(
@@ -343,7 +347,7 @@ export function activate(context: vscode.ExtensionContext): void {
           detail: t.branch,
           task: t,
         })),
-        { title: 'Task chờ merge (branch chưa vào main)' },
+        { title: t('ext.review.pickTitle') },
       );
       if (!pick) return;
 
@@ -352,10 +356,10 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const action = await vscode.window.showQuickPick(
         [
-          { label: 'Merge vào main', value: 'merge' as const },
-          { label: 'Reject (ghi feedback verdict_rejected)', value: 'reject' as const },
+          { label: t('ext.review.merge'), value: 'merge' as const },
+          { label: t('ext.review.reject'), value: 'reject' as const },
         ],
-        { title: `Xem diff của ${pick.task.id} rồi quyết định` },
+        { title: t('ext.review.decideTitle', { id: pick.task.id }) },
       );
       if (!action) return;
       const r = reviewMerge(repo, pick.task.id, action.value);
@@ -376,12 +380,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const m = (id ? MANIFESTS.find((x) => x.id === id) : undefined) ?? (await (async () => {
         const notInstalled = MANIFESTS.filter((x) => !checkStatus(x).installed);
         if (!notInstalled.length) {
-          vscode.window.showInformationMessage('Orchestra: mọi worker đều đã cài.');
+          vscode.window.showInformationMessage(t('ext.install.allInstalled'));
           return undefined;
         }
         const pick = await vscode.window.showQuickPick(
           notInstalled.map((x) => ({ label: x.display, detail: `npm i -g ${x.install?.npm ?? '?'}`, id: x.id })),
-          { title: 'Cài worker qua npm' },
+          { title: t('ext.install.pickTitle') },
         );
         return pick ? MANIFESTS.find((x) => x.id === pick.id) : undefined;
       })());
@@ -389,12 +393,12 @@ export function activate(context: vscode.ExtensionContext): void {
       installChannel.show(true);
       installChannel.appendLine(`[install] ${m.id}: npm i -g ${m.install?.npm}`);
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `Orchestra: đang cài ${m.display}…`, cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: t('ext.install.progress', { name: m.display }), cancellable: false },
         async () => {
           const r = await installWorker(m, (line) => installChannel.appendLine(line));
           if (r.ok) {
             installChannel.appendLine(`[done] ${r.detail}`);
-            vscode.window.showInformationMessage(`Orchestra: ${r.detail}`, 'Mở terminal để login').then((choice) => {
+            vscode.window.showInformationMessage(`Orchestra: ${r.detail}`, t('ext.install.openTerminal')).then((choice) => {
               if (choice) vscode.commands.executeCommand('workbench.action.terminal.new');
             });
           } else {
@@ -420,7 +424,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('orchestra.authWorker', async (id?: string) => {
       const m = (id ? MANIFESTS.find((x) => x.id === id) : undefined) ?? (await (async () => {
-        const pick = await vscode.window.showQuickPick(MANIFESTS.map((x) => ({ label: x.display, id: x.id })), { title: 'Chọn worker để cấu hình auth' });
+        const pick = await vscode.window.showQuickPick(MANIFESTS.map((x) => ({ label: x.display, id: x.id })), { title: t('ext.auth.pickTitle') });
         return pick ? MANIFESTS.find((x) => x.id === pick.id) : undefined;
       })());
       if (!m) return;
@@ -428,7 +432,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const term = vscode.window.createTerminal({ name: `Orchestra — login ${m.id}` });
       term.show();
       term.sendText(m.id === 'codex' ? 'codex login' : m.bin!, true); // claude: interactive TUI → /login trong đó
-      vscode.window.showInformationMessage(`OAuth ${m.oauthProvider ?? '(không)'}: hoàn tất login rồi bấm Refresh Fleet.`);
+      vscode.window.showInformationMessage(t('ext.auth.oauthDone', { provider: m.oauthProvider ?? t('ext.common.none') }));
     }),
   );
 

@@ -1,6 +1,7 @@
 // Git worktree isolation — Worker Protocol §9 Lớp 2 + DSL spec §2 (`.orchestra/wt`)
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { t } from './i18n/index.js';
 
 export interface Worktree {
   path: string;
@@ -26,7 +27,7 @@ export function createWorktree(repo: string, taskId: string): Worktree {
   const branch = `orchestra/task-${taskId}`;
   let r = git(repo, ['worktree', 'add', '-b', branch, wtPath]);
   if (!r.ok) r = git(repo, ['worktree', 'add', wtPath]); // branch đã tồn tại → dùng detached
-  if (!r.ok) throw new Error(`git worktree add thất bại: ${r.out}`);
+  if (!r.ok) throw new Error(t('core.worktree.addFailed', { out: r.out }));
   return { path: wtPath, branch };
 }
 

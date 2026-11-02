@@ -1,115 +1,119 @@
-# Orchestra Desktop — Kế hoạch (v0.1)
+# Orchestra Desktop — Plan (v0.1)
 
-Ứng dụng desktop độc lập: toàn bộ sức mạnh của Orchestra **không cần mở VS Code**.
-Nguyên tắc bất biến: **core đứng yên** — Desktop chỉ là shell mới bọc runner/orchestrator
-đang chạy tốt, đúng như extension đã làm.
+> English only (canonical).
+
+A standalone desktop application: the full power of Orchestra **without opening VS Code**.
+Invariant principle: **the core stays put** — Desktop is just a new shell wrapping the runner/orchestrator
+that already works well, exactly as the extension does.
 
 ---
 
-## 1. Vì sao cần Desktop (khi đã có extension)
+## 1. Why Desktop (when the extension already exists)
 
-| Nhu cầu | Extension | Desktop |
+| Need | Extension | Desktop |
 |---|---|---|
-| Dùng trong VS Code | ✓ | — |
-| Dùng độc lập (vim/neovim/không IDE) | ✗ | ✓ |
-| **Multi-repo dashboard** (nhiều project cùng lúc) | ✗ (1 workspace) | ✓ |
-| **Chạy nền + notification** (pipeline xong, gate chờ duyệt khi đang việc khác) | ✗ | ✓ tray + toast |
-| Cài CLI worker không cần terminal | ⚠ (command + terminal) | ✓ wizard đầy đủ (PATH, login) |
-| Terminal nhúng xem worker trực tiếp | ✗ | ✓ (node-pty) |
-| Phân phối cho người không dùng VS Code | ✗ | ✓ installer .exe |
+| Use inside VS Code | ✓ | — |
+| Use standalone (vim/neovim/no IDE) | ✗ | ✓ |
+| **Multi-repo dashboard** (several projects at once) | ✗ (1 workspace) | ✓ |
+| **Background running + notifications** (pipeline done, gate awaiting approval while you do something else) | ✗ | ✓ tray + toast |
+| Install worker CLIs without a terminal | ⚠ (command + terminal) | ✓ full wizard (PATH, login) |
+| Embedded terminal to watch workers directly | ✗ | ✓ (node-pty) |
+| Distribution to people who don't use VS Code | ✗ | ✓ .exe installer |
 
-Định vị: **extension = light client, Desktop = full client** — cùng core, cùng account/vault.
+Positioning: **extension = light client, Desktop = full client** — same core, same account/vault.
 
-## 2. Shell: Electron trước, Tauri cân nhắc sau
+## 2. Shell: Electron first, Tauri considered later
 
-| | Electron (chọn) | Tauri (để sau) |
+| | Electron (chosen) | Tauri (later) |
 |---|---|---|
-| Tái dùng core Node/TS | **100%** — main process là Node, import `prototype/src` như extension đang làm | Phải sidecar (bun compile) hoặc viết lại Rust |
-| Bundle size | ~90MB / RAM nặng hơn | ~10MB |
-| node-pty, sqlite, spawn CLI | Native, đã chạy | Qua sidecar — phức tạp 2 runtime |
-| Kinh nghiệm hệ sinh thái | electron-builder, auto-update, tray — chuẩn | Tốt nhưng mới hơn |
+| Reuse of the Node/TS core | **100%** — main process is Node, imports `prototype/src` as the extension does | Needs a sidecar (bun compile) or a Rust rewrite |
+| Bundle size | ~90MB / heavier RAM | ~10MB |
+| node-pty, sqlite, spawning CLIs | Native, already works | Via sidecar — complexity of 2 runtimes |
+| Ecosystem maturity | electron-builder, auto-update, tray — standard | Good but newer |
 
-Quyết định: **Electron cho v1** — tốc độ ra bản > dung lượng. Tauri là bài toán tối ưu của
-P-D4, không phải bây giờ. (Ứng với bối cảnh dự án: 3 tuần ra Desktop dùng được đánh đổi
-80MB là lời.)
+Decision: **Electron for v1** — time to ship > size. Tauri is an optimization problem for
+P-D4, not now. (Given the project context: 3 weeks to a usable Desktop at the cost of
+80MB is a win.)
 
-## 3. Kiến trúc
+## 3. Architecture
 
 ```
 ┌────────────────────────── Orchestra Desktop (Electron) ─────────────────────────┐
 │ Main process (Node)                                                             │
-│   ├── import core trực tiếp: runner · dispatch · orchestrator · policy · memory │
-│   │   vault · conformance · models · skillsync   (giống extension, 0 rewrite)   │
-│   ├── RunnerPool: N repo đồng thời (mỗi repo 1 workspace state)                 │
-│   ├── Tray + Notification (gate chờ duyệt, pipeline done/failed)                │
-│   └── IPC (contextBridge, contextIsolation BẬT)                                 │
+│   ├── direct core import: runner · dispatch · orchestrator · policy · memory    │
+│   │   vault · conformance · models · skillsync   (like the extension, 0 rewrite)│
+│   ├── RunnerPool: N concurrent repos (1 workspace state per repo)               │
+│   ├── Tray + Notification (gate awaiting approval, pipeline done/failed)        │
+│   └── IPC (contextBridge, contextIsolation ON)                                  │
 │ Renderer (UI)                                                                   │
-│   ├── Dashboard: Fleet + Tasks + Runs (từ 3 webview hiện có → 1 trang)          │
-│   ├── Chat Orchestrator (webview hiện có → page)                                │
-│   ├── Live Transcript + Terminal nhúng (node-pty)                               │
-│   ├── Policy Matrix (click-promote — giữ nguyên)                                │
-│   ├── Settings UI (thay settings.json — cùng schema orchestra.*)                │
+│   ├── Dashboard: Fleet + Tasks + Runs (3 existing webviews → 1 page)            │
+│   ├── Chat Orchestrator (existing webview → page)                               │
+│   ├── Live Transcript + embedded Terminal (node-pty)                            │
+│   ├── Policy Matrix (click-promote — unchanged)                                 │
+│   ├── Settings UI (replaces settings.json — same orchestra.* schema)            │
 │   └── Install Wizard (worker npm + login guided + vault)                        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Tái sử dụng ước tính: **core 100% · UI ~80%** (HTML/CSS webviews chuyển thành pages) ·
-mới viết: IPC layer, tray/notify, multi-repo, terminal nhúng, installer config.
+> Note: per-CLI vault env and the `models` registry (models.yml) are superseded by the router — providers are configured in desktop Settings → Providers.
 
-## 4. Chặng
+Estimated reuse: **core 100% · UI ~80%** (HTML/CSS webviews turned into pages) ·
+newly written: IPC layer, tray/notify, multi-repo, embedded terminal, installer config.
 
-### P-D1 — Shell chạy được (tuần 1–2) → MVP Desktop
-- Scaffold Electron + TypeScript (tái dùng tsconfig mixed-root như extension)
+## 4. Stages
+
+### P-D1 — A working shell (weeks 1–2) → Desktop MVP
+- Scaffold Electron + TypeScript (reuse the extension's mixed-root tsconfig)
 - IPC contract: `invoke('fleet:list')`, `invoke('dispatch', brief)`, `on('event', cb)`... —
-  mỗi hàm đã có trong logic.ts chỉ cần bọc
-- 4 page đầu: Dashboard · Chat · Transcript · Matrix
-- electron-builder → NSIS installer; test cài/gỡ trên máy thật
+  every function already exists in logic.ts and only needs wrapping
+- First 4 pages: Dashboard · Chat · Transcript · Matrix
+- electron-builder → NSIS installer; test install/uninstall on a real machine
 
-**Gate MVP:** cài .exe → không mở VS Code → dispatch + pipeline end-to-end từ app →
-transcript live. Nếu gate này không đạt trong 2 tuần → dừng, đánh giá lại (rủi ro số 1: IPC
-dầm mưa dãi hơn webview extension — mitigate bằng giữ logic.ts làm API duy nhất).
+**MVP gate:** install the .exe → without opening VS Code → dispatch + pipeline end-to-end from the app →
+live transcript. If this gate isn't met within 2 weeks → stop and reassess (risk #1: IPC
+is more laborious than the extension webview — mitigated by keeping logic.ts as the only API).
 
-### P-D2 — Vào việc thật (tuần 3)
-- Tray + Notification: gate chờ duyệt plan/merge, pipeline done/failed, budget 80%
-- Multi-repo: danh sách repo (từ settings + Recently opened), switch không restart
-- Terminal nhúng (node-pty) — xem worker như terminal thật; **electron-rebuild cho native module**
-- Install Wizard: cài worker + login OAuth guided + vault entry — gộp 3 command rời thành 1 luồng
+### P-D2 — Real work (week 3)
+- Tray + Notification: gates awaiting plan/merge approval, pipeline done/failed, budget 80%
+- Multi-repo: repo list (from settings + Recently opened), switch without restart
+- Embedded terminal (node-pty) — watch workers like a real terminal; **electron-rebuild for the native module**
+- Install Wizard: install worker + guided OAuth login + vault entry — merges 3 separate commands into 1 flow
 
-### P-D3 — Đủ tin để phân phối (tuần 4)
+### P-D3 — Trustworthy enough to distribute (week 4)
 - Auto-update (electron-updater + GitHub Releases)
-- Settings UI đầy đủ (đọc/ghi đúng schema `orchestra.*` của extension — dùng chung config)
-- macOS/Linux builds + verify (nợ P6) — vault non-Windows fallback (keychain)
-- App icon, installer metadata, (optional) code signing — unsigned thì ghi hướng dẫn SmartScreen
+- Full Settings UI (reads/writes exactly the extension's `orchestra.*` schema — shared config)
+- macOS/Linux builds + verification (P6 debt) — non-Windows vault fallback (keychain)
+- App icon, installer metadata, (optional) code signing — if unsigned, document the SmartScreen steps
 
-### P-D4 — Sau v1 (tuần 5+, tùy chọn)
-- Đánh giá Tauri (sidecar bun) nếu size/memory là vấn đề thật của user
-- Role-pack install 1-click (ý #3 — pack = KB + templates + policy snippet)
-- Local dashboard mode (serve UI qua localhost — xem từ máy khác)
-- Telemetry opt-in (task success rate, cost) — nuôi Model Registry
+### P-D4 — After v1 (week 5+, optional)
+- Evaluate Tauri (bun sidecar) if size/memory is a real user problem
+- 1-click role-pack install (idea #3 — pack = KB + templates + policy snippet)
+- Local dashboard mode (serve the UI over localhost — view from another machine)
+- Opt-in telemetry (task success rate, cost) — feeds the Model Registry
 
-## 5. Rủi ro & biện pháp
+## 5. Risks & mitigations
 
-| Rủi ro | Biện pháp |
+| Risk | Mitigation |
 |---|---|
-| IPC layer tốn công hơn dự kiến | logic.ts là API duy nhất — IPC chỉ bọc, không viết logic mới |
-| node-pty + electron ABI | electron-rebuild ngay P-D1 đầu tiên (bẫy đã ghi từ P1) — nếu gãy, Terminal nhúng trễ sang P-D3 |
-| SmartScreen chặn unsigned exe | v0.1 beta: ghi hướng dẫn "More info → Run anyway"; cert để P-D3/P7 |
-| Duy trì 2 UI (extension + desktop) | webview HTML dùng chung file; logic 1 chỗ; extension giữ làm light client — không clone logic |
-|范围 creep UI | Gate P-D1 là luật: 4 page, không thêm |
+| IPC layer costs more effort than expected | logic.ts is the only API — IPC only wraps, no new logic |
+| node-pty + electron ABI | electron-rebuild at the very start of P-D1 (trap recorded since P1) — if it breaks, the embedded Terminal slips to P-D3 |
+| SmartScreen blocks the unsigned exe | v0.1 beta: document "More info → Run anyway"; cert in P-D3/P7 |
+| Maintaining 2 UIs (extension + desktop) | shared webview HTML files; logic in 1 place; extension stays a light client — no logic cloning |
+| UI scope creep | The P-D1 gate is the rule: 4 pages, nothing more |
 
-## 6. Bảng mốc
+## 6. Milestone chart
 
 ```
-Tuần:     1──────2──────3──────4──────5────→
-Chặng:    ├──P-D1 (MVP)──┤├─P-D2─┤├─P-D3─┤├─P-D4→
+Week:     1──────2──────3──────4──────5────→
+Stage:    ├──P-D1 (MVP)──┤├─P-D2─┤├─P-D3─┤├─P-D4→
 Gate:            installer + E2E     tray/multi-repo  cross-platform
-Đã có sẵn: core P1–P6 ✓ · 4 webview UI ✓ · vault/install/conformance ✓
+Already in place: core P1–P6 ✓ · 4 webview UIs ✓ · vault/install/conformance ✓
 ```
 
-~4 tuần solo cho Desktop full. MVP (P-D1) = 2 tuần.
+~4 weeks solo for the full Desktop. MVP (P-D1) = 2 weeks.
 
-## 7. Việc đầu tiên (ngày 1–2)
+## 7. First tasks (days 1–2)
 
-1. `Orchestra/desktop/`: scaffold Electron + TS (kế thừa mixed-root tsconfig của extension)
-2. IPC contract file (`ipc.ts`: danh sách channel + types từ logic.ts) — viết trước, code sau
-3. Dashboard page ghép 3 webview hiện có — mục tiêu cuối tuần 1: dispatch từ Desktop thành công 1 lần
+1. `Orchestra/desktop/`: scaffold Electron + TS (inherit the extension's mixed-root tsconfig)
+2. IPC contract file (`ipc.ts`: channel list + types from logic.ts) — written first, code after
+3. Dashboard page combining the 3 existing webviews — end-of-week-1 goal: one successful dispatch from Desktop

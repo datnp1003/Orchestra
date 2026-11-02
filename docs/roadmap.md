@@ -1,139 +1,142 @@
-# Orchestra — Roadmap tổng từ hiện tại đến sản phẩm hoàn thành
+# Orchestra — Overall roadmap from today to a finished product
 
-> Giả định: 1 dev full-time. Mọi mốc là ước lượng; exit criteria là điều kiện *đo được*,
-> không phải cảm giác "xong". Cập nhật lại sau mỗi chặng.
+> English only (canonical).
+
+> Assumption: 1 full-time dev. Every milestone is an estimate; exit criteria are *measurable* conditions,
+> not a feeling of "done". Revisit after each stage.
 
 ---
 
-## 0. Vị trí hiện tại (30/10/2026)
+## 0. Current position (30/10/2026)
 
-| Đã có | Trạng thái |
+| Done | Status |
 |---|---|
-| 4 spec v0.1 khép vòng (DSL · Worker Protocol · Role Policy · Memory) | ✓ chốt |
-| P1 prototype — registry, headless spawn, stream chuẩn hoá, smoke, supervisor-lite | ✓ chạy thật, PASS cả claude + codex |
-| P2 prototype — worktree isolation, TaskBrief B1, permission matrix, dispatch theo role, scope check, task record | ✓ chạy thật trên demo-repo |
+| 4 closed-loop v0.1 specs (DSL · Worker Protocol · Role Policy · Memory) | ✓ signed off |
+| P1 prototype — registry, headless spawn, normalized stream, smoke, supervisor-lite | ✓ runs for real, PASS on both claude + codex |
+| P2 prototype — worktree isolation, TaskBrief B1, permission matrix, role-based dispatch, scope check, task record | ✓ runs for real on demo-repo |
 
-**Vị trí:** nguyên lý đã được chứng minh ở mức prototype. Phần còn lại của sản phẩm là
-biến luồng "1 node 1 lệnh" thành **pipeline tự chạy**, rồi bọc vào **IDE**, rồi **hoàn thiện
-đủ để người ngoài dùng**.
+**Position:** the principles are proven at prototype level. The rest of the product is
+turning the "1 node, 1 command" flow into a **self-running pipeline**, then wrapping it in an **IDE**, then **polishing it
+enough for outsiders to use**.
 
-## 1. Định nghĩa "hoàn thành" — 2 cửa
+## 1. Definition of "done" — 2 gates
 
-### Cửa MVP (cuối chặng P5) — đo được:
-1. Một dev **bên ngoài** cài được bằng 1 câu lệnh, dùng được trong buổi làm việc đầu tiên
-   (onboarding ≤ 15 phút).
-2. E2E thật: mở repo → tạo task → pipeline `plan → implement → verify → review` tự chạy qua
-   ≥ 2 CLI khác nhau → user duyệt plan + merge → task record + patch được lưu.
-3. Cross-review có thật: implement và review chạy trên 2 CLI khác họ, được log.
-4. Mỗi task có trần chi phí; vượt trần → kill + escalate (không có hoá đơn bất ngờ).
-5. Lỗi CLI (treo, sai format, đổi version) không làm crash orchestrator — degrade + báo rõ.
+### MVP gate (end of stage P5) — measurable:
+1. An **external** dev can install with 1 command and get value in their first working session
+   (onboarding ≤ 15 minutes).
+2. Real E2E: open repo → create task → pipeline `plan → implement → verify → review` runs on its own across
+   ≥ 2 different CLIs → user approves plan + merge → task record + patch are saved.
+3. Real cross-review: implement and review run on 2 CLIs of different families, and it is logged.
+4. Every task has a cost ceiling; exceeding it → kill + escalate (no surprise bills).
+5. CLI errors (hangs, bad format, version changes) do not crash the orchestrator — degrade + report clearly.
 
-### Cửa v1.0 (cuối chặng P7) — đo được:
-1. ≥ 3 CLI hỗ trợ, mỗi CLI có conformance suite chạy tự động theo version pin.
-2. Supervisor đủ 4 lớp (kể cả FS watcher in-flight + deny globs ở tầng flag).
-3. Memory loop khép: episodic → retrospective → proposal PR → user merge → policy/KB cập nhật.
-4. 10–20 beta users dùng ≥ 2 tuần; ≥ 1 task/người/ngày trung bình.
-5. Docs + troubleshooting tự phục vụ; npm install; crash rate < 1 task/100.
+### v1.0 gate (end of stage P7) — measurable:
+1. ≥ 3 supported CLIs, each with a conformance suite running automatically per pinned version.
+2. Supervisor with all 4 layers (including in-flight FS watcher + deny globs at the flag level).
+3. Memory loop closed: episodic → retrospective → proposal PR → user merge → policy/KB updated.
+4. 10–20 beta users using it for ≥ 2 weeks; ≥ 1 task/person/day on average.
+5. Self-service docs + troubleshooting; npm install; crash rate < 1 task/100.
 
-## 2. Các chặng
+## 2. Stages
 
-### P3 — Pipeline Runner (tuần 1–3): "biến DSL thành xương sống"
+### P3 — Pipeline Runner (weeks 1–3): "turn the DSL into the backbone"
 
-Mục tiêu: file `feature-dev.yml` chạy được tự động, không cần người gõ lệnh từng node.
+Goal: the `feature-dev.yml` file runs automatically, without someone typing a command per node.
 
-- Loader YAML + validation luật V1–V10 (schema cấm xoá `verify`, cấm `when` trên verify…)
-- DAG executor: topological order, skip propagation, node song song khi độc lập
-- Node executors: plan (chặn duyệt), implement, verify, review, merge_gate
-- Gate evaluator deterministic: `tests.green`, `verdict.approved`, `files_changed <= N`
-- `on_fail`: retry / spawn_fix (giới hạn max_retries) / ask_user — fix node kèm context node fail
-- Gate runner: map `acceptance_criteria` → lệnh test trong repo config, chạy thật
-- Multi-task compose: DAG task → thứ tự merge → integration test sau mỗi merge → merge resolver
-- DSL templates mặc định: `feature-dev.yml`, `hotfix.yml` vào `docs/templates/`
+- YAML loader + validation rules V1–V10 (schema forbids removing `verify`, forbids `when` on verify…)
+- DAG executor: topological order, skip propagation, parallel nodes when independent
+- Node executors: plan (blocks for approval), implement, verify, review, merge_gate
+- Deterministic gate evaluator: `tests.green`, `verdict.approved`, `files_changed <= N`
+- `on_fail`: retry / spawn_fix (bounded by max_retries) / ask_user — fix node gets the failed node's context
+- Gate runner: map `acceptance_criteria` → test commands in the repo config, run for real
+- Multi-task compose: task DAG → merge order → integration test after each merge → merge resolver
+- Default DSL templates: `feature-dev.yml`, `hotfix.yml` into `docs/templates/`
 
-**Exit criteria:** demo-repo chạy `orchestra run "thêm cổng X"` → 4 node tự chạy, 1 case
-verify fail → spawn_fix tự sửa → pass; 2 task song song merge được với integration test.
-**Rủi ro chính:** viết loop chạy ổn định (trạng thái node, resume giữa chừng) — giữ đơn giản:
-task = thư mục state, mỗi node một file, không cần DB.
+**Exit criteria:** demo-repo runs `orchestra run "add gateway X"` → 4 nodes run on their own, 1 case
+where verify fails → spawn_fix fixes it → pass; 2 parallel tasks merge with an integration test.
+**Main risk:** writing a stable run loop (node state, resume mid-way) — keep it simple:
+task = a state directory, one file per node, no DB needed.
 
-### P4 — Policy từ file + Memory (tuần 4–6): "bộ não"
+### P4 — Policy from file + Memory (weeks 4–6): "the brain"
 
-- `policy.yml` load + validate P1–P8; binding từ file thay binding trong code
-- Track record: bảng SQLite tổng hợp từ task records (first_try_pass, override, blocks, EMA 30d)
-- Routing dùng score thực: track_record + health + cost + preference + tag boost
-- Memory tầng 2: migrate task records JSON → SQLite episodic + FTS5
-- Memory tầng 3: KB markdown `.orchestra/kb/` + **injection vào brief có trần 2.5k token** + eviction
+- `policy.yml` load + validate P1–P8; bindings from the file replace bindings in code
+- Track record: SQLite table aggregated from task records (first_try_pass, override, blocks, EMA 30d)
+- Routing uses real scores: track_record + health + cost + preference + tag boost
+- Memory layer 2: migrate JSON task records → SQLite episodic + FTS5
+- Memory layer 3: markdown KB `.orchestra/kb/` + **injection into the brief capped at 2.5k tokens** + eviction
 - Feedback events: capture user_edit_after_merge / verdict_rejected / task_reassigned
-- Retrospective v0: job cluster task records → sinh proposal (KB diff + policy diff) dạng PR text
+- Retrospective v0: job clusters task records → produces proposals (KB diff + policy diff) as PR text
 
-**Exit criteria:** chạy 10 task mô phỏng (vài task "fail" cố ý) → track record phản ánh đúng;
-brief tự chứa KB entry đúng module; retrospective sinh ≥ 1 proposal hợp lý cho user duyệt.
-**Rủi ro chính:** chất lượng chưng cất — dùng sample gate (n ≥ min_sample) ngay từ đầu,
-không để memory "kể chuyện" dựa trên nhiễu.
+**Exit criteria:** run 10 simulated tasks (some deliberately "failing") → the track record reflects them correctly;
+briefs automatically contain the right module's KB entries; retrospective produces ≥ 1 sensible proposal for the user to approve.
+**Main risk:** distillation quality — use a sample gate (n ≥ min_sample) from day one,
+don't let memory "tell stories" based on noise.
 
-### P5 — IDE Extension (tuần 7–11): "sản phẩm mang hình dạng" — MỤC TIÊU MVP
+### P5 — IDE Extension (weeks 7–11): "the product takes shape" — MVP TARGET
 
-- VS Code extension (TypeScript, tái dùng runner core): 
-  - **Fleet panel**: list/install/update CLI, auth status, badge conformance
-  - **Task panel**: tạo task, xem pipeline node-by-node, transcript live (stream JSONL → tree view),
-    diff review, nút duyệt plan / merge / kill
-  - **Matrix UI**: role × worker × model — cell = policy.yml, sửa → diff → save
-- Credential vault: Windows Credential Manager (DPAPI), inject lúc spawn, key không qua LLM
-- Conformance runner v1: 8 case §10 chạy theo version pin, badge xanh/vàng/đỏ
+- VS Code extension (TypeScript, reusing the runner core):
+  - **Fleet panel**: list/install/update CLIs, auth status, conformance badge
+  - **Task panel**: create task, view the pipeline node by node, live transcript (JSONL stream → tree view),
+    diff review, approve plan / merge / kill buttons
+  - **Matrix UI**: role × worker × model — cell = policy.yml, edit → diff → save
+- Credential vault: Windows Credential Manager (DPAPI), injected at spawn, keys never pass through the LLM
+  (per-CLI vault env injection is superseded by the router — providers live in desktop Settings → Providers)
+- Conformance runner v1: the 8 §10 cases run per pinned version, green/yellow/red badge
 - Package: `npm i -g orchestra-cli` (CLI core) + extension VSIX
 
-**Exit criteria:** đạt đủ 5 điều kiện cửa MVP (§1).
-**Rủi ro chính:** scope creep UI — chốt: panel thô mà chạy thật > đẹp mà demo.
-Webview transcript là phiên bản 1, không làm editor tùy biến.
+**Exit criteria:** meets all 5 MVP gate conditions (§1).
+**Main risk:** UI scope creep — rule: a rough panel that really works > a pretty one that only demos.
+The webview transcript is version 1; no custom editor.
 
-### P6 — Hardening + Beta (tuần 12–15): "đủ tin để giao cho người khác"
+### P6 — Hardening + Beta (weeks 12–15): "trustworthy enough to hand to others"
 
-- Supervisor Lớp 3: FS watcher (chokidar) trên worktree, cross-check Observed vs Reported,
-  deny globs xuống tầng flag (`--disallowedTools` rules cho claude; profile opencode),
-  phát hiện network attempt, phân loại treo (hung/stuck/budget) — như §9b spec
-- Conformance suite hoàn chỉnh + tự chạy khi registry thấy CLI update (badge vàng)
-- Session resume, hot-swap worker giữa node
-- Đường macOS/Linux verify (prototype đã cross-platform từ Node; test thật + fix)
-- 10–20 beta users: kênh feedback, issue template, weekly release
+- Supervisor Layer 3: FS watcher (chokidar) on the worktree, cross-check Observed vs Reported,
+  deny globs pushed down to the flag level (`--disallowedTools` rules for claude; opencode profile),
+  detect network attempts, classify hangs (hung/stuck/budget) — per spec §9b
+- Complete conformance suite + auto-run when the registry sees a CLI update (yellow badge)
+- Session resume, worker hot-swap between nodes
+- macOS/Linux verification path (prototype is already cross-platform via Node; real testing + fixes)
+- 10–20 beta users: feedback channel, issue template, weekly release
 
-**Exit criteria:** 2 tuần beta, crash rate < 1/100 task, ≥ 1 user chạy hằng ngày tự nguyện.
-**Rủi ro chính:** số lượng cách CLI khác nhau phản hồi — mọi fix phải đi kèm 1 conformance case
-mới, không fix point-to-point.
+**Exit criteria:** 2 weeks of beta, crash rate < 1/100 tasks, ≥ 1 user running it daily voluntarily.
+**Main risk:** the number of different ways CLIs respond — every fix must come with 1 new conformance case,
+no point-to-point fixes.
 
-### P7 — Launch v1.0 (tuần 16–17)
+### P7 — Launch v1.0 (weeks 16–17)
 
-- Publish npm + marketplace VS Code; docs site (quickstart 15 phút, khái niệm, manifest spec)
-- Registry manifests cho cộng đồng đóng góp (PR + conformance tự động)
-- Role pack / skill-sync v0: pack cài 1 lần, IDE sync AGENTS.md/CLAUDE.md/.codex cho worker
-- Post-mortem beta → v1.0 checklist → release
+- Publish npm + VS Code marketplace; docs site (15-minute quickstart, concepts, manifest spec)
+- Registry manifests open to community contributions (PR + automatic conformance)
+- Role pack / skill-sync v0: pack installed once, IDE syncs AGENTS.md/CLAUDE.md/.codex for workers
+- Beta post-mortem → v1.0 checklist → release
 
-**Exit criteria:** đạt đủ 5 điều kiện cửa v1.0 (§1).
+**Exit criteria:** meets all 5 v1.0 gate conditions (§1).
 
-## 3. Cross-cutting (chạy xuyên suốt)
+## 3. Cross-cutting (throughout)
 
-| Lĩnh | Quy tắc |
+| Area | Rule |
 |---|---|
-| Kiểm chứng | Mọi chặng phải demo trên **CLI thật**, không fixture-only; fixture chỉ dùng cho replay |
-| Chi phí dev | Mỗi buổi chạy demo ghi usage; nếu 1 tuần dev tốn > $20 model fee → tối ưu trước khi thêm feature |
-| Hợp đồng chất lượng | unmapped-lines và first_try_pass là 2 số liệu luôn hiện trong output |
-| Phạm vi | MVP không có: marketplace, multi-user/team sync, Docker isolation, hot-swap — các đề mục này là v1.x |
-| Windows | Platform chính (máy dev); macOS/Linux verify ở P6, không sớm hơn |
+| Verification | Every stage must demo on **real CLIs**, not fixtures only; fixtures are for replay only |
+| Dev cost | Every demo session logs usage; if 1 dev week costs > $20 in model fees → optimize before adding features |
+| Quality contract | unmapped-lines and first_try_pass are 2 metrics always shown in output |
+| Scope | MVP excludes: marketplace, multi-user/team sync, Docker isolation, hot-swap — these are v1.x |
+| Windows | Primary platform (dev machine); macOS/Linux verified in P6, not earlier |
 
-## 4. Bảng mốc tổng
+## 4. Overall milestone chart
 
 ```
-Tuần:     1───2───3───4───5───6───7───8───9──10──11──12──13──14──15──16──17
-Chặng:    ├─────P3─────┤├─────P4────┤├────────P5 (MVP)────────┤├──P6──┤├P7┤
-Cửa:                                  │                        │        │
+Week:     1───2───3───4───5───6───7───8───9──10──11──12──13──14──15──16──17
+Stage:    ├─────P3─────┤├─────P4────┤├────────P5 (MVP)────────┤├──P6──┤├P7┤
+Gate:                                 │                        │        │
                                  MVP review               Beta       v1.0
-Đã xong (trước tuần 1): 4 spec v0.1 + P1 + P2 prototype ✓
+Done (before week 1): 4 specs v0.1 + P1 + P2 prototype ✓
 ```
 
-Tổng: ~4 tháng solo full-time. Cắt ngắn được nếu: P5 chỉ làm CLI panel trước (mất 1–2 tuần),
-hoặc memory chỉ làm episodic + KB injection bỏ retrospective (trả lại sau v1.0).
+Total: ~4 months solo full-time. Can be shortened if: P5 does only the CLI panel first (saves 1–2 weeks),
+or memory does only episodic + KB injection and drops the retrospective (brought back after v1.0).
 
-## 5. Hành động tiếp theo (tuần 1, ngày 1–2)
+## 5. Next actions (week 1, days 1–2)
 
-1. Thêm dependency `js-yaml`, viết loader `pipeline.ts`: parse `feature-dev.yml` + validation V1–V10
-2. DAG executor v0: chạy tuần tự các node của `feature-dev` trên demo-repo, mỗi node reuse `dispatch()`
-3. Demo đầu P3: 1 lệnh → plan (dừng duyệt qua CLI prompt) → implement → verify → review
-   — đây là lần đầu tiên ý tưởng gốc chạy như một *quy trình*, không phải lệnh rời.
+1. Add the `js-yaml` dependency, write the `pipeline.ts` loader: parse `feature-dev.yml` + validation V1–V10
+2. DAG executor v0: run the `feature-dev` nodes sequentially on demo-repo, each node reusing `dispatch()`
+3. First P3 demo: 1 command → plan (pauses for approval via CLI prompt) → implement → verify → review
+   — the first time the original idea runs as a *process*, not as separate commands.

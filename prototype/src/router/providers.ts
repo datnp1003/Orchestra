@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { vaultDelete, vaultGet, vaultSet } from '../vault.js';
 import { OAUTH_BASE_URL } from './oauth.js';
+import { t } from '../i18n/index.js';
 
 // R3: oauth-* = token subscription (vault giữ JSON creds thay key; router lấy access token qua oauth.ts)
 export type ProviderKind = 'anthropic' | 'openai' | 'anthropic-compatible' | 'openai-compatible' | 'oauth-anthropic' | 'oauth-openai';
@@ -43,16 +44,16 @@ export const defaultRouterFile = () => path.join(os.homedir(), '.orchestra', 'ro
 /** validate + chuẩn hoá — throw Error nếu sai (input từ UI/file là trust boundary) */
 export function normalizeProvider(cfg: Partial<ProviderConfig>): ProviderConfig {
   const { id, kind } = cfg;
-  if (typeof id !== 'string' || !ID_RE.test(id)) throw new Error(`provider id không hợp lệ: ${id}`);
-  if (!kind || !(kind in DEFAULT_FORMATS)) throw new Error(`provider kind không hợp lệ: ${kind}`);
+  if (typeof id !== 'string' || !ID_RE.test(id)) throw new Error(t('router.providers.badId', { id: String(id) }));
+  if (!kind || !(kind in DEFAULT_FORMATS)) throw new Error(t('router.providers.badKind', { kind: String(kind) }));
   const oauth = isOAuth(kind);
   let url: URL;
   try {
     url = new URL(String(oauth && !cfg.baseUrl ? OAUTH_BASE_URL[kind] : cfg.baseUrl));
   } catch {
-    throw new Error(`baseUrl không hợp lệ: ${cfg.baseUrl}`);
+    throw new Error(t('router.providers.badUrl', { url: String(cfg.baseUrl) }));
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`baseUrl phải http/https: ${cfg.baseUrl}`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(t('router.providers.urlScheme', { url: String(cfg.baseUrl) }));
   const baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, '').replace(/\/v1$/, '');
   const formats = (cfg.formats ?? []).filter((f) => FORMATS.includes(f));
   const listed = cfg.models?.filter((m) => typeof m === 'string' && m);
@@ -82,23 +83,25 @@ export function authHeaders(kind: ProviderKind, key: string | null): Record<stri
 
 /** R2a: CLI chạy được model `<provider>/<model>` qua router không (theo format provider nói + router dịch được) */
 export function routerModelOk(cli: string, modelId: string, providers: ProviderConfig[]): { ok: boolean; reason: string } {
-  if (cli !== 'claude' && cli !== 'codex') return { ok: false, reason: `${cli} chưa hỗ trợ router` };
+  if (cli !== 'claude' && cli !== 'codex') return { ok: false, reason: t('router.providers.cliUnsupported', { cli }) };
   const i = modelId.indexOf('/');
   const p = i > 0 ? providers.find((x) => x.id === modelId.slice(0, i)) : undefined;
-  if (!p) return { ok: false, reason: `không có provider cho '${modelId}' (dùng <provider>/<model>)` };
-  if (isOAuth(p.kind) && !p.riskAcknowledged) return { ok: false, reason: `provider ${p.id} chưa xác nhận rủi ro OAuth` };
-  if (!p.enabled) return { ok: false, reason: `provider ${p.id} đang tắt` };
-  if (p.needsLogin) return { ok: false, reason: `provider ${p.id} cần đăng nhập OAuth lại` };
-  if (cli === 'claude' && p.kind === 'oauth-openai') return { ok: false, reason: `${p.id}: chưa dịch Messages→Responses` };
+  if (!p) return { ok: false, reason: t('router.providers.noProvider', { model: modelId }) };
+  const id = p.id;
+  if (isOAuth(p.kind) && !p.riskAcknowledged) return { ok: false, reason: t('router.providers.riskNotAck', { id }) };
+  if (!p.enabled) return { ok: false, reason: t('router.providers.disabled', { id }) };
+  if (p.needsLogin) return { ok: false, reason: t('router.providers.needsLogin', { id }) };
+  if (cli === 'claude' && p.kind === 'oauth-openai') return { ok: false, reason: t('router.providers.noM2R', { id }) };
+  const formats = p.formats.join(',');
   if (cli === 'codex') {
-    if (p.formats.includes('responses')) return { ok: true, reason: `${p.id} nói responses` };
+    if (p.formats.includes('responses')) return { ok: true, reason: t('router.providers.speaksResponses', { id }) };
     return p.formats.includes('chat') || p.formats.includes('messages')
-      ? { ok: true, reason: `${p.id} ${p.formats.includes('chat') ? 'chat' : 'messages'} (router dịch Responses→Chat/Messages)` }
-      : { ok: false, reason: `codex cần provider nói responses, chat hoặc messages — ${p.id}: ${p.formats.join(',')}` };
+      ? { ok: true, reason: t('router.providers.codexTranslated', { id, fmt: p.formats.includes('chat') ? 'chat' : 'messages' }) }
+      : { ok: false, reason: t('router.providers.codexNeeds', { id, formats }) };
   }
   return p.formats.includes('messages') || p.formats.includes('chat')
-    ? { ok: true, reason: `${p.id} ${p.formats.includes('messages') ? 'nói messages' : 'chat (router dịch)'}` }
-    : { ok: false, reason: `claude cần provider nói messages hoặc chat — ${p.id}: ${p.formats.join(',')}` };
+    ? { ok: true, reason: t(p.formats.includes('messages') ? 'router.providers.speaksMessages' : 'router.providers.chatTranslated', { id }) }
+    : { ok: false, reason: t('router.providers.claudeNeeds', { id, formats }) };
 }
 
 export interface ProviderStore {
@@ -117,7 +120,7 @@ export function createProviderStore(
   const saveKey = opts.saveKey ?? ((id: string, v: string) => vaultSet(vaultName(id), v));
   const keys = new Map<string, string | null>();
   const setKey = (id: string, value: string) => {
-    if (!saveKey(id, value)) throw new Error(`lưu key vào vault thất bại: ${id}`);
+    if (!saveKey(id, value)) throw new Error(t('router.providers.vaultFailed', { id }));
     keys.set(id, value);
   };
   let list: ProviderConfig[] | null = null;
@@ -139,8 +142,8 @@ export function createProviderStore(
     listProviders: () => [...load()],
     saveProvider(cfg, key) {
       const p = normalizeProvider(cfg);
-      if (isOAuth(p.kind) && !p.riskAcknowledged) throw new Error(`${p.id}: phải tick "Tôi hiểu rủi ro" để dùng OAuth`);
-      if (isOAuth(p.kind) && key !== undefined) throw new Error(`${p.id}: provider OAuth dùng nút Đăng nhập, không nhập key`);
+      if (isOAuth(p.kind) && !p.riskAcknowledged) throw new Error(t('router.providers.mustAckRisk', { id: p.id }));
+      if (isOAuth(p.kind) && key !== undefined) throw new Error(t('router.providers.oauthNoKey', { id: p.id }));
       if (key !== undefined) setKey(p.id, key);
       write([...load().filter((x) => x.id !== p.id), p]);
       return p;

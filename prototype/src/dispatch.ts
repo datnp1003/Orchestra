@@ -3,6 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { getManifest } from './manifests.js';
+import { t } from './i18n/index.js';
 import { runHeadless } from './runner.js';
 import { permissionFor } from './permissions.js';
 import { DEFAULT_ARTIFACTS, validateBrief, type NodeType, type TaskBrief } from './brief.js';
@@ -83,38 +84,38 @@ export function checkScope(files: string[], patterns: string[]): ScopeCheck {
 // nội dung vào slot; prototype lắp thẳng từ brief.
 export function buildPrompt(b: TaskBrief): string {
   const lines: string[] = [
-    'Bạn đang làm việc trong một git worktree RIÊNG — mọi thay đổi file chỉ được thực hiện trong worktree này.',
+    'You are working in a SEPARATE git worktree — make all file changes only inside this worktree.',
     '',
-    `MỤC TIÊU: ${b.goal}`,
+    `GOAL: ${b.goal}`,
     '',
   ];
   if (b.files_in_scope.length) {
-    lines.push(`PHẠM VI FILE (chỉ được tạo/sửa file khớp các mẫu sau):`, ...b.files_in_scope.map((p) => `- ${p}`), '');
+    lines.push(`FILE SCOPE (only create/edit files matching these patterns):`, ...b.files_in_scope.map((p) => `- ${p}`), '');
   }
   if (b.constraints.length) {
-    lines.push('RÀNG BUỘC:', ...b.constraints.map((c) => `- ${c}`), '');
+    lines.push('CONSTRAINTS:', ...b.constraints.map((c) => `- ${c}`), '');
   }
   if (b.forbidden_actions.length) {
-    lines.push('CẤM:', ...b.forbidden_actions.map((c) => `- ${c}`), '');
+    lines.push('FORBIDDEN:', ...b.forbidden_actions.map((c) => `- ${c}`), '');
   }
   if (b.acceptance_criteria.length) {
-    lines.push('TIÊU CHÍ HOÀN THÀNH (sẽ được dùng để chấm):', ...b.acceptance_criteria.map((c) => `- ${c}`), '');
+    lines.push('ACCEPTANCE CRITERIA (used for grading):', ...b.acceptance_criteria.map((c) => `- ${c}`), '');
   }
-  lines.push('YÊU CẦU: thực hiện trong worktree này rồi trả lời tóm tắt những gì đã thay đổi.');
+  lines.push('REQUEST: do the work in this worktree, then reply with a summary of what changed.');
   return lines.join('\n');
 }
 
 function buildPlanPrompt(b: TaskBrief): string {
   return [
-    'Bạn ở chế độ CHỈ ĐỌC (plan) — không được tạo/sửa file nào.',
+    'You are in READ-ONLY (plan) mode — do not create or edit any file.',
     '',
-    `NHIỆM VỤ: ${b.goal}`,
+    `TASK: ${b.goal}`,
     '',
-    'Đầu ra yêu cầu:',
-    '1. Plan tối đa 8 bước',
-    '2. files_touched: danh sách file sẽ cần chạm (glob)',
-    '3. risks: rủi ro cần lưu ý',
-    'Trả lời ngắn gọn, có cấu trúc.',
+    'Required output:',
+    '1. Plan of at most 8 steps',
+    '2. files_touched: list of files that will need changes (glob)',
+    '3. risks: risks to watch out for',
+    'Be concise and structured.',
   ].join('\n');
 }
 
@@ -147,7 +148,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   }
   const resolvedModel = o.model ?? routing.model; // explicit > policy binding > CLI mặc định
   const manifest = getManifest(routing.pick);
-  if (!manifest) return { ok: false, taskId, stage: 'routing', reason: `manifest ${routing.pick} không tồn tại` };
+  if (!manifest) return { ok: false, taskId, stage: 'routing', reason: t('core.dispatch.noManifest', { id: routing.pick }) };
 
   // 2. TaskBrief + validate (luật B1)
   const brief: TaskBrief = {
@@ -157,7 +158,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     goal: o.goal,
     files_in_scope: o.scope,
     constraints: o.constraints,
-    forbidden_actions: o.node === 'implement' ? ['git push', 'cài package mới', 'network'] : [],
+    forbidden_actions: o.node === 'implement' ? ['git push', 'installing new packages', 'network'] : [],
     acceptance_criteria: o.acceptance,
     artifacts_out: DEFAULT_ARTIFACTS[o.node],
     worker: routing.pick,
@@ -181,7 +182,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   const perm = permissionFor(o.node);
   let prompt = o.promptOverride ?? (o.node === 'plan' ? buildPlanPrompt(brief) : buildPrompt(brief));
   if (kb.injected && ['plan', 'implement'].includes(o.node)) {
-    prompt += `\n\nKIẾN THỨC DỰ ÁN (memory của repo — tôn trọng các quy ước dưới đây):\n${kb.injected}`;
+    prompt += `\n\nPROJECT KNOWLEDGE (repo memory — follow the conventions below):\n${kb.injected}`;
   }
   const started = Date.now();
   const run = await runHeadless(manifest, prompt, {
@@ -248,7 +249,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     session: run.session ?? null,
     fs_cross_check: run.fsCrossCheck,
     scope_check: scopeCheck,
-    acceptance_note: 'P2 chưa tự chạy gate — acceptance_criteria lưu trong record để P3 gate runner dùng',
+    acceptance_note: 'P2 does not run gates itself — acceptance_criteria stored in the record for the P3 gate runner',
   };
   const recordPath = path.join(tasksDir, `${taskId}.json`);
   writeFileSync(recordPath, JSON.stringify(record, null, 2), 'utf8');
@@ -263,7 +264,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
       ok: false,
       taskId,
       stage: 'no_change',
-      reason: `implement không thay đổi file nào (exit=${run.exitCode}). worker: ${(lastMessage ?? '').slice(0, 300)} | stderr: ${run.stderrTail.slice(0, 300)}`,
+      reason: t('core.dispatch.noChange', { exit: String(run.exitCode), message: (lastMessage ?? '').slice(0, 300), stderr: run.stderrTail.slice(0, 300) }),
       recordPath,
       record,
     };

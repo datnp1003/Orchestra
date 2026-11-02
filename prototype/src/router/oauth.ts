@@ -5,6 +5,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import type { ProviderConfig, ProviderKind } from './providers.js';
+import { t } from '../i18n/index.js';
 
 // Endpoint lấy từ claude.exe đang cài (MANUAL_REDIRECT_URL/TOKEN_URL/CLAUDE_AI_AUTHORIZE_URL) — đổi theo bản CLI.
 export const ANTHROPIC = {
@@ -40,7 +41,7 @@ export interface OAuthCreds {
 }
 /** refresh token chết / chưa login → router trả 401 với message này */
 export class OAuthLoginError extends Error {}
-const LOGIN_MSG = 'OAuth hết hạn — đăng nhập lại trong Providers';
+const loginMsg = () => t('router.oauth.loginExpired');
 
 // ───────────── PKCE (RFC 7636, S256) ─────────────
 export const pkceChallenge = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
@@ -100,7 +101,7 @@ async function tokenPost(url: string, body: Record<string, string>, form: boolea
   const text = await r.text();
   if (!r.ok) throw Object.assign(new Error(`token endpoint HTTP ${r.status}: ${text.slice(0, 200)}`), { status: r.status });
   const j = JSON.parse(text);
-  if (typeof j?.access_token !== 'string') throw new Error('token endpoint không trả access_token');
+  if (typeof j?.access_token !== 'string') throw new Error(t('router.oauth.noAccessToken'));
   return j;
 }
 const toCreds = (j: any, prev?: Partial<OAuthCreds>): OAuthCreds => {
@@ -116,7 +117,7 @@ const toCreds = (j: any, prev?: Partial<OAuthCreds>): OAuthCreds => {
 /** user dán `code#state` từ trang callback của Anthropic */
 export async function exchangeAnthropic(pasted: string, p: { verifier: string; state: string }, tokenUrl = ANTHROPIC.tokenUrl): Promise<OAuthCreds> {
   const [code, state] = String(pasted).trim().split('#');
-  if (!code || state !== p.state) throw new Error('code#state không hợp lệ hoặc state không khớp — bấm Đăng nhập lại');
+  if (!code || state !== p.state) throw new Error(t('router.oauth.badCodeState'));
   const j = await tokenPost(tokenUrl, { grant_type: 'authorization_code', code, state, client_id: ANTHROPIC.clientId, redirect_uri: ANTHROPIC.redirectUri, code_verifier: p.verifier }, false);
   return toCreds(j);
 }
@@ -141,23 +142,23 @@ export function openaiLogin(o: { open: (url: string) => unknown; port?: number; 
     const srv = http.createServer(async (req, res) => {
       const u = new URL(req.url ?? '/', 'http://localhost');
       if (u.pathname !== '/auth/callback') return void page(res, 404, 'not found');
-      if (done || u.searchParams.get('state') !== state) return void page(res, 400, 'state không hợp lệ');
+      if (done || u.searchParams.get('state') !== state) return void page(res, 400, t('router.oauth.badState'));
       const code = u.searchParams.get('code');
       if (!code) {
-        page(res, 400, 'đăng nhập thất bại');
-        return finish(new Error(`OpenAI từ chối: ${u.searchParams.get('error') ?? 'không có code'}`));
+        page(res, 400, t('router.oauth.loginFailed'));
+        return finish(new Error(t('router.oauth.openaiDenied', { error: u.searchParams.get('error') ?? t('router.oauth.noCode') })));
       }
       try {
         const j = await tokenPost(o.tokenUrl ?? OPENAI.tokenUrl, { grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: OPENAI.clientId, code_verifier: verifier }, true);
-        page(res, 200, '✓ Đăng nhập xong — quay lại Orchestra.');
+        page(res, 200, t('router.oauth.done'));
         finish(null, toCreds(j));
       } catch (err) {
-        page(res, 500, '✗ đổi code lấy token thất bại — xem Orchestra');
+        page(res, 500, t('router.oauth.exchangeFailed'));
         finish(err);
       }
     });
-    const timer = setTimeout(() => finish(new Error('hết 5 phút chờ đăng nhập OpenAI')), o.timeoutMs ?? LOGIN_TIMEOUT_MS);
-    srv.once('error', (e: NodeJS.ErrnoException) => finish(e.code === 'EADDRINUSE' ? new Error(`cổng ${port} đang bận (codex login đang chạy?)`) : e));
+    const timer = setTimeout(() => finish(new Error(t('router.oauth.timeout'))), o.timeoutMs ?? LOGIN_TIMEOUT_MS);
+    srv.once('error', (e: NodeJS.ErrnoException) => finish(e.code === 'EADDRINUSE' ? new Error(t('router.oauth.portBusy', { port })) : e));
     srv.listen(port, '127.0.0.1', () => {
       redirectUri = `http://localhost:${(srv.address() as { port: number }).port}/auth/callback`;
       Promise.resolve()
@@ -192,7 +193,7 @@ const inflight = new Map<string, Promise<OAuthCreds>>();
 
 export function getAccessToken(store: KeyStore, p: Pick<ProviderConfig, 'id' | 'kind'>, tokenUrl?: string): Promise<OAuthCreds> {
   const c = parseCreds(store.getKey(p.id));
-  if (!c?.access || !c.refresh || c.needsLogin) return Promise.reject(new OAuthLoginError(LOGIN_MSG));
+  if (!c?.access || !c.refresh || c.needsLogin) return Promise.reject(new OAuthLoginError(loginMsg()));
   if ((c.expiresAt ?? 0) - Date.now() > REFRESH_LEAD_MS) return Promise.resolve(c as OAuthCreds);
   let pr = inflight.get(p.id);
   if (!pr) {
@@ -213,7 +214,7 @@ async function refresh(store: KeyStore, id: string, kind: ProviderKind, c: Parti
     const status = (err as { status?: number }).status;
     if (status === 400 || status === 401) {
       store.setKey(id, JSON.stringify({ needsLogin: true })); // refresh token đã chết — xoá, bắt login lại
-      throw new OAuthLoginError(LOGIN_MSG);
+      throw new OAuthLoginError(loginMsg());
     }
     throw err; // mạng/5xx: giữ token, lần sau thử lại
   }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
@@ -10,10 +10,10 @@
   <div id="app">
     <aside id="sidebar">
       <div class="brand"><span class="brand-mark">◆</span>ORCHESTRA</div>
-      <button id="newChat" class="btn-primary btn-new" title="Bắt đầu hội thoại mới với Orchestra">＋ Chat mới</button>
+      <button id="newChat" class="btn-primary btn-new" data-i18n="desktop.newChat.label" data-i18n-title="desktop.newChat.title"></button>
 
       <nav id="nav">
-        <div class="side-title">Điều hướng</div>
+        <div class="side-title" data-i18n="desktop.nav.title"></div>
         <a href="#/chat" data-page="chat">Chat</a>
       </nav>
 
@@ -23,11 +23,11 @@
       </div>
 
       <div id="sideFooter">
-        <div id="repoLabel" class="repo-label" title="Repo active"></div>
+        <div id="repoLabel" class="repo-label" data-i18n-title="desktop.repo.activeTitle"></div>
         <a id="navDashboard" class="side-link" href="#/dashboard" data-page="dashboard">Dashboard</a>
-        <button id="btnSettings" title="Cài đặt — chung, workers, providers, conformance, skills">
+        <button id="btnSettings" data-i18n-title="desktop.settings.title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>Cài đặt</span>
+          <span data-i18n="desktop.page.settings"></span>
         </button>
       </div>
     </aside>
@@ -36,8 +36,8 @@
       <header id="topbar">
         <div id="pageTitle">Chat</div>
         <div class="topbar-right">
-          <div id="fleetPill" title="Fleet worker đã cài — click để mở Dashboard"></div>
-          <select id="repoSel" title="Repo active"></select>
+          <div id="fleetPill" data-i18n-title="desktop.fleet.pillTitle"></div>
+          <select id="repoSel" data-i18n-title="desktop.repo.activeTitle"></select>
         </div>
       </header>
 
@@ -46,18 +46,18 @@
       <div id="composerWrap" hidden>
         <div id="composer">
           <span class="composer-caret">›</span>
-          <textarea id="chatInput" rows="1" placeholder="Nhắn cho Orchestra — mô tả task cần làm…"></textarea>
-          <button id="chatStop" class="secondary" title="Dừng lượt đang chạy (kill worker)" hidden>Dừng</button>
-          <button id="chatSend" title="Gửi (Enter)">
+          <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>
+          <button id="chatStop" class="secondary" data-i18n="desktop.composer.stop" data-i18n-title="desktop.composer.stopTitle" hidden></button>
+          <button id="chatSend" data-i18n-title="desktop.composer.sendTitle">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
           </button>
         </div>
         <div class="composer-hints">
-          <span><b>Enter</b> gửi</span>
-          <span><b>Shift+Enter</b> dòng mới</span>
+          <span><b>Enter</b> <span data-i18n="desktop.composer.hintSend"></span></span>
+          <span><b>Shift+Enter</b> <span data-i18n="desktop.composer.hintNewline"></span></span>
           <span id="composerBrain">
-            <button id="cbNew" class="secondary" title="Bắt đầu hội thoại mới với Orchestra">Chat mới</button>
-            <select id="cbModel" title="Model Orchestra (brain)"></select>
+            <button id="cbNew" class="secondary" data-i18n="desktop.composer.newChat" data-i18n-title="desktop.newChat.title"></button>
+            <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
           </span>
         </div>
       </div>

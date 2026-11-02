@@ -16,6 +16,7 @@ import { createProviderStore } from './router/providers.js';
 import { startRouter } from './router/server.js';
 import type { FleetEvent, MapResult } from './types.js';
 import type { NodeType } from './brief.js';
+import { t, setLocale, detectLocale } from './i18n/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROTO = path.resolve(__dirname, '..');
@@ -68,7 +69,7 @@ async function cmdList(): Promise<void> {
 async function cmdSmoke(id: string, flags: Map<string, string[]>): Promise<number> {
   const m = getManifest(id);
   if (!m) {
-    console.error(`unknown worker: ${id} (có: ${MANIFESTS.map((x) => x.id).join(', ')})`);
+    console.error(t('cli.unknownWorkerList', { id, list: MANIFESTS.map((x) => x.id).join(', ') }));
     return 2;
   }
   console.log(`# smoke ${id} — prompt: "Reply with exactly: OK"`);
@@ -105,12 +106,12 @@ async function cmdSmoke(id: string, flags: Map<string, string[]>): Promise<numbe
 async function cmdRun(id: string, promptParts: string[], flags: Map<string, string[]>): Promise<number> {
   const m = getManifest(id);
   if (!m) {
-    console.error(`unknown worker: ${id}`);
+    console.error(t('cli.unknownWorker', { id }));
     return 2;
   }
   const prompt = promptParts.join(' ');
   if (!prompt) {
-    console.error('thiếu prompt: run <id> "<prompt>"');
+    console.error(t('cli.run.noPrompt'));
     return 2;
   }
   const sandbox = f1(flags, 'sandbox') === 'worktree-write' ? 'worktree-write' : 'read-only';
@@ -128,7 +129,7 @@ async function cmdRun(id: string, promptParts: string[], flags: Map<string, stri
 async function cmdReplay(id: string, fixturePath: string): Promise<number> {
   const m = getManifest(id);
   if (!m) {
-    console.error(`unknown worker: ${id}`);
+    console.error(t('cli.unknownWorker', { id }));
     return 2;
   }
   const lines = readFileSync(fixturePath, 'utf8').split(/\r?\n/).filter((l) => l.trim());
@@ -158,11 +159,11 @@ async function cmdReplay(id: string, fixturePath: string): Promise<number> {
 async function cmdDispatch(repo: string, goalParts: string[], flags: Map<string, string[]>): Promise<number> {
   const goal = goalParts.join(' ');
   if (!goal) {
-    console.error('dùng: dispatch <repo> "<goal>" --node implement --role coder --scope "src/payment/**"');
+    console.error(t('cli.dispatch.usage'));
     return 2;
   }
   if (!existsSync(repo)) {
-    console.error(`repo không tồn tại: ${repo}`);
+    console.error(t('cli.repoMissing', { repo }));
     return 2;
   }
   const node = (f1(flags, 'node') ?? 'implement') as NodeType;
@@ -187,7 +188,7 @@ async function cmdDispatch(repo: string, goalParts: string[], flags: Map<string,
     console.log(`worker: ${(rec.routing as any)?.pick ?? rec.brief?.worker} · model=${(rec.routing as any)?.model ?? '(default)'} (${(rec.routing as any)?.reason})`);
     console.log(`worktree: ${(rec.worktree as any)?.path}`);
     console.log(`run: exit=${(rec.run as any).exit} killed=${(rec.run as any).killed} ${(rec.run as any).duration_ms}ms unmapped=${(rec.run as any).unmapped_lines}`);
-    console.log(`files_changed: ${((rec.artifacts as any)?.files_changed ?? []).join(', ') || '(không)'}`);
+    console.log(`files_changed: ${((rec.artifacts as any)?.files_changed ?? []).join(', ') || t('cli.none')}`);
     const sc = rec.scope_check as any;
     console.log(`scope_check: ${sc.ok ? 'PASS' : 'VIOLATION'}${sc.violations.length ? ' → ' + sc.violations.map((x: any) => x.file).join(', ') : ''}`);
     if (rec.usage) console.log(`usage: in=${(rec.usage as any).tokens_in} out=${(rec.usage as any).tokens_out} usd=${(rec.usage as any).usd}`);
@@ -199,7 +200,7 @@ async function cmdDispatch(repo: string, goalParts: string[], flags: Map<string,
 async function cmdTasks(repo: string): Promise<number> {
   const dir = path.join(path.resolve(repo), '.orchestra', 'tasks');
   if (!existsSync(dir)) {
-    console.log('(chưa có task record nào)');
+    console.log(t('cli.tasks.empty'));
     return 0;
   }
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.json')).sort()) {
@@ -213,7 +214,10 @@ async function cmdTasks(repo: string): Promise<number> {
 }
 
 async function main(): Promise<number> {
-  const [, , cmd, ...rest] = process.argv;
+  const argv = process.argv.slice(2);
+  const li = argv.indexOf('--lang');
+  setLocale(detectLocale(li >= 0 ? argv.splice(li, 2)[1] : process.env.ORCHESTRA_LANG));
+  const [cmd, ...rest] = argv;
   const { flags, rest: args } = parseFlags(rest ?? []);
   switch (cmd) {
     case 'list':
@@ -231,7 +235,7 @@ async function main(): Promise<number> {
       const id = args[0] ?? '';
       const fixture = args[1] ?? '';
       if (!fixture) {
-        console.error('dùng: replay <id> <fixtures/xxx.jsonl>');
+        console.error(t('cli.replay.usage'));
         return 2;
       }
       return cmdReplay(id, fixture);
@@ -244,7 +248,7 @@ async function main(): Promise<number> {
       const repo = args[0] ?? '.';
       const goal = args.slice(1).join(' ');
       if (!goal) {
-        console.error('dùng: run-pipeline <repo> "<goal>" --scope "src/**" [--template templates/feature-dev.yml] [--yes] [--param k=v]');
+        console.error(t('cli.pipeline.usage'));
         return 2;
       }
       const tpl = f1(flags, 'template') ?? 'templates/feature-dev.yml';
@@ -305,28 +309,28 @@ async function main(): Promise<number> {
       const repo = path.resolve(args[0] ?? '.');
       const type = args[1] as FeedbackType;
       if (!type) {
-        console.error('dùng: feedback <repo> <user_edit_after_merge|verdict_rejected|task_reassigned|kill_misjudged|kb_correction|pipeline_modified> [--task id] [--worker w] [--detail d]');
+        console.error(t('cli.feedback.usage'));
         return 2;
       }
       addFeedback(repo, { type, taskId: f1(flags, 'task'), worker: f1(flags, 'worker'), detail: f1(flags, 'detail') });
-      console.log(`feedback ghi: ${type}`);
+      console.log(t('cli.feedback.saved', { type }));
       return 0;
     }
     case 'retro': {
       const repo = path.resolve(args[0] ?? '.');
       const dirName = f1(flags, 'dir') ?? 'tasks';
       const r = retrospective(repo, dirName, Number(f1(flags, 'min-sample') ?? 5));
-      console.log(`# retrospective — proposals KHÔNG tự apply (M1)`);
+      console.log(t('cli.retro.header'));
       for (const p of r.kbProposals) console.log(`  KB proposal: ${p}`);
       for (const p of r.policyProposals) console.log(`  Policy proposal: ${p}`);
-      if (!r.kbProposals.length && !r.policyProposals.length) console.log('  (không có đề xuất đủ điều kiện)');
+      if (!r.kbProposals.length && !r.policyProposals.length) console.log(`  ${t('cli.retro.none')}`);
       return 0;
     }
     case 'conformance': {
       const id = args[0] ?? 'claude';
       const m = getManifest(id);
       if (!m) {
-        console.error(`unknown worker: ${id}`);
+        console.error(t('cli.unknownWorker', { id }));
         return 2;
       }
       const repo = path.resolve(f1(flags, 'repo') ?? '.');
@@ -340,7 +344,7 @@ async function main(): Promise<number> {
       const sub = args[0];
       if (sub === 'list') {
         for (const p of vaultList()) console.log(`  ${p} (configured)`);
-        if (!vaultList().length) console.log('  (vault trống)');
+        if (!vaultList().length) console.log(`  ${t('cli.vault.empty')}`);
         return 0;
       }
       if (sub === 'set') {
@@ -348,65 +352,62 @@ async function main(): Promise<number> {
         const secret = args[2];
         const baseUrl = args[3]; // P6.4: custom provider — ví dụ https://gateway.example.com/v1
         if (!provider || !secret) {
-          console.error('dùng: vault set <provider> <secret> [base_url]  (lưu DPAPI CurrentUser, không ra plaintext)');
+          console.error(t('cli.vault.setUsage'));
           return 2;
         }
-        console.log(vaultSet(provider, secret, baseUrl) ? `✓ ${provider} lưu trong vault${baseUrl ? ` (base_url: ${baseUrl})` : ''}` : '✗ lưu thất bại');
+        console.log(vaultSet(provider, secret, baseUrl) ? `✓ ${t('cli.vault.saved', { provider })}${baseUrl ? ` (base_url: ${baseUrl})` : ''}` : `✗ ${t('cli.vault.saveFailed')}`);
         return vaultSet(provider, secret, baseUrl) ? 0 : 1;
       }
       if (sub === 'auth') {
         const id = args[1];
         const m = getManifest(id ?? '');
         if (!m) {
-          console.error('dùng: vault auth <id>  — hướng dẫn đăng nhập cho worker');
+          console.error(t('cli.vault.authUsage'));
           return 2;
         }
-        console.log(`# Đăng nhập cho ${m.display} (${m.id})`);
-        console.log(`  1. Chạy '${m.bin}' lần đầu trong terminal — CLI sẽ mở trình duyệt để OAuth (subscription)`);
-        console.log(`  2. Hoặc dùng provider của Orchestra router (~/.orchestra/router.json) — Desktop trỏ CLI vào router lúc spawn`);
-        console.log(`  3. Kiểm tra: node dist/cli.js list  (cột auth)`);
+        console.log(t('cli.vault.authGuide', { display: m.display, id: m.id, bin: m.bin }));
         return 0;
       }
       if (sub === 'get') {
         const provider = args[1];
         const s = provider ? vaultGet(provider) : null;
         if (!s) {
-          console.log('(không có hoặc lỗi giải mã)');
+          console.log(t('cli.vault.getNone'));
           return 1;
         }
-        console.log(`${provider}: ${s.slice(0, 4)}…${'*'.repeat(8)} (mask — chạy trong runner mới dùng full)`);
+        console.log(`${provider}: ${s.slice(0, 4)}…${'*'.repeat(8)} ${t('cli.vault.masked')}`);
         return 0;
       }
       if (sub === 'delete') {
         const provider = args[1];
-        console.log(provider && vaultDelete(provider) ? `✓ xoá ${provider}` : '✗ không tìm thấy');
+        console.log(provider && vaultDelete(provider) ? `✓ ${t('cli.vault.deleted', { provider })}` : `✗ ${t('cli.vault.notFound')}`);
         return 0;
       }
-      console.log('dùng: vault <list|set|get|delete> [provider] [secret]');
+      console.log(t('cli.vault.usage'));
       return 2;
     }
     case 'install': {
       const id = args[0] ?? '';
       const m = getManifest(id);
       if (!m) {
-        console.error(`unknown worker: ${id} (có: ${MANIFESTS.map((x) => x.id).join(', ')})`);
+        console.error(t('cli.unknownWorkerList', { id, list: MANIFESTS.map((x) => x.id).join(', ') }));
         return 2;
       }
       const s = checkStatus(m);
       if (s.installed) {
-        console.log(`${id} đã cài (${s.version ?? '?'}) — bỏ qua`);
+        console.log(t('cli.install.already', { id, version: s.version ?? '?' }));
         return 0;
       }
       const r = await installWorker(m, (line) => console.log(`  ${line}`));
       console.log(`${r.ok ? '✓' : '✗'} ${r.detail}`);
-      if (r.ok) console.log(`lưu ý: chạy '${m.bin}' lần đầu để login (auth OAuth không tự động được)`);
+      if (r.ok) console.log(t('cli.install.loginNote', { bin: m.bin }));
       return r.ok ? 0 : 1;
     }
     case 'uninstall': {
       const id = args[0] ?? '';
       const m = getManifest(id);
       if (!m) {
-        console.error(`unknown worker: ${id}`);
+        console.error(t('cli.unknownWorker', { id }));
         return 2;
       }
       const r = uninstallWorker(m);
@@ -416,7 +417,7 @@ async function main(): Promise<number> {
     case 'sync-skills': {
       const repo = path.resolve(args[0] ?? '.');
       const r = syncSkills(repo);
-      console.log(`✓ synced ${r.entries} KB entries (${r.pinned} pinned) → ${r.files.join(' + ')} tại ${repo}`);
+      console.log(`✓ ${t('cli.sync.done', { entries: r.entries, pinned: r.pinned, files: r.files.join(' + '), repo })}`);
       return 0;
     }
     case 'simulate': {
@@ -447,39 +448,17 @@ async function main(): Promise<number> {
           'utf8',
         );
       }
-      console.log(`đã ghi ${n} task records MÔ PHỎNG vào ${dir} (codex pass ~70%, claude ~95%)`);
+      console.log(t('cli.simulate.done', { n, dir }));
       return 0;
     }
     case 'router': {
       const store = createProviderStore();
       const r = await startRouter({ store, port: Number(f1(flags, 'port') ?? 0), defaultModel: f1(flags, 'default-model'), onLog: (l) => console.log(l) });
-      console.log(`router http://127.0.0.1:${r.port}  token=${r.token}  providers=${store.listProviders().map((p) => p.id).join(',') || '(chưa có — ~/.orchestra/router.json)'}`);
+      console.log(`router http://127.0.0.1:${r.port}  token=${r.token}  providers=${store.listProviders().map((p) => p.id).join(',') || t('cli.router.noProviders')}`);
       return new Promise<number>(() => {}); // chạy tới Ctrl+C
     }
     default:
-      console.log(`Orchestra prototype — P1 + P2
-
-  node dist/cli.js list                          trạng thái fleet
-  node dist/cli.js smoke <id> [--save-fixture]   smoke headless (Worker Protocol §10)
-  node dist/cli.js run <id> "<prompt>"           chạy 1 prompt, in event chuẩn JSONL
-  node dist/cli.js replay <id> <fixture>         phân tích stream đã ghi (offline)
-  node dist/cli.js dispatch <repo> "<goal>"      P2: resolve → worktree → brief → run →
-        --node plan|implement|... --role coder --scope "a/**,b/**"
-        --constraint c1,c2 --acceptance a1,a2 --worker <pin> --wall-ms n
-  node dist/cli.js run-pipeline <repo> "<goal>"  P3: chạy DSL template tự động
-        --scope "src/payment/**" --template templates/feature-dev.yml
-        --acceptance a1,a2 --yes (duyệt plan tự động) --param k=v
-  node dist/cli.js tasks <repo>                  danh sách task record (episodic-lite)
-  node dist/cli.js policy <repo>                 xem policy đã load + bindings (P4)
-  node dist/cli.js stats <repo> [--dir d]        fleet stats EMA + sync episodic.sqlite
-  node dist/cli.js feedback <repo> <type>...     ghi feedback event (user_edit_after_merge...)
-  node dist/cli.js retro <repo> [--dir d]        retrospective → proposals (không tự apply)
-  node dist/cli.js simulate <repo> <n>           ghi n task records mô phỏng (test stats/retro)
-  node dist/cli.js conformance <repo> <id>       Worker Protocol §10 — [--with-smoke] [--model m]
-  node dist/cli.js vault <list|set|get|delete>   credential vault DPAPI (key không qua LLM)
-  node dist/cli.js install <id>                  cài worker qua npm -g (P6.3)
-  node dist/cli.js uninstall <id>                gỡ worker
-  node dist/cli.js router [--port n] [--default-model p/m]  LLM proxy local (providers: ~/.orchestra/router.json)`);
+      console.log(t('cli.help'));
       return cmd ? 2 : 0;
   }
 }

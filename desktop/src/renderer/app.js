@@ -7,6 +7,20 @@ const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
+// ---------- i18n: dict desktop.* từ main (i18n:get); cùng ngữ nghĩa t() của prototype/src/i18n ----------
+let I18N = { locale: 'en', dict: {} };
+const t = (key, params) => {
+  const s = I18N.dict[key] ?? key;
+  return params ? s.replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m)) : s;
+};
+async function loadI18n() {
+  I18N = await api.invoke('i18n:get');
+  document.documentElement.lang = I18N.locale;
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+}
+
 let SETTINGS = null;
 let FLEET = [];
 let MODELS = { models: [], byWorker: {} };
@@ -51,12 +65,13 @@ const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
 
 function renderChrome() {
   // repo label (sidebar) + repo select (topbar)
-  document.getElementById('repoLabel').textContent = 'repo: ' + (repo() || '(chưa chọn)');
+  const notSel = `(${t('desktop.common.notSelected')})`;
+  document.getElementById('repoLabel').textContent = 'repo: ' + (repo() || notSel);
   const sel = $('#repoSel');
   if (sel && SETTINGS) {
     const cur = repo();
     sel.innerHTML = (SETTINGS.repos || []).map((r) => `<option ${r === cur ? 'selected' : ''}>${esc(r)}</option>`).join('')
-      || '<option>(chưa có — thêm ở Settings)</option>';
+      || `<option>${esc(t('desktop.repo.none'))}</option>`;
   }
   // fleet pill
   const pill = $('#fleetPill');
@@ -66,7 +81,7 @@ function renderChrome() {
   }
   // statusbar
   $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
-  $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || '(chưa chọn)');
+  $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || notSel);
   const stFleet = $('#stFleet');
   if (FLEET.length) {
     const n = fleetInstalled();
@@ -75,7 +90,7 @@ function renderChrome() {
   // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
   if (SETTINGS) {
     const cur = SETTINGS.brainModel;
-    $('#cbModel').innerHTML = '<option value="">(chọn model)</option>' + [...new Set([cur, ...BRAIN_MODELS].filter(Boolean))]
+    $('#cbModel').innerHTML = `<option value="">${esc(t('desktop.composer.pickModel'))}</option>` + [...new Set([cur, ...BRAIN_MODELS].filter(Boolean))]
       .map((id) => `<option value="${esc(id)}" ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
   }
 }
@@ -83,16 +98,17 @@ function renderChrome() {
 // ---------- Sessions (hội thoại đã lưu — click để resume) ----------
 const ago = (iso) => {
   const s = (Date.now() - Date.parse(iso)) / 1000;
-  return s < 60 ? 'vừa xong' : s < 3600 ? `${Math.floor(s / 60)} phút` : s < 86400 ? `${Math.floor(s / 3600)} giờ` : `${Math.floor(s / 86400)} ngày`;
+  return s < 60 ? t('desktop.time.now') : s < 3600 ? t('desktop.time.minutes', { n: Math.floor(s / 60) })
+    : s < 86400 ? t('desktop.time.hours', { n: Math.floor(s / 3600) }) : t('desktop.time.days', { n: Math.floor(s / 86400) });
 };
 async function loadSessions() {
   const box = $('#sideSessionList');
   const list = await api.invoke('chat:sessions');
   box.innerHTML = list.map((x) => `
-    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" title="${esc(`${x.title} — ${x.turns} lượt`)}">
+    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
       <span class="session-title">${esc(x.title)}</span>
       <span class="session-time">${esc(ago(x.updatedAt))}</span>
-    </div>`).join('') || '<div class="side-empty">Chưa có session</div>';
+    </div>`).join('') || `<div class="side-empty">${esc(t('desktop.sessions.empty'))}</div>`;
   box.querySelectorAll('[data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.session); });
 }
 let openedMsgs = null; // tin nhắn của session vừa mở — renderChat vẽ 1 lần
@@ -157,21 +173,21 @@ async function renderChat() {
     $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
     return d;
   };
-  add('greet', '◆ Orchestra sẵn sàng. Mô tả task — Orchestra tự khảo sát repo và giao việc cho worker.');
+  add('greet', t('desktop.chat.greet'));
   for (const m of openedMsgs ?? []) add(m.role, m.text);
   openedMsgs = null;
   const input = $('#chatInput');
   const send = async () => {
-    const t = input.value.trim();
-    if (!t) return;
+    const text = input.value.trim();
+    if (!text) return;
     input.value = '';
     input.style.height = 'auto';
-    add('user', t);
-    add('orch pending', '…đang xử lý');
+    add('user', text);
+    add('orch pending', t('desktop.chat.pending'));
     const stop = $('#chatStop');
     stop.hidden = false;
     try {
-      await api.invoke('chat:exchange', { text: t });
+      await api.invoke('chat:exchange', { text });
     } finally {
       stop.hidden = true;
       loadSessions();
@@ -232,37 +248,37 @@ async function renderDashboard() {
       <table><thead><tr><th></th><th>worker</th><th>version</th><th>auth</th><th>conformance</th></tr></thead>
       <tbody>${FLEET.map((f) => `<tr><td><span class="dot ${f.installed ? 'ok' : 'err'}"></span></td><td>${esc(f.id)}</td><td class="mono">${esc(f.version ?? '-')}</td><td>${esc(f.auth)}</td><td>${esc(f.conformance ?? '-')}</td></tr>`).join('')}</tbody>
       </table>
-      <button class="secondary" id="btnToWizard">Cài / cấu hình worker → Cài đặt</button>
+      <button class="secondary" id="btnToWizard">${esc(t('desktop.dash.toWizard'))}</button>
     </div>
     <div class="grid2">
       <div class="card"><h3>Dispatch task</h3>
-        <label>Goal</label><textarea id="dGoal" rows="2" placeholder="Thêm cổng thanh toán X theo pattern Y"></textarea>
-        <label>Scope (glob, phẩy cách)</label><input id="dScope" value="src/payment/**" />
+        <label>Goal</label><textarea id="dGoal" rows="2" placeholder="${esc(t('desktop.dash.goalPlaceholder'))}"></textarea>
+        <label>${esc(t('desktop.dash.scopeGlob'))}</label><input id="dScope" value="src/payment/**" />
         <label>Worker</label><select id="dWorker"><option value="">auto (Role Policy)</option>${FLEET.filter((f) => f.installed).map((f) => `<option>${esc(f.id)}</option>`).join('')}</select>
-        <label>Model</label><select id="dModel">${modelOptions('', '', '(theo policy)')}</select>
+        <label>Model</label><select id="dModel">${modelOptions('', '', t('desktop.dash.byPolicy'))}</select>
         <button id="dGo">Dispatch</button>
       </div>
       <div class="card"><h3>Run pipeline</h3>
         <label>Template</label><select id="pTpl"><option>feature-dev</option><option>hotfix</option></select>
         <label>Goal</label><textarea id="pGoal" rows="2"></textarea>
         <label>Scope</label><input id="pScope" value="src/payment/**" />
-        <label>Model (implement + fixer)</label><select id="pModel">${modelOptions('', '', '(theo policy)')}</select>
-        <button id="pGo">Chạy pipeline</button>
+        <label>Model (implement + fixer)</label><select id="pModel">${modelOptions('', '', t('desktop.dash.byPolicy'))}</select>
+        <button id="pGo">${esc(t('desktop.dash.runPipeline'))}</button>
       </div>
     </div>
-    <div class="card"><h3>Task records — ${TOP_N} mới nhất, click để xem trong Transcript</h3>
+    <div class="card"><h3>${esc(t('desktop.dash.tasksTitle', { n: TOP_N }))}</h3>
       <table><thead><tr><th>id</th><th>node</th><th>worker</th><th>exit</th><th>scope</th><th>files</th></tr></thead>
-      <tbody>${tasks.map((t, i) => `<tr class="click-row" data-i="${i}"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${t.files}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">chưa có</td></tr>'}</tbody>
+      <tbody>${tasks.map((k, i) => `<tr class="click-row" data-i="${i}"><td class="mono">${esc(k.id)}</td><td>${esc(k.node)}</td><td>${esc(k.worker)}</td><td>${k.exit ?? '-'}</td><td>${k.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${k.files}</td></tr>`).join('') || `<tr><td colspan="6" class="dim">${esc(t('desktop.common.none'))}</td></tr>`}</tbody>
       </table>
     </div>
     <div class="card" id="transcript"></div>`;
   renderTranscript($('#transcript'), tasks);
   if (openTranscript) { openTranscript = false; $('#transcript').scrollIntoView(); }
-  $('#dWorker').onchange = () => { $('#dModel').innerHTML = modelOptions($('#dWorker').value, '', '(theo policy)'); };
+  $('#dWorker').onchange = () => { $('#dModel').innerHTML = modelOptions($('#dWorker').value, '', t('desktop.dash.byPolicy')); };
   $('#btnToWizard').onclick = () => { settingsTab = 'workers'; location.hash = '#/settings'; };
   $('#dGo').onclick = async () => {
     const goal = $('#dGoal').value.trim();
-    if (!goal) return alert('Nhập goal');
+    if (!goal) return alert(t('desktop.dash.needGoal'));
     logLine('▶ dispatch: ' + goal);
     const r = await api.invoke('dispatch', { goal, scope: split($('#dScope').value), worker: $('#dWorker').value, model: $('#dModel').value });
     if (r.error) return logLine('✗ ' + r.error);
@@ -270,7 +286,7 @@ async function renderDashboard() {
   };
   $('#pGo').onclick = async () => {
     const goal = $('#pGoal').value.trim();
-    if (!goal) return alert('Nhập goal');
+    if (!goal) return alert(t('desktop.dash.needGoal'));
     logLine('▶ pipeline: ' + goal);
     const r = await api.invoke('pipeline:run', { template: $('#pTpl').value, goal, scope: split($('#pScope').value), model: $('#pModel').value });
     if (r.error) return logLine('✗ ' + r.error);
@@ -283,14 +299,14 @@ const TOP_N = 20;
 let openTranscript = false;
 // tasks: top-N mới nhất (main đã giới hạn); click row ở bảng Task records → chọn task cho transcript
 function renderTranscript(box, tasks) {
-  box.innerHTML = `<h3>Transcript</h3><div id="trSel" class="dim">click 1 task ở Task records để xem</div>
-    <h3>Live stream (mọi run)</h3><div id="log"></div>`;
+  box.innerHTML = `<h3>Transcript</h3><div id="trSel" class="dim">${esc(t('desktop.tr.hint'))}</div>
+    <h3>${esc(t('desktop.tr.live'))}</h3><div id="log"></div>`;
   page.querySelectorAll('.click-row[data-i]').forEach((el) => {
     el.onclick = () => {
-      const t = tasks[el.dataset.i];
+      const k = tasks[el.dataset.i];
       page.querySelectorAll('.click-row.sel').forEach((r) => r.classList.remove('sel'));
       el.classList.add('sel');
-      $('#trSel').textContent = `${t.id} — ${t.node}/${t.worker} exit=${t.exit ?? '-'} scope=${t.scopeOk ? 'OK' : 'VIOLATION'} files=${t.files}`;
+      $('#trSel').textContent = `${k.id} — ${k.node}/${k.worker} exit=${k.exit ?? '-'} scope=${k.scopeOk ? 'OK' : 'VIOLATION'} files=${k.files}`;
       box.scrollIntoView({ block: 'nearest' });
     };
   });
@@ -303,25 +319,25 @@ function renderTranscript(box, tasks) {
 async function renderMatrix(box) {
   const d = await api.invoke('matrix:data');
   if (!d) {
-    box.innerHTML = `<div class="card dim">Chưa chọn repo (hoặc repo không tồn tại) — thêm repo ở tab Chung.</div>`;
+    box.innerHTML = `<div class="card dim">${esc(t('desktop.mx.noRepo'))}</div>`;
     return;
   }
-  const stat = (c) => (c.ema !== null ? `ema ${c.ema.toFixed(2)} · n=${c.n}` : c.n ? `n=${c.n} (< ${d.minSample})` : 'chưa có số liệu');
+  const stat = (c) => (c.ema !== null ? `ema ${c.ema.toFixed(2)} · n=${c.n}` : c.n ? `n=${c.n} (< ${d.minSample})` : t('desktop.mx.noData'));
   const cell = (c, role) => (c
-    ? `<td><button class="mx-cell" data-role="${esc(role)}" data-cli="${esc(c.cli)}" title="${c.rank === 1 ? 'Đang #1' : 'Click = đưa lên #1 (ghi .orchestra/policy.yml)'}" ${c.rank === 1 ? 'disabled' : ''}>
+    ? `<td><button class="mx-cell" data-role="${esc(role)}" data-cli="${esc(c.cli)}" title="${esc(t(c.rank === 1 ? 'desktop.mx.isTop' : 'desktop.mx.promoteHint'))}" ${c.rank === 1 ? 'disabled' : ''}>
         <span class="mx-rank"><span class="dot ${c.rank === 1 ? 'ok' : ''}"></span>#${c.rank}${c.model ? ` <span class="mono dim">${esc(c.model)}</span>` : ''}</span><span class="mx-stat">${esc(stat(c))}</span></button></td>`
-    : '<td><span class="mx-none">không bind</span></td>');
+    : `<td><span class="mx-none">${esc(t('desktop.mx.unbound'))}</span></td>`);
   box.innerHTML = `
     <div class="card">
       <h3>Role × Worker</h3>
-      <div class="dim mx-src">policy: <span class="mono">${esc(d.source)}</span> ${d.errors.length ? `<span class="err">⚠ ${esc(d.errors.join('; '))}</span>` : '<span class="ok">— hợp lệ</span>'}</div>
+      <div class="dim mx-src">policy: <span class="mono">${esc(d.source)}</span> ${d.errors.length ? `<span class="err">⚠ ${esc(d.errors.join('; '))}</span>` : `<span class="ok">${esc(t('desktop.mx.valid'))}</span>`}</div>
       <table class="mx"><thead><tr><th>role</th>${d.workers.map((w) => `<th>${esc(w.display)}<div class="mx-id">${esc(w.id)}</div></th>`).join('')}</tr></thead>
       <tbody>${d.rows.map((r) => `<tr><td><b>${esc(r.role)}</b></td>${r.cells.map((c) => cell(c, r.role)).join('')}</tr>`).join('')}</tbody></table>
-      <div class="dim mx-hint">Click ô = đưa worker lên #1 cho role đó (ghi <span class="mono">.orchestra/policy.yml</span> — là diff review được).</div>
+      <div class="dim mx-hint">${t('desktop.mx.hint', { file: '<span class="mono">.orchestra/policy.yml</span>' })}</div>
     </div>
     <div class="card">
       <h3>Project KB (${d.kb.length})</h3>
-      ${d.kb.length ? `<table><thead><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th></th></tr></thead><tbody>${d.kb.map((e) => `<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.title)}</td><td class="mono">${esc(e.scope.join(', '))}</td><td>${esc(e.source)}</td><td>${e.pinned ? '📌' : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="dim">Chưa có mục KB.</div>'}
+      ${d.kb.length ? `<table><thead><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th></th></tr></thead><tbody>${d.kb.map((e) => `<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.title)}</td><td class="mono">${esc(e.scope.join(', '))}</td><td>${esc(e.source)}</td><td>${e.pinned ? '📌' : ''}</td></tr>`).join('')}</tbody></table>` : `<div class="dim">${esc(t('desktop.mx.noKb'))}</div>`}
     </div>`;
   box.querySelectorAll('.mx-cell:not([disabled])').forEach((b) => b.addEventListener('click', async () => {
     const r = await api.invoke('matrix:promote', { role: b.dataset.role, cli: b.dataset.cli });
@@ -336,26 +352,28 @@ async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const [s] = await Promise.all([loadSettings(), loadFleet()]);
-  const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
+  const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
   const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
     ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
   const isOAuth = (k) => k.startsWith('oauth-');
   const FORMATS = ['messages', 'chat', 'responses'];
   const pane = (id, html) => `<div class="tabpane" id="tab-${id}" ${settingsTab === id ? '' : 'hidden'}>${html}</div>`;
   page.innerHTML = `
-    <h2>Cài đặt</h2>
-    <div class="tabs">${TABS.map(([id, label]) => `<button class="tab ${settingsTab === id ? 'active' : ''}" data-tab="${id}">${label}</button>`).join('')}</div>
+    <h2>${esc(t('desktop.page.settings'))}</h2>
+    <div class="tabs">${TABS.map(([id, label]) => `<button class="tab ${settingsTab === id ? 'active' : ''}" data-tab="${id}">${esc(label)}</button>`).join('')}</div>
     ${pane('chung', `
       <div class="card">
-        <label>Repos (mỗi dòng 1 đường dẫn)</label>
+        <label>${esc(t('desktop.set.language'))}</label>
+        <select id="sLang">${['en', 'vi'].map((l) => `<option value="${l}" ${s.language === l ? 'selected' : ''}>${esc(t('desktop.lang.' + l))}</option>`).join('')}</select>
+        <label>${esc(t('desktop.set.repos'))}</label>
         <textarea id="sRepos" rows="4" class="mono">${esc(s.repos.join('\n'))}</textarea>
-        <label>Templates dir (để trống = mặc định)</label><input id="sTpl" value="${esc(s.templatesDir)}" />
-        <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> Tự duyệt plan (pipeline không dừng hỏi)</label>
+        <label>${esc(t('desktop.set.templatesDir'))}</label><input id="sTpl" value="${esc(s.templatesDir)}" />
+        <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> ${esc(t('desktop.set.autoApprove'))}</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
-        <label><input type="checkbox" id="sSync" ${s.skillSync ? 'checked' : ''}/> Skill-sync trước dispatch</label>
+        <label><input type="checkbox" id="sSync" ${s.skillSync ? 'checked' : ''}/> ${esc(t('desktop.set.skillSync'))}</label>
         <div class="row">
-          <button id="sSave">Lưu</button>
-          <button class="secondary" id="sUpdate">Kiểm tra bản cập nhật</button>
+          <button id="sSave">${esc(t('desktop.common.save'))}</button>
+          <button class="secondary" id="sUpdate">${esc(t('desktop.set.checkUpdate'))}</button>
           <span id="sUpdateOut" class="dim"></span>
         </div>
       </div>`)}
@@ -364,9 +382,9 @@ async function renderSettings() {
         <h3>Worker CLI (npm)</h3>
         ${FLEET.map((f) => `<div class="wizard-step">
           <span class="dot ${f.installed ? 'ok' : 'err'}"></span>
-          <div><b>${esc(f.display || f.id)}</b> <span class="mono dim">${esc(f.id)}</span> <span class="dim">· ${esc(f.installed ? f.version ?? 'đã cài' : 'chưa cài')}</span>
-            <div class="dim">${f.router ? 'Auth: qua Orchestra router' : 'chưa hỗ trợ router'}</div></div>
-          <button class="secondary" data-install="${esc(f.id)}">${f.installed ? 'Cài lại' : 'Cài'}</button>
+          <div><b>${esc(f.display || f.id)}</b> <span class="mono dim">${esc(f.id)}</span> <span class="dim">· ${esc(f.installed ? f.version ?? t('desktop.w.installed') : t('desktop.w.notInstalled'))}</span>
+            <div class="dim">${esc(t(f.router ? 'desktop.w.authRouter' : 'desktop.w.noRouter'))}</div></div>
+          <button class="secondary" data-install="${esc(f.id)}">${esc(t(f.installed ? 'desktop.w.reinstall' : 'desktop.w.install'))}</button>
         </div>`).join('')}
         <div id="log" style="margin-top:10px"></div>
       </div>`)}
@@ -374,49 +392,43 @@ async function renderSettings() {
       <div class="card">
         <h3>Orchestra Router — providers</h3>
         <div class="dim">Router: <span id="rStatus">…</span></div>
-        <table><thead><tr><th>id</th><th>kind</th><th>baseUrl</th><th>formats</th><th>bật</th><th>key</th><th></th></tr></thead>
+        <table><thead><tr><th>id</th><th>kind</th><th>baseUrl</th><th>formats</th><th>${esc(t('desktop.pr.colEnabled'))}</th><th>key</th><th></th></tr></thead>
         <tbody id="prRows"></tbody></table>
         <div class="row"><span id="prOut" class="dim"></span></div>
         <div class="row" id="prCodeRow" hidden>
-          <input id="prCode" placeholder="dán code#state từ trang Anthropic" autocomplete="off" />
-          <button id="prCodeOk">Xác nhận</button>
+          <input id="prCode" placeholder="${esc(t('desktop.pr.codePlaceholder'))}" autocomplete="off" />
+          <button id="prCodeOk">${esc(t('desktop.pr.confirm'))}</button>
         </div>
-        <label>Model mặc định của router (CLI gửi model không prefix)</label>
+        <label>${esc(t('desktop.pr.defaultModel'))}</label>
         <select id="rDefault"></select>
       </div>
       <div class="card">
-        <h3>Thêm / sửa provider</h3>
+        <h3>${esc(t('desktop.pr.addEdit'))}</h3>
         <div class="quick-add" id="prQuickKey"></div>
         <div class="side-title">OAuth</div>
         <div class="quick-add" id="prQuickOAuth"></div>
         <label>id</label><input id="prId" placeholder="my-gw" autocomplete="off" />
         <label>kind</label><select id="prKind">${KINDS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select>
         <div id="prRisk" class="risk" hidden>
-          <b>⚠ OAuth subscription — rủi ro</b>
-          <ul>
-            <li>Dùng token subscription ngoài client chính chủ có thể vi phạm điều khoản Anthropic/OpenAI → có thể bị chặn hoặc KHOÁ TÀI KHOẢN.</li>
-            <li>Router phải tự nhận là Claude Code/Codex CLI (client id + header/system prompt) — đây là giả danh client.</li>
-            <li>Refresh token xoay vòng: KHÔNG dùng chung phiên đăng nhập với codex/claude CLI trên máy (đăng nhập riêng cho Orchestra); dùng lại token cũ có thể đăng xuất toàn bộ phiên.</li>
-            <li>Token OAuth có quyền cấp tài khoản; lưu trong vault DPAPI (chỉ chống user khác trên máy).</li>
-            <li>Hạn mức subscription (5h/tuần) cạn nhanh khi chạy nhiều worker; endpoint không công khai, có thể hỏng khi CLI cập nhật.</li>
-          </ul>
-          <label><input type="checkbox" id="prRiskOk" /> Tôi hiểu rủi ro</label>
-          <label>Models (phân cách bằng dấu phẩy; trống = mặc định)</label><input id="prModels" autocomplete="off" />
+          <b>${esc(t('desktop.pr.riskTitle'))}</b>
+          <ul>${[1, 2, 3, 4, 5].map((i) => `<li>${esc(t('desktop.pr.risk' + i))}</li>`).join('')}</ul>
+          <label><input type="checkbox" id="prRiskOk" /> ${esc(t('desktop.pr.riskOk'))}</label>
+          <label>${esc(t('desktop.pr.models'))}</label><input id="prModels" autocomplete="off" />
         </div>
         <div id="prKeyed">
           <label>Base URL</label><input id="prUrl" placeholder="https://gw.company.com" />
-          <label>Formats upstream nói native</label>
+          <label>${esc(t('desktop.pr.formats'))}</label>
           <div class="row">${FORMATS.map((f) => `<label><input type="checkbox" data-fmt="${f}" /> ${f}</label>`).join('')}</div>
-          <label>API key (để trống = giữ key cũ)</label><input id="prKey" type="password" autocomplete="off" />
+          <label>${esc(t('desktop.pr.apiKey'))}</label><input id="prKey" type="password" autocomplete="off" />
         </div>
-        <label><input type="checkbox" id="prOn" checked /> Bật</label>
-        <button id="prSave">Lưu</button>
+        <label><input type="checkbox" id="prOn" checked /> ${esc(t('desktop.pr.enabled'))}</label>
+        <button id="prSave">${esc(t('desktop.common.save'))}</button>
       </div>`)}
     ${pane('conformance', `
       <div class="card">
         <h3>Conformance (Worker Protocol §10)</h3>
         <label>Worker</label><select id="cWorker">${FLEET.map((f) => `<option>${esc(f.id)}</option>`).join('')}</select>
-        <button id="cRun">Chạy conformance (smoke thật)</button>
+        <button id="cRun">${esc(t('desktop.cf.run'))}</button>
         <div id="cOut" class="dim" style="margin-top:8px"></div>
       </div>`)}
     ${pane('skills', `
@@ -428,10 +440,10 @@ async function renderSettings() {
     ${pane('matrix', '<div id="matrixBox"></div>')}`;
   renderMatrix($('#matrixBox'));
   // chuyển tab
-  page.querySelectorAll('.tab').forEach((t) => {
-    t.onclick = () => {
-      settingsTab = t.dataset.tab;
-      page.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
+  page.querySelectorAll('.tab').forEach((tb) => {
+    tb.onclick = () => {
+      settingsTab = tb.dataset.tab;
+      page.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === tb));
       TABS.forEach(([id]) => { const el = document.getElementById('tab-' + id); if (el) el.hidden = id !== settingsTab; });
     };
   });
@@ -448,16 +460,24 @@ async function renderSettings() {
     await api.invoke('settings:set', next);
     if (!next.activeRepo && next.repos[0]) await api.invoke('repo:set-active', next.repos[0]);
     await loadSettings();
-    alert('✓ đã lưu');
+    alert(t('desktop.common.saved'));
+    route();
+  };
+  // đổi ngôn ngữ → lưu ngay (main setLocale) + vẽ lại, không restart
+  $('#sLang').onchange = async (e) => {
+    SETTINGS = await api.invoke('settings:set', { ...SETTINGS, language: e.target.value });
+    await loadI18n();
+    renderChrome();
+    loadSessions();
     route();
   };
   $('#sUpdate').onclick = async () => {
-    $('#sUpdateOut').textContent = 'đang kiểm tra… (cần app đóng gói + GitHub Releases)';
+    $('#sUpdateOut').textContent = t('desktop.set.checking');
     on('update:status', (d) => {
-      $('#sUpdateOut').textContent = d.status === 'downloaded' ? `✓ v${d.version} đã tải — restart để cập nhật` : d.status;
+      $('#sUpdateOut').textContent = d.status === 'downloaded' ? t('desktop.set.updateReady', { version: d.version }) : d.status;
     });
     await api.invoke('update:check');
-    setTimeout(() => { if ($('#sUpdateOut')) $('#sUpdateOut').textContent += ' — nếu chưa publish Release thì đây là bình thường.'; }, 4000);
+    setTimeout(() => { if ($('#sUpdateOut')) $('#sUpdateOut').textContent += t('desktop.set.updateNote'); }, 4000);
   };
   // tab workers
   page.querySelectorAll('[data-install]').forEach((b) => {
@@ -478,7 +498,7 @@ async function renderSettings() {
     $('#prKeyed').hidden = o;
   };
   $('#prKind').onchange = syncKind;
-  // quick-add kiểu 9router: [kind, nhãn, id gợi ý, baseUrl mặc định, formats mặc định (= DEFAULT_FORMATS của router)]
+  // quick-add kiểu 9router: [kind, nhãn (tên riêng — không dịch), id gợi ý, baseUrl mặc định, formats mặc định (= DEFAULT_FORMATS của router)]
   const QUICK = [
     ['anthropic', '＋ Anthropic API', 'anthropic', 'https://api.anthropic.com', ['messages']],
     ['openai', '＋ OpenAI API', 'openai', 'https://api.openai.com', ['chat', 'responses']],
@@ -488,7 +508,7 @@ async function renderSettings() {
     ['oauth-openai', 'OpenAI Codex (ChatGPT Plus/Pro)', 'codex', '', ['responses']],
   ];
   const renderQuick = () => {
-    const btn = ([kind, label]) => `<button class="secondary" data-quick="${kind}">${esc(label)}<span class="dim">${PROVS.filter((p) => p.kind === kind).length} đã kết nối</span></button>`;
+    const btn = ([kind, label]) => `<button class="secondary" data-quick="${kind}">${esc(label)}<span class="dim">${esc(t('desktop.pr.connected', { n: PROVS.filter((p) => p.kind === kind).length }))}</span></button>`;
     $('#prQuickKey').innerHTML = QUICK.filter(([k]) => !isOAuth(k)).map(btn).join('');
     $('#prQuickOAuth').innerHTML = QUICK.filter(([k]) => isOAuth(k)).map(btn).join('');
     page.querySelectorAll('[data-quick]').forEach((b) => {
@@ -511,23 +531,23 @@ async function renderSettings() {
       };
     });
   };
-  const OAUTH_ST = { none: 'chưa đăng nhập', ok: 'đã đăng nhập', expired: 'hết hạn (tự refresh)', needsLogin: 'cần đăng nhập lại' };
+  const OAUTH_ST = ['none', 'ok', 'expired', 'needsLogin'];
   const refreshModels = async () => {
     await Promise.all([loadModels(), loadBrainModels()]);
     const cur = SETTINGS.routerDefaultModel;
-    $('#rDefault').innerHTML = `<option value="">(theo model Orchestra: ${esc(SETTINGS.brainModel || 'chưa chọn')})</option>` +
+    $('#rDefault').innerHTML = `<option value="">${esc(t('desktop.pr.defaultFollowBrain', { model: SETTINGS.brainModel || t('desktop.common.notSelected') }))}</option>` +
       MODELS.models.map((id) => `<option value="${esc(id)}" ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
   };
   const renderProviders = async () => {
     const [list, st] = await Promise.all([api.invoke('providers:list'), api.invoke('router:status')]);
     PROVS = list;
     renderQuick();
-    $('#rStatus').textContent = st.running ? `✓ 127.0.0.1:${st.port} · ${st.providers} provider` : '✗ không chạy';
+    $('#rStatus').textContent = st.running ? `✓ 127.0.0.1:${st.port} · ${st.providers} provider` : t('desktop.pr.notRunning');
     $('#prRows').innerHTML = list.map((p) => `<tr>
       <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}${isOAuth(p.kind) ? ' <span class="badge-risk">OAuth ⚠</span>' : ''}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
-      <td>${p.enabled ? '✓' : '—'}</td><td>${isOAuth(p.kind) ? `<span class="${p.oauthStatus === 'ok' ? 'ok' : 'warn'}">${esc(OAUTH_ST[p.oauthStatus] ?? p.oauthStatus)}</span>` : p.hasKey ? '✓' : '—'}</td>
-      <td>${isOAuth(p.kind) ? `<button class="secondary" data-plogin="${esc(p.id)}">Đăng nhập</button> ` : ''}<button class="secondary" data-pedit="${esc(p.id)}">Sửa</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">Xoá</button></td>
-    </tr>`).join('') || '<tr><td colspan="7" class="dim">chưa có provider — CLI dùng auth riêng</td></tr>';
+      <td>${p.enabled ? '✓' : '—'}</td><td>${isOAuth(p.kind) ? `<span class="${p.oauthStatus === 'ok' ? 'ok' : 'warn'}">${esc(OAUTH_ST.includes(p.oauthStatus) ? t('desktop.oauth.' + p.oauthStatus) : p.oauthStatus)}</span>` : p.hasKey ? '✓' : '—'}</td>
+      <td>${isOAuth(p.kind) ? `<button class="secondary" data-plogin="${esc(p.id)}">${esc(t('desktop.pr.login'))}</button> ` : ''}<button class="secondary" data-pedit="${esc(p.id)}">${esc(t('desktop.pr.edit'))}</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">${esc(t('desktop.pr.delete'))}</button></td>
+    </tr>`).join('') || `<tr><td colspan="7" class="dim">${esc(t('desktop.pr.empty'))}</td></tr>`;
     page.querySelectorAll('[data-pedit]').forEach((b) => {
       b.onclick = () => {
         const p = PROVS.find((x) => x.id === b.dataset.pedit);
@@ -546,30 +566,30 @@ async function renderSettings() {
       b.onclick = async () => {
         const id = b.dataset.plogin;
         const p = PROVS.find((x) => x.id === id);
-        $('#prOut').textContent = p.kind === 'oauth-openai' ? `đang chờ đăng nhập OpenAI trong trình duyệt (${id}, tối đa 5 phút)…` : `mở trình duyệt đăng nhập Claude (${id})…`;
+        $('#prOut').textContent = t(p.kind === 'oauth-openai' ? 'desktop.pr.waitOpenai' : 'desktop.pr.openClaude', { id });
         const r = await api.invoke('oauth:start', { id });
         if (!r.ok) { $('#prOut').textContent = `✗ ${r.error}`; return; }
         if (p.kind === 'oauth-anthropic') {
           oauthWaiting = id;
           $('#prCodeRow').hidden = false;
           $('#prCode').focus();
-          $('#prOut').textContent = `dán code#state hiện ở trang Anthropic vào ô bên dưới (${id})`;
+          $('#prOut').textContent = t('desktop.pr.pasteCode', { id });
         } else {
-          $('#prOut').textContent = `✓ ${id} đã đăng nhập`;
+          $('#prOut').textContent = t('desktop.pr.loggedIn', { id });
           await renderProviders();
         }
       };
     });
     page.querySelectorAll('[data-ptest]').forEach((b) => {
       b.onclick = async () => {
-        $('#prOut').textContent = `đang test ${b.dataset.ptest}…`;
+        $('#prOut').textContent = t('desktop.pr.testing', { id: b.dataset.ptest });
         const r = await api.invoke('providers:test', b.dataset.ptest);
         $('#prOut').textContent = r.ok ? `✓ ${b.dataset.ptest}: ${r.count} model` : `✗ ${b.dataset.ptest}: ${r.error}`;
       };
     });
     page.querySelectorAll('[data-pdel]').forEach((b) => {
       b.onclick = async () => {
-        if (!confirm(`Xoá provider '${b.dataset.pdel}' (cả key trong vault)?`)) return;
+        if (!confirm(t('desktop.pr.confirmDelete', { id: b.dataset.pdel }))) return;
         await api.invoke('providers:delete', b.dataset.pdel);
         await renderProviders();
       };
@@ -580,12 +600,12 @@ async function renderSettings() {
   $('#prCodeOk').onclick = async () => {
     const r = await api.invoke('oauth:finish', { id: oauthWaiting, code: $('#prCode').value.trim() });
     $('#prCode').value = '';
-    $('#prOut').textContent = r.ok ? `✓ ${oauthWaiting} đã đăng nhập` : `✗ ${r.error}`;
+    $('#prOut').textContent = r.ok ? t('desktop.pr.loggedIn', { id: oauthWaiting }) : `✗ ${r.error}`;
     if (r.ok) { $('#prCodeRow').hidden = true; await renderProviders(); }
   };
   $('#prSave').onclick = async () => {
     const kind = $('#prKind').value;
-    if (isOAuth(kind) && !$('#prRiskOk').checked) { $('#prOut').textContent = '✗ phải tick "Tôi hiểu rủi ro" trước khi lưu provider OAuth'; return; }
+    if (isOAuth(kind) && !$('#prRiskOk').checked) { $('#prOut').textContent = t('desktop.pr.needRisk'); return; }
     const cfg = isOAuth(kind)
       ? { id: $('#prId').value.trim(), kind, enabled: $('#prOn').checked, riskAcknowledged: true,
           models: $('#prModels').value.split(',').map((x) => x.trim()).filter(Boolean) }
@@ -599,7 +619,7 @@ async function renderSettings() {
     const key = isOAuth(kind) ? '' : $('#prKey').value;
     const r = await api.invoke('providers:save', { cfg, key: key || undefined });
     $('#prKey').value = '';
-    $('#prOut').textContent = r.ok ? `✓ đã lưu ${r.id}` : `✗ ${r.error}`;
+    $('#prOut').textContent = r.ok ? t('desktop.pr.saved', { id: r.id }) : `✗ ${r.error}`;
     if (r.ok) await renderProviders();
   };
   $('#rDefault').onchange = async (e) => {
@@ -607,7 +627,7 @@ async function renderSettings() {
   };
   // tab conformance
   $('#cRun').onclick = async () => {
-    $('#cOut').textContent = 'đang chạy (smoke thật, ~30-60s)…';
+    $('#cOut').textContent = t('desktop.cf.running');
     const r = await api.invoke('conformance:run', $('#cWorker').value);
     $('#cOut').innerHTML = (r.cases || []).map((c) => `<span class="${c.status === 'ok' ? 'ok' : 'err'}">[${c.status}]</span> ${esc(c.case)} — ${esc(c.detail)}`).join('<br>') + (r.detail ? `<br>${esc(r.detail)}` : '') + `<br><b>badge: ${esc(r.badge ?? '?')}</b>`;
     loadFleet();
@@ -627,14 +647,14 @@ async function renderTerminal() {
   page.classList.remove('fill');
   const s = await loadSettings();
   page.innerHTML = `
-    <h2>Terminal — ${esc(baseName(s.activeRepo) || 'repo active')}</h2>
+    <h2>Terminal — ${esc(baseName(s.activeRepo) || t('desktop.term.activeRepo'))}</h2>
     <div class="card" style="padding:8px">
       <pre id="term"></pre>
       <div class="chatbar" style="margin-top:8px">
-        <input id="termIn" placeholder="Gõ lệnh… (Enter)" autocomplete="off" />
-        <button class="secondary" id="termNew" style="margin-top:0">Session mới</button>
+        <input id="termIn" placeholder="${esc(t('desktop.term.placeholder'))}" autocomplete="off" />
+        <button class="secondary" id="termNew" style="margin-top:0">${esc(t('desktop.term.newSession'))}</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">Terminal nhúng chạy trong repo active — worker CLI có thể chạy trực tiếp tại đây.</div>
+      <div class="dim" style="font-size:10.5px;margin-top:6px">${esc(t('desktop.term.hint'))}</div>
     </div>`;
   const TERM_ID = 'main';
   const termEl = $('#term');
@@ -666,13 +686,13 @@ async function renderTerminal() {
   if (termSession === TERM_ID) await api.invoke('terminal:kill', TERM_ID); // vào lại trang → session mới, tránh pty cũ
   await create();
   termSession = TERM_ID;
-  termEl.textContent += 'Terminal sẵn sàng (powershell trong repo active).\r\n';
+  termEl.textContent += t('desktop.term.ready') + '\r\n';
   termIn.focus();
 }
 
 // ---------- router ----------
 // terminal: route giữ nguyên nhưng không có link trên UI — tạm ẩn theo yêu cầu
-const TITLES = { chat: 'Chat — Orchestrator', dashboard: 'Dashboard', terminal: 'Terminal', settings: 'Cài đặt' };
+const TITLES = { chat: () => 'Chat — Orchestrator', dashboard: () => 'Dashboard', terminal: () => 'Terminal', settings: () => t('desktop.page.settings') };
 const ROUTES = { chat: renderChat, dashboard: renderDashboard, terminal: renderTerminal, settings: renderSettings };
 function route() {
   let hash = (location.hash || '#/chat').replace('#/', '');
@@ -681,7 +701,7 @@ function route() {
   if (hash === 'matrix') { settingsTab = 'matrix'; location.hash = '#/settings'; return; } // Policy Matrix giờ là tab trong Cài đặt (hashchange → route lại)
   document.querySelectorAll('#sidebar a[data-page]').forEach((a) => a.classList.toggle('active', a.dataset.page === hash));
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
-  $('#pageTitle').textContent = TITLES[hash] || 'Orchestra';
+  $('#pageTitle').textContent = TITLES[hash]?.() || 'Orchestra';
   (ROUTES[hash] || renderChat)();
 }
 on('nav', (p) => { location.hash = '#/' + p; route(); });
@@ -689,6 +709,7 @@ window.addEventListener('hashchange', route);
 
 // ---------- init ----------
 (async () => {
+  await loadI18n(); // trước render đầu tiên
   await loadSettings();
   await Promise.all([loadFleet(), loadSessions(), loadModels(), loadBrainModels()]);
   route();
@@ -697,7 +718,7 @@ window.addEventListener('hashchange', route);
 // Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
-  const settings = { activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
+  const settings = { activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true, language: 'en' };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },
@@ -714,16 +735,17 @@ function devStub() {
     if (ch === 'settings:get') return settings;
     if (ch === 'fleet:list') return fleet;
     if (ch === 'tasks:list') return tasks;
-    if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw nói messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router dịch Responses→Chat/Messages)' }] } };
+    if (ch === 'i18n:get') return { locale: 'en', dict: {} }; // preview: hiện key
+    if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw speaks messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router translates Responses→Chat/Messages)' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
     if (ch === 'brain:models') return { models: ['gw/claude-opus'] };
     if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true },
       { id: 'cc', kind: 'oauth-anthropic', baseUrl: 'https://api.anthropic.com', formats: ['messages'], enabled: true, hasKey: false, riskAcknowledged: true, models: ['claude-sonnet-5-5'], oauthStatus: 'none', expiresAt: null }];
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
-    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Thêm cổng thanh toán X', updatedAt: new Date().toISOString(), turns: 2, active: false }];
-    if (ch === 'chat:open') return { ok: true, messages: [{ role: 'user', text: 'Thêm cổng thanh toán X' }, { role: 'orch', text: '(stub) session đã mở' }] };
+    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Add payment gateway X', updatedAt: new Date().toISOString(), turns: 2, active: false }];
+    if (ch === 'chat:open') return { ok: true, messages: [{ role: 'user', text: 'Add payment gateway X' }, { role: 'orch', text: '(stub) session opened' }] };
     if (ch === 'matrix:data') return { source: 'preview', errors: [], minSample: 10, workers: [{ id: 'claude', display: 'Claude Code' }], rows: [{ role: 'coder', cells: [{ cli: 'claude', rank: 1, model: null, n: 0, ema: null }] }], kb: [] };
-    if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
+    if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) received — running preview outside Electron.' })), 400);
     return { ok: true };
   };
   bus.invoke = reply;

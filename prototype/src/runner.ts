@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FleetEvent, HeadlessOpts, Manifest, RouterInfo } from './types.js';
 import { protoAsset } from './paths.js';
+import { t } from './i18n/index.js';
 import { changedFiles as gitChangedFiles, isGitRepo } from './worktree.js';
 
 // ---------- Supervisor Lớp 3 helpers (Worker Protocol §9b) ----------
@@ -157,7 +158,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   if (m.hooksSupport && opts.hooksEnabled !== false) {
     hookScript = resolveGuardHook();
     if (!hookScript) {
-      guardMissing = { t: 'error', worker: m.id, ts: new Date().toISOString(), code: 'guard_missing', detail: 'guard.cjs không tìm thấy — PreToolUse hook KHÔNG gắn' };
+      guardMissing = { t: 'error', worker: m.id, ts: new Date().toISOString(), code: 'guard_missing', detail: t('core.runner.guardMissing') };
     } else {
       extraEnv['ORCH_GUARD_ROOT'] = opts.cwd;
       if (opts.netOff) extraEnv['ORCH_GUARD_NET'] = 'off';
@@ -264,7 +265,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
         toolTargets.push(target);
         // Lớp 3 tín hiệu 3: livelock — kill + blocked event
         if (livelock.feed(String(e['tool'] ?? '?'), target)) {
-          events.push({ t: 'blocked', worker: m.id, ts: new Date().toISOString(), code: 'livelock_stuck', detail: `cùng tool_use lặp ≥5: ${target.slice(0, 120)}` });
+          events.push({ t: 'blocked', worker: m.id, ts: new Date().toISOString(), code: 'livelock_stuck', detail: t('core.runner.livelock', { target: target.slice(0, 120) }) });
           killTree(child, 'livelock_stuck');
         }
       }

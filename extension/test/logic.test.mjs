@@ -7,6 +7,7 @@ import { fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, promote
 
 // 0. default policy tìm được từ extension/out + modelsList (router R2a)
 const { loadPolicy } = await import('../out/prototype/src/policy.js');
+const { t } = await import('../out/prototype/src/i18n/index.js');
 assert.equal(loadPolicy().source, 'proto-default', 'loadPolicy từ out/');
 const { modelsList } = await import('../out/extension/src/logic.js');
 const ml = modelsList(['gw/opus', 'oa/gpt'], [
@@ -16,7 +17,7 @@ const ml = modelsList(['gw/opus', 'oa/gpt'], [
 const pick = (w, id) => ml.byWorker[w].find((m) => m.id === id);
 assert.deepEqual(ml.models, ['gw/opus', 'oa/gpt']);
 assert.ok(pick('claude', 'gw/opus').ok && pick('codex', 'oa/gpt').ok, 'claude+messages, codex+responses');
-assert.match(pick('codex', 'gw/opus').reason, /router dịch Responses/, 'codex + messages qua router dịch');
+assert.match(pick('codex', 'gw/opus').reason, /Responses/, 'codex + messages qua router dịch');
 assert.equal(pick('antigravity', 'gw/opus').ok, false, 'antigravity chưa hỗ trợ router');
 console.log('✓ proto-default từ out/ + modelsList byWorker');
 
@@ -40,7 +41,7 @@ const html = policyMatrixHtml();
 assert.ok(html.includes('<table'), 'matrix có bảng');
 assert.ok(html.includes('coder') && html.includes('planner'), 'matrix có roles');
 assert.ok(html.includes('kb-payment-module'), 'matrix có KB entry');
-assert.ok(html.includes('hợp lệ'), 'policy validate pass');
+assert.ok(html.includes(t('ext.mx.valid')), 'policy validate pass');
 console.log(`✓ matrix html: ${html.length} chars, có roles + KB + policy hợp lệ`);
 
 // 4. Mergeable tasks — branch chưa vào main (P5.2 Review & Merge)

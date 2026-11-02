@@ -1,139 +1,143 @@
-# Orchestra Desktop — E2E Gate checklist (chạy trên máy người dùng)
+# Orchestra Desktop — E2E Gate checklist (run on the user's machine)
 
-> Sandbox không mở được GUI — các mục [EYES] cần mắt bạn xác nhận. Mọi thứ build-level
-> đã tự động kiểm chứng (contract test 25 channels · installer boot check · native module unpacked).
+> English only (canonical).
+
+> The sandbox cannot open a GUI — items marked [EYES] need your eyes to confirm. Everything build-level
+> has been verified automatically (contract test 25 channels · installer boot check · native module unpacked).
 >
-> **KẾT QUẢ LƯU (01/11/2026)** — phần máy-verified đã chạy xong, chi tiết ở cuối file.
-> Còn lại đúng các mục [EYES] + publish Release.
+> **SAVED RESULTS (01/11/2026)** — the machine-verified part has been run, details at the end of the file.
+> Only the [EYES] items + publishing the Release remain.
 
-Chuẩn bị: `cd Orchestra/desktop && npm install && npm run build` (nếu chưa) — hoặc dùng installer tại
+Preparation: `cd Orchestra/desktop && npm install && npm run build` (if not done yet) — or use the installer at
 `desktop/release/Orchestra Desktop Setup 0.1.0.exe`.
 
-## G1. Cài + boot
-- [ ] Chạy `Orchestra Desktop Setup 0.1.0.exe` → Next → Install (SmartScreen: More info → Run anyway)
-- [ ] [EYES] App mở, sidebar có 7 mục: Dashboard/Chat/Terminal/Transcript/Matrix/Wizard/Settings
-- [ ] Đóng cửa sổ → app vẫn chạy ở tray (icon hệ thống) → tray click → mở lại
-- [ ] Wizard → Conformance: chọn claude → badge `pass` (case 1,2,3,4,7,8)
+## G1. Install + boot
+- [ ] Run `Orchestra Desktop Setup 0.1.0.exe` → Next → Install (SmartScreen: More info → Run anyway)
+- [ ] [EYES] App opens, sidebar has 7 items: Dashboard/Chat/Terminal/Transcript/Matrix/Wizard/Settings
+- [ ] Close the window → app keeps running in the tray (system icon) → click tray → reopens
+- [ ] Wizard → Conformance: choose claude → badge `pass` (cases 1,2,3,4,7,8)
 
-## G2. Dispatch E2E (gate chính của P-D1)
-- [ ] Settings → thêm repo (demo-repo hoặc repo thật có `.orchestra/`) → Set active
-- [ ] Dashboard → Dispatch: goal "Thêm cổng thanh toán X theo pattern", scope `src/payment/**`
-- [ ] [EYES] Live stream chạy: session → tool_use → tool_result → message → usage → done
-- [ ] Notification "Orchestra Dispatch ✓" xuất hiện; task record mới trong bảng + file `release/`… không — trong `.orchestra/tasks/` của repo
-- [ ] (Repo thật) Kiểm tra worktree + patch được tạo đúng
+## G2. Dispatch E2E (main gate of P-D1)
+- [ ] Settings → add a repo (demo-repo or a real repo with `.orchestra/`) → Set active
+- [ ] Dashboard → Dispatch: goal "Add payment gateway X following the pattern", scope `src/payment/**`
+- [ ] [EYES] Live stream runs: session → tool_use → tool_result → message → usage → done
+- [ ] "Orchestra Dispatch ✓" notification appears; new task record in the table + file in `release/`… no — in the repo's `.orchestra/tasks/`
+- [ ] (Real repo) Check that the worktree + patch are created correctly
 
 ## G3. Pipeline + modal approval (gate P-D2)
-- [ ] Run pipeline feature-dev, **tắt** autoApprovePlan trong Settings
-- [ ] [EYES] Node plan xong → **modal "Orchestra — chờ duyệt"** hiện → bấm Tiếp tục → pipeline chạy tiếp
-- [ ] Notification "Orchestra Pipeline" khi xong; verify gate tests.green/verdict trong stream
+- [ ] Run pipeline feature-dev, with autoApprovePlan **off** in Settings
+- [ ] [EYES] Plan node finishes → **"Orchestra — awaiting approval" modal** appears → click Continue → pipeline continues
+- [ ] "Orchestra Pipeline" notification when done; verify gate tests.green/verdict in the stream
 
 ## G4. Chat orchestrator
-- [ ] Chat: "trạng thái fleet?" → trả lời + có thể phát hành action
-- [ ] Chat: "thêm cổng XYZ vào shop" → dispatch action có scope tự xác định (P5.7)
-- [ ] Session giữ nguyên khi chat tiếp (nhớ ngữ cảnh)
+- [ ] Chat: "fleet status?" → answers + may issue actions
+- [ ] Chat: "add XYZ gateway to the shop" → dispatch action with self-determined scope (P5.7)
+- [ ] Session persists across follow-up chats (remembers context)
 
-## G5. Terminal nhúng (P-D3)
-- [ ] Terminal page → powershell mở trong repo active
-- [ ] Gõ `git status` → output stream real-time; `node --version` chạy được
-- [ ] Session mới / exit hoạt động
+## G5. Embedded terminal (P-D3)
+- [ ] Terminal page → powershell opens in the active repo
+- [ ] Type `git status` → output streams in real time; `node --version` works
+- [ ] New session / exit works
 
 ## G6. Vault + Auth
-- [ ] Wizard → Vault: lưu key + base_url custom provider → dispatch dùng gateway (usage.model phản ánh)
-- [ ] Auth: Login OAuth mở terminal → browser flow → Fleet auth cập nhật (codex: ok; claude: unknown — gap đã ghi)
+> Superseded by the router: providers (keys, base URLs, OAuth) are now configured in desktop Settings → Providers; the Wizard → Vault flow below reflects the gate as run at the time.
+- [ ] Wizard → Vault: save key + base_url for a custom provider → dispatch uses the gateway (usage.model reflects it)
+- [ ] Auth: OAuth Login opens a terminal → browser flow → Fleet auth updates (codex: ok; claude: unknown — gap recorded)
 
 ## G7. Auto-update wiring (P-D3)
-- [ ] Settings → "Kiểm tra bản cập nhật" → status `error`/`skipped` là **bình thường** (chưa publish GitHub Releases)
-- [ ] Sau khi publish Release (P7): notification "bản mới đã tải" — wiring sẵn
+- [ ] Settings → "Check for updates" → status `error`/`skipped` is **normal** (GitHub Releases not published yet)
+- [ ] After publishing a Release (P7): "new version downloaded" notification — already wired
 
-## Tiêu chí PASS
-G1–G6 xanh đầy = **Desktop E2E gate đạt** → P-D3 xong toàn bộ phần build được,
-còn: macOS/Linux builds, code signing, publish Release (P7).
+## PASS criteria
+G1–G6 all green = **Desktop E2E gate passed** → P-D3 done for everything buildable,
+remaining: macOS/Linux builds, code signing, publish Release (P7).
 
 ---
 
-# KẾT QUẢ ĐÃ CHẠY (máy-verified, 01/11/2026)
+# RESULTS (machine-verified, 01/11/2026)
 
-## G1 — cài + boot: **PASS (máy-verified)**
-- Silent install `/S` (NSIS): exit 0 → `%LOCALAPPDATA%\Programs\Orchestra Desktop\` có exe ✓
-  (lỗi đầu: instance installer cũ giữ mutex → crash 0xC0000005 — kill PID cũ rồi cài lại OK)
-- Boot **exe đã cài** (không phải win-unpacked): process sống 8s, kill sạch ✓
-- Conformance badge qua Wizard: đã PASS ở P6.4 (case 1,2,3,4,7,8 claude) ✓
-- [EYES] 7 mục sidebar hiển thị, tray icon hoạt động khi đóng cửa sổ
+## G1 — install + boot: **PASS (machine-verified)**
+- Silent install `/S` (NSIS): exit 0 → `%LOCALAPPDATA%\Programs\Orchestra Desktop\` contains the exe ✓
+  (first error: an old installer instance held the mutex → crash 0xC0000005 — killed the old PID and reinstalled OK)
+- Boot of the **installed exe** (not win-unpacked): process alive 8s, killed cleanly ✓
+- Conformance badge via Wizard: already PASSED in P6.4 (cases 1,2,3,4,7,8 claude) ✓
+- [EYES] 7 sidebar items displayed, tray icon works when the window is closed
 
-## G2 — Dispatch E2E: **PASS (headless qua đúng handler `IPC.DISPATCH`)**
-`test/e2e-headless.mjs` — dispatch thật bằng model:
-- events đủ: `session → tool_use → usage → done` ✓
-- record: scope_check=true, files_changed ghi, session id lưu ✓
-- [EYES] live stream widget + notification toast trên UI
+## G2 — Dispatch E2E: **PASS (headless via the actual `IPC.DISPATCH` handler)**
+`test/e2e-headless.mjs` — real dispatch with a model:
+- all events: `session → tool_use → usage → done` ✓
+- record: scope_check=true, files_changed recorded, session id saved ✓
+- [EYES] live stream widget + notification toast in the UI
 
 ## G3 — Pipeline + modal approval: **PASS (headless)**
-- `autoYes:false` + `askUser` injectable → pipeline **dừng hỏi thật** (`approvalAsked=true`)
-  rồi chạy tiếp tới **merge vào main** ✓
-- 5 node done: plan/implement/verify/review/merge_gate; gates tests.green + verdict.approved ✓
-- Transcript streaming: 12 dòng `onLog` ✓
-- [EYES] modal hiện trên màn hình (cùng callback — cơ chế đã chứng minh)
+- `autoYes:false` + injectable `askUser` → pipeline **really stops to ask** (`approvalAsked=true`)
+  then continues all the way to **merge into main** ✓
+- 5 nodes done: plan/implement/verify/review/merge_gate; gates tests.green + verdict.approved ✓
+- Transcript streaming: 12 `onLog` lines ✓
+- [EYES] modal shown on screen (same callback — mechanism proven)
 
 ## G4 — Chat: **PASS (headless)**
-- Real turn: phản hồi đúng vai + session id (nhớ hội thoại) ✓
+- Real turn: responds in the right role + session id (remembers the conversation) ✓
 
-## G5 — Terminal nhúng: **PASS (pty smoke thật)**
-- `@lydell/node-pty` prebuilt spawn cmd thật ✓; IPC 4 channels wired; native module unpacked ✓
-- [EYES] gõ lệnh trong page, stream màu
+## G5 — Embedded terminal: **PASS (real pty smoke)**
+- `@lydell/node-pty` prebuilt spawns a real cmd ✓; IPC 4 channels wired; native module unpacked ✓
+- [EYES] type commands in the page, colored stream
 
 ## G6 — Vault/Auth: **PASS (P6.4–P6.6)**
 - Vault v2 key+base_url roundtrip, resolveVaultEnv 2 env ✓; OAuth guided flow = [EYES]
+  (resolveVaultEnv is superseded by the router — providers live in desktop Settings → Providers)
 
 ## G7 — Auto-update: **WIRED, pending Release**
-- Updater guarded + `update:check` channel ✓; publish GitHub Releases (P7) sẽ kích hoạt
+- Updater guarded + `update:check` channel ✓; publishing GitHub Releases (P7) will activate it
 
 ## Verdict
-**Gate P-D1/P-D2: PASS ở mức máy-verified đầy đủ.** Còn [EYES] = xác nhận hình ảnh GUI
-(vì sandbox không render window) + publish Release (P7). E2E script chạy lại được bất cứ lúc nào:
+**Gate P-D1/P-D2: PASS at fully machine-verified level.** Remaining [EYES] = visual confirmation of the GUI
+(the sandbox does not render windows) + publish Release (P7). The E2E script can be re-run at any time:
 `cd Orchestra/desktop && node test/e2e-headless.mjs`
 
 ---
 
-# PHỤ LỤC (01/11/2026 — sau verdict)
+# APPENDIX (01/11/2026 — after the verdict)
 
-## Vì sao [EYES] không máy-verified được — BẰNG CHỨNG CHỐT HẠ
-Screenshot full-screen (PowerShell CopyFromScreen, DPI-aware) chụp được **màn hình khóa
-Windows** (avatar "Nitro V 15") — máy đang **locked** khi session chạy. GUI không thể render
-vào bộ nhớ màn hình khi locked. Đây là lý do vật lý, không phải giới hạn code. Script:
-`desktop/test/screenshot.ps1` — **máy unlocked, chạy lại là có ảnh từng page ngay**.
+## Why [EYES] could not be machine-verified — CONCLUSIVE EVIDENCE
+A full-screen screenshot (PowerShell CopyFromScreen, DPI-aware) captured the **Windows lock
+screen** (avatar "Nitro V 15") — the machine was **locked** while the session ran. The GUI cannot render
+into screen memory while locked. This is a physical reason, not a code limitation. Script:
+`desktop/test/screenshot.ps1` — **with the machine unlocked, re-running it captures every page right away**.
 
-## P7 khởi động — GitHub repo + Release LIVE
-- Repo: **github.com/datnp1003/Orchestra** (private) — 68 file source, .gitignore đúng
-  (fix 2 lần: node_modules → `.vscode-test` 1927 file là thủ phạm thật của 264MB)
+## P7 kickoff — GitHub repo + Release LIVE
+- Repo: **github.com/datnp1003/Orchestra** (private) — 68 source files, correct .gitignore
+  (fixed twice: node_modules → `.vscode-test` with 1927 files was the real culprit of the 264MB)
 - **Release v0.1.0 published**: assets `latest.yml` + `Orchestra.Desktop.Setup.0.1.0.exe` + blockmap
-- `desktop/package.json`: `repository` + `publish {github, owner, repo}` → **`latest.yml` sinh chuẩn**
-- **Auto-updater: LIVE** — lưu ý trung thực: repo đang **private** → updater chỉ auto-check trên
-  máy có GH_TOKEN; khi repo public (quyết định của user) thì mọi user nhận update
+- `desktop/package.json`: `repository` + `publish {github, owner, repo}` → **`latest.yml` generated correctly**
+- **Auto-updater: LIVE** — honest caveat: the repo is **private** → the updater only auto-checks on
+  machines with GH_TOKEN; once the repo is public (the user's decision) every user receives updates
 
-## Còn lại (ngoài session)
-1. [EYES] — unlock máy, chạy lại `desktop/test/screenshot.ps1` cho 6 page
-2. macOS/Linux builds + verify
+## Remaining (outside the session)
+1. [EYES] — unlock the machine, re-run `desktop/test/screenshot.ps1` for the 6 pages
+2. macOS/Linux builds + verification
 3. Code signing cert
-4. Repo public (để updater cho mọi user) + beta users
+4. Make the repo public (so the updater works for every user) + beta users
 
 ---
 
-# ✅ GATE CHỐT ĐÓNG (02/11/2026) — [EYES] G1–G6 ĐÃ CÓ BẰNG CHỨNG ẢNH
+# ✅ GATE CLOSED (02/11/2026) — [EYES] G1–G6 NOW HAVE SCREENSHOT EVIDENCE
 
-User unlock máy → **[EYES] G1–G6 HOÀN TẤT**: 6 page của app **đã cài** (v0.2.0) đều render
-đúng — bằng chứng là 6 ảnh PrintWindow capture trong `desktop/docs/e2e-shots/installed-020-*.png`
-(Dashboard · Chat · Terminal · Matrix · Wizard · Settings — Fleet hiện dữ liệu thật
+User unlocked the machine → **[EYES] G1–G6 COMPLETE**: all 6 pages of the **installed** app (v0.2.0) render
+correctly — evidenced by 6 PrintWindow captures in `desktop/docs/e2e-shots/installed-020-*.png`
+(Dashboard · Chat · Terminal · Matrix · Wizard · Settings — Fleet shows real data
 claude 2.1.310 / codex 0.164.0 / antigravity ✗).
 
-Chạy thật trên máy còn **bắt ra 3 bug runtime không thể thấy qua test thường** — đều đã fix:
+Running for real on the machine also **caught 3 runtime bugs invisible to regular tests** — all fixed:
 
 | # | Bug | Fix |
 |---|---|---|
-| 1 | App crash khi mở: `node:sqlite` không có trong Electron Node 20 (CLI chạy Node 24 nên test không gặp) | lazy `createRequire` + graceful degrade — episodic sqlite tắt tạm trên Electron, JSONL mirror vẫn chạy |
-| 2 | Không có window nào: `wireIpc` nhận nhầm `app` thay vì `ipcMain` (type-cast hack che mù TS) | truyền đúng `ipcMain` — window tạo thành công |
-| 3 | Renderer trắng: `desktopDir` tính sai trong asar + CSP `style-src` thiếu `'self'` | `app.getAppPath()` + CSP `style-src 'self' 'unsafe-inline'` + templates packaged |
+| 1 | App crashes on open: `node:sqlite` is not available in Electron's Node 20 (the CLI runs Node 24, so tests never hit it) | lazy `createRequire` + graceful degrade — episodic sqlite temporarily disabled on Electron, the JSONL mirror still runs |
+| 2 | No window at all: `wireIpc` received `app` instead of `ipcMain` (a type-cast hack blinded TS) | pass the correct `ipcMain` — window created successfully |
+| 3 | Blank renderer: `desktopDir` computed wrongly inside asar + CSP `style-src` missing `'self'` | `app.getAppPath()` + CSP `style-src 'self' 'unsafe-inline'` + packaged templates |
 
 **Repo PUBLIC + Release v0.2.0 published** → update feed `releases/latest/download/latest.yml`
-xác minh công khai báo `version: 0.2.0` (> 0.1.x đã cài) → **auto-updater LIVE end-to-end cho mọi user**.
+publicly verified to report `version: 0.2.0` (> installed 0.1.x) → **auto-updater LIVE end-to-end for every user**.
 
-Verdict cuối: **G1–G6 PASS (ảnh thật) · G7 PASS (feed công khai 0.2.0)** →
-Desktop E2E Gate **ĐÓNG**. Còn: npm/marketplace (tài khoản user) · macOS/Linux (máy khác).
+Final verdict: **G1–G6 PASS (real screenshots) · G7 PASS (public feed 0.2.0)** →
+Desktop E2E Gate **CLOSED**. Remaining: npm/marketplace (user accounts) · macOS/Linux (other machines).
