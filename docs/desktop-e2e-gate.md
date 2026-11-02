@@ -114,3 +114,26 @@ vào bộ nhớ màn hình khi locked. Đây là lý do vật lý, không phải
 2. macOS/Linux builds + verify
 3. Code signing cert
 4. Repo public (để updater cho mọi user) + beta users
+
+---
+
+# ✅ GATE CHỐT ĐÓNG (02/11/2026) — [EYES] G1–G6 ĐÃ CÓ BẰNG CHỨNG ẢNH
+
+User unlock máy → **[EYES] G1–G6 HOÀN TẤT**: 6 page của app **đã cài** (v0.2.0) đều render
+đúng — bằng chứng là 6 ảnh PrintWindow capture trong `desktop/docs/e2e-shots/installed-020-*.png`
+(Dashboard · Chat · Terminal · Matrix · Wizard · Settings — Fleet hiện dữ liệu thật
+claude 2.1.310 / codex 0.164.0 / antigravity ✗).
+
+Chạy thật trên máy còn **bắt ra 3 bug runtime không thể thấy qua test thường** — đều đã fix:
+
+| # | Bug | Fix |
+|---|---|---|
+| 1 | App crash khi mở: `node:sqlite` không có trong Electron Node 20 (CLI chạy Node 24 nên test không gặp) | lazy `createRequire` + graceful degrade — episodic sqlite tắt tạm trên Electron, JSONL mirror vẫn chạy |
+| 2 | Không có window nào: `wireIpc` nhận nhầm `app` thay vì `ipcMain` (type-cast hack che mù TS) | truyền đúng `ipcMain` — window tạo thành công |
+| 3 | Renderer trắng: `desktopDir` tính sai trong asar + CSP `style-src` thiếu `'self'` | `app.getAppPath()` + CSP `style-src 'self' 'unsafe-inline'` + templates packaged |
+
+**Repo PUBLIC + Release v0.2.0 published** → update feed `releases/latest/download/latest.yml`
+xác minh công khai báo `version: 0.2.0` (> 0.1.x đã cài) → **auto-updater LIVE end-to-end cho mọi user**.
+
+Verdict cuối: **G1–G6 PASS (ảnh thật) · G7 PASS (feed công khai 0.2.0)** →
+Desktop E2E Gate **ĐÓNG**. Còn: npm/marketplace (tài khoản user) · macOS/Linux (máy khác).
