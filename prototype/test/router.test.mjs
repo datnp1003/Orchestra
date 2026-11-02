@@ -1,0 +1,333 @@
+// Router R1 — fake upstream 127.0.0.1, không mạng ngoài, không DPAPI (keyFor inject)
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { startRouter } from '../dist/router/server.js';
+import { createProviderStore, normalizeProvider, authHeaders } from '../dist/router/providers.js';
+import { messagesToChatRequest, chatToMessagesRequest, ChatToMessagesStream, MessagesToChatStream } from '../dist/router/translate.js';
+
+const TOKEN = 'a'.repeat(64);
+const ANT_SSE = [
+  'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","model":"claude-x","usage":{"input_tokens":7,"output_tokens":0}}}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}\n\n',
+  'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_9","name":"calc","input":{}}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"a\\":"}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"1}"}}\n\n',
+  'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}\n\n',
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+].join('');
+const chunk = (delta, finish = null) => `data: ${JSON.stringify({ id: 'c1', model: 'gpt-x', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+const OAI_SSE = [
+  chunk({ role: 'assistant', content: '' }),
+  chunk({ content: 'Hi ' }),
+  chunk({ content: 'there' }),
+  chunk({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'calc', arguments: '' } }] }),
+  chunk({ tool_calls: [{ index: 0, function: { arguments: '{"x": [1,' } }] }),
+  chunk({ tool_calls: [{ index: 0, function: { arguments: ' 2], "y": "z"}' } }] }),
+  chunk({ tool_calls: [{ index: 1, id: 'call_2', type: 'function', function: { name: 'echo', arguments: '{}' } }] }),
+  chunk({}, 'tool_calls'),
+  `data: ${JSON.stringify({ id: 'c1', choices: [], usage: { prompt_tokens: 11, completion_tokens: 4 } })}\n\n`,
+  'data: [DONE]\n\n',
+].join('');
+
+function fakeUpstream(handler) {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : undefined;
+      seen.push({ method: req.method, url: req.url, headers: req.headers, body });
+      handler(req, res, body);
+    });
+  });
+  return new Promise((ok) => srv.listen(0, '127.0.0.1', () => ok({ srv, seen, url: `http://127.0.0.1:${srv.address().port}` })));
+}
+const json = (res, status, body) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+
+let ant, oai, router, router2, dir;
+const last = (up) => up.seen.at(-1);
+
+before(async () => {
+  ant = await fakeUpstream((req, res, body) => {
+    if (req.url === '/v1/models') return json(res, 200, { data: [{ id: 'claude-x' }] });
+    if (body?.model === 'rate') return json(res, 429, { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } });
+    if (body?.stream) return res.writeHead(200, { 'content-type': 'text/event-stream' }).end(ANT_SSE);
+    json(res, 200, { id: 'msg_2', type: 'message', model: body.model, content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 'tu_1', name: 'calc', input: { a: 1 } }], stop_reason: 'tool_use', usage: { input_tokens: 3, output_tokens: 2 } });
+  });
+  oai = await fakeUpstream((req, res, body) => {
+    if (req.url === '/v1/models') return json(res, 200, { data: [{ id: 'gpt-x' }, { id: 'org/m' }] });
+    if (body?.stream) return res.writeHead(200, { 'content-type': 'text/event-stream' }).end(OAI_SSE);
+    json(res, 200, { id: 'c2', model: body.model, choices: [{ message: { role: 'assistant', content: 'dùng tool', tool_calls: [{ id: 'call_7', type: 'function', function: { name: 'calc', arguments: '{"n":2}' } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 9, completion_tokens: 3 } });
+  });
+  dir = mkdtempSync(path.join(os.tmpdir(), 'orch-router-'));
+  const file = path.join(dir, 'router.json');
+  writeFileSync(file, JSON.stringify({ providers: [
+    { id: 'ant', kind: 'anthropic', baseUrl: `${ant.url}/v1/` },
+    { id: 'antc', kind: 'anthropic-compatible', baseUrl: ant.url },
+    { id: 'oai', kind: 'openai-compatible', baseUrl: oai.url },
+    { id: 'dead', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1' },
+    { id: 'off', kind: 'openai', baseUrl: oai.url, enabled: false },
+  ] }));
+  const store = createProviderStore({ file, keyFor: (id) => `KEY-${id}` });
+  router = await startRouter({ store, token: TOKEN, defaultModel: 'ant/claude-x' });
+  router2 = await startRouter({ store });
+});
+after(async () => {
+  await router.close();
+  await router2.close();
+  ant.srv.close();
+  oai.srv.close();
+});
+
+function call(p, { method = 'POST', body, headers = {}, r = router } = {}) {
+  return new Promise((ok, fail) => {
+    const req = http.request({ host: '127.0.0.1', port: r.port, path: p, method, headers: { authorization: `Bearer ${r.token}`, 'content-type': 'application/json', ...headers } }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (text += c));
+      res.on('end', () => ok({ status: res.statusCode, headers: res.headers, text, json: () => JSON.parse(text) }));
+    });
+    req.on('error', fail);
+    req.end(body === undefined ? undefined : JSON.stringify(body));
+  });
+}
+const sseEvents = (text) => text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+const MSG = { max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] };
+
+test('auth: thiếu/sai token → 401, x-api-key đúng → qua; Host lạ → 403', async () => {
+  assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: '' } })).status, 401);
+  assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: 'Bearer nope' } })).status, 401);
+  assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: '', 'x-api-key': TOKEN } })).status, 200);
+  assert.equal((await call('/v1/models', { method: 'GET', headers: { host: 'evil.test' } })).status, 403);
+  assert.equal(router2.token.length, 64);
+  assert.notEqual(router2.token, TOKEN);
+});
+
+test('/v1/models: union có prefix, provider chết → header lỗi, disabled bị bỏ', async () => {
+  const r = await call('/v1/models', { method: 'GET' });
+  assert.equal(r.status, 200);
+  const ids = r.json().data.map((m) => m.id).sort();
+  assert.deepEqual(ids, ['ant/claude-x', 'antc/claude-x', 'oai/gpt-x', 'oai/org/m']);
+  assert.equal(r.json().data.find((m) => m.id === 'oai/gpt-x').owned_by, 'oai');
+  assert.equal(r.headers['x-orchestra-model-errors'], '1');
+});
+
+test('passthrough messages → anthropic: giữ ?beta=true, rewrite model, x-api-key, không lộ token', async () => {
+  const r = await call('/v1/messages?beta=true', { body: { ...MSG, model: 'ant/claude-x' }, headers: { 'anthropic-beta': 'b1', 'x-api-key': TOKEN } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json().content[0].text, 'ok');
+  const s = last(ant);
+  assert.equal(s.url, '/v1/messages?beta=true');
+  assert.equal(s.body.model, 'claude-x');
+  assert.equal(s.headers['x-api-key'], 'KEY-ant');
+  assert.equal(s.headers.authorization, undefined);
+  assert.equal(s.headers['anthropic-beta'], 'b1');
+  assert.ok(!JSON.stringify(s.headers).includes(TOKEN));
+
+  await call('/v1/messages', { body: { ...MSG, model: 'antc/claude-x' } });
+  assert.equal(last(ant).headers.authorization, 'Bearer KEY-antc');
+  assert.equal(last(ant).headers['x-api-key'], undefined);
+  assert.equal(last(ant).headers['anthropic-version'], '2023-06-01');
+  assert.ok(!JSON.stringify(last(ant).headers).includes(TOKEN));
+});
+
+test('passthrough stream: bytes y hệt upstream', async () => {
+  const r = await call('/v1/messages', { body: { ...MSG, model: 'ant/claude-x', stream: true } });
+  assert.equal(r.status, 200);
+  assert.match(r.headers['content-type'], /event-stream/);
+  assert.equal(r.text, ANT_SSE);
+});
+
+test('model không prefix → defaultModel; không có default → 400 model_not_found', async () => {
+  const r = await call('/v1/messages', { body: { ...MSG, model: 'claude-haiku-4-5' } });
+  assert.equal(r.status, 200);
+  assert.equal(last(ant).body.model, 'claude-x');
+  const r2 = await call('/v1/messages', { body: { ...MSG, model: 'nope/x' }, r: router2 });
+  assert.equal(r2.status, 400);
+  assert.equal(r2.json().error.type, 'model_not_found');
+});
+
+test('model upstream chứa "/" — tách ở "/" đầu', async () => {
+  await call('/v1/chat/completions', { body: { model: 'oai/org/m', messages: [{ role: 'user', content: 'x' }] } });
+  assert.equal(last(oai).body.model, 'org/m');
+});
+
+test('messages client → openai-compatible, non-stream: tool round trip', async () => {
+  const r = await call('/v1/messages', { body: {
+    model: 'oai/gpt-x', max_tokens: 50, system: [{ type: 'text', text: 'sys' }],
+    tools: [{ name: 'calc', description: 'd', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'tính' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_0', name: 'calc', input: { n: 1 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_0', content: '1' }] },
+    ],
+  } });
+  assert.equal(r.status, 200);
+  const s = last(oai);
+  assert.equal(s.url, '/v1/chat/completions');
+  assert.equal(s.headers.authorization, 'Bearer KEY-oai');
+  assert.deepEqual(s.body.messages.map((m) => m.role), ['system', 'user', 'assistant', 'tool']);
+  assert.equal(s.body.messages[2].tool_calls[0].function.arguments, '{"n":1}');
+  assert.equal(s.body.tools[0].function.name, 'calc');
+  const j = r.json();
+  assert.equal(j.type, 'message');
+  assert.equal(j.model, 'oai/gpt-x');
+  assert.equal(j.stop_reason, 'tool_use');
+  assert.deepEqual(j.content, [{ type: 'text', text: 'dùng tool' }, { type: 'tool_use', id: 'call_7', name: 'calc', input: { n: 2 } }]);
+  assert.deepEqual(j.usage, { input_tokens: 9, output_tokens: 3 });
+});
+
+test('messages client → openai-compatible, STREAM: text + tool_use input_json_delta', async () => {
+  const r = await call('/v1/messages', { body: { ...MSG, model: 'oai/gpt-x', stream: true } });
+  assert.equal(r.status, 200);
+  assert.equal(last(oai).body.stream, true);
+  const ev = sseEvents(r.text);
+  assert.equal(ev[0].type, 'message_start');
+  assert.equal(ev.at(-1).type, 'message_stop');
+  const text = ev.filter((e) => e.delta?.type === 'text_delta').map((e) => e.delta.text).join('');
+  assert.equal(text, 'Hi there');
+  const starts = ev.filter((e) => e.type === 'content_block_start');
+  assert.deepEqual(starts.map((e) => e.content_block.type), ['text', 'tool_use', 'tool_use']);
+  assert.equal(starts[1].content_block.name, 'calc');
+  const args = (idx) => ev.filter((e) => e.index === idx && e.delta?.type === 'input_json_delta').map((e) => e.delta.partial_json).join('');
+  assert.deepEqual(JSON.parse(args(starts[1].index)), { x: [1, 2], y: 'z' });
+  assert.deepEqual(JSON.parse(args(starts[2].index)), {});
+  assert.equal(ev.filter((e) => e.type === 'content_block_stop').length, 3);
+  const md = ev.find((e) => e.type === 'message_delta');
+  assert.equal(md.delta.stop_reason, 'tool_use');
+  assert.deepEqual(md.usage, { input_tokens: 11, output_tokens: 4 });
+});
+
+test('chat client → anthropic, non-stream', async () => {
+  const r = await call('/v1/chat/completions', { body: { model: 'ant/claude-x', messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'hi' }] } });
+  assert.equal(r.status, 200);
+  const s = last(ant);
+  assert.equal(s.url, '/v1/messages');
+  assert.equal(s.headers['x-api-key'], 'KEY-ant');
+  assert.equal(s.body.system, 's');
+  assert.equal(s.body.max_tokens, 4096);
+  const j = r.json();
+  assert.equal(j.object, 'chat.completion');
+  assert.equal(j.choices[0].message.content, 'ok');
+  assert.equal(j.choices[0].finish_reason, 'tool_calls');
+  assert.deepEqual(JSON.parse(j.choices[0].message.tool_calls[0].function.arguments), { a: 1 });
+  assert.equal(j.usage.total_tokens, 5);
+});
+
+test('chat client → anthropic, STREAM kết thúc bằng [DONE]', async () => {
+  const r = await call('/v1/chat/completions', { body: { model: 'ant/claude-x', stream: true, messages: [{ role: 'user', content: 'hi' }] } });
+  assert.equal(r.status, 200);
+  assert.ok(r.text.endsWith('data: [DONE]\n\n'));
+  const ch = sseEvents(r.text);
+  assert.equal(ch.map((c) => c.choices[0].delta.content ?? '').join(''), 'Hello');
+  const tc = ch.flatMap((c) => c.choices[0].delta.tool_calls ?? []);
+  assert.equal(tc[0].function.name, 'calc');
+  assert.deepEqual(JSON.parse(tc.map((t) => t.function.arguments).join('')), { a: 1 });
+  assert.equal(ch.at(-1).choices[0].finish_reason, 'tool_calls');
+  assert.deepEqual(ch.at(-1).usage, { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 });
+});
+
+test('responses → upstream chỉ chat → 400 unsupported_route; count_tokens không native → 404', async () => {
+  const r = await call('/v1/responses', { body: { model: 'oai/gpt-x', input: 'x' } });
+  assert.equal(r.status, 400);
+  assert.equal(r.json().error.type, 'unsupported_route');
+  assert.equal((await call('/v1/messages/count_tokens', { body: { model: 'oai/gpt-x', messages: [] } })).status, 404);
+});
+
+test('upstream 429 → pass status + body', async () => {
+  const r = await call('/v1/messages', { body: { ...MSG, model: 'ant/rate' } });
+  assert.equal(r.status, 429);
+  assert.equal(r.json().error.type, 'rate_limit_error');
+});
+
+test('body > 20 MB → 413', async () => {
+  const r = await call('/v1/messages', { body: { model: 'ant/claude-x', pad: 'x'.repeat(21 * 1024 * 1024) } });
+  assert.equal(r.status, 413);
+});
+
+// ───── unit: providers + translate ─────
+test('normalizeProvider + authHeaders', () => {
+  const p = normalizeProvider({ id: 'my-gw', kind: 'openai', baseUrl: 'https://gw.test/api/v1/' });
+  assert.equal(p.baseUrl, 'https://gw.test/api');
+  assert.deepEqual(p.formats, ['chat', 'responses']);
+  assert.equal(p.enabled, true);
+  assert.throws(() => normalizeProvider({ id: 'Bad_Id', kind: 'openai', baseUrl: 'https://x' }));
+  assert.throws(() => normalizeProvider({ id: 'x', kind: 'openai', baseUrl: 'file:///etc' }));
+  assert.deepEqual(authHeaders('anthropic', 'k'), { 'anthropic-version': '2023-06-01', 'x-api-key': 'k' });
+  assert.deepEqual(authHeaders('openai', 'k'), { authorization: 'Bearer k' });
+});
+
+test('messagesToChatRequest: system blocks, ảnh, tool_result is_error, tool_choice, thinking bỏ', () => {
+  const out = messagesToChatRequest({
+    system: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }],
+    stop_sequences: ['END'], temperature: 0.2, max_tokens: 9, tool_choice: { type: 'any' },
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: 'xem' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+        { type: 'image', source: { type: 'url', url: 'https://img.test/x.png' } },
+      ] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'tool_use', id: 't1', name: 'f', input: { q: 1 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: [{ type: 'text', text: 'boom' }] }, { type: 'text', text: 'sửa đi' }] },
+    ],
+  }, 'm');
+  assert.deepEqual(out.messages[0], { role: 'system', content: 'a\nb' });
+  assert.deepEqual(out.messages[1].content[1], { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } });
+  assert.equal(out.messages[1].content[2].image_url.url, 'https://img.test/x.png');
+  assert.deepEqual(out.messages[2], { role: 'assistant', content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'f', arguments: '{"q":1}' } }] });
+  assert.deepEqual(out.messages[3], { role: 'tool', tool_call_id: 't1', content: 'ERROR: boom' });
+  assert.deepEqual(out.messages[4], { role: 'user', content: 'sửa đi' });
+  assert.equal(out.tool_choice, 'required');
+  assert.deepEqual(out.stop, ['END']);
+  assert.equal(out.max_tokens, 9);
+});
+
+test('chatToMessagesRequest: data URL → base64, tool → tool_result gộp user, args hỏng → {}', () => {
+  const out = chatToMessagesRequest({
+    messages: [
+      { role: 'system', content: 's' },
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,QQ==' } }] },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', function: { name: 'f', arguments: '{bad' } }, { id: 'c2', function: { name: 'g', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'r1' },
+      { role: 'tool', tool_call_id: 'c2', content: 'r2' },
+    ],
+    stop: 'X', tool_choice: { type: 'function', function: { name: 'f' } },
+  }, 'm');
+  assert.equal(out.system, 's');
+  assert.deepEqual(out.messages[0].content[0].source, { type: 'base64', media_type: 'image/jpeg', data: 'QQ==' });
+  assert.deepEqual(out.messages[1].content[0].input, {});
+  assert.equal(out.messages.length, 3);
+  assert.deepEqual(out.messages[2].content.map((b) => b.tool_use_id), ['c1', 'c2']);
+  assert.deepEqual(out.stop_sequences, ['X']);
+  assert.deepEqual(out.tool_choice, { type: 'tool', name: 'f' });
+});
+
+test('stream transformer chịu chunk cắt giữa dòng (CRLF) + end() tự đóng khi thiếu [DONE]', () => {
+  const t = new ChatToMessagesStream();
+  const src = OAI_SSE.replace(/\n/g, '\r\n');
+  let out = '';
+  for (const ch of src) out += t.push(ch);
+  out += t.end();
+  assert.equal(sseEvents(out).filter((e) => e.type === 'message_stop').length, 1);
+
+  const m = new MessagesToChatStream();
+  const cut = ANT_SSE.slice(0, ANT_SSE.indexOf('event: message_delta'));
+  const out2 = m.push(cut) + m.end();
+  assert.ok(out2.endsWith('data: [DONE]\n\n'));
+  assert.equal(sseEvents(out2).at(-1).choices[0].finish_reason, 'stop');
+});
+
+test('request đã dịch luôn có stream tường minh (upstream compat mặc định stream khi thiếu)', async () => {
+  const { messagesToChatRequest, chatToMessagesRequest } = await import('../dist/router/translate.js');
+  assert.equal(messagesToChatRequest({ messages: [{ role: 'user', content: 'x' }] }, 'm').stream, false);
+  assert.equal(chatToMessagesRequest({ messages: [{ role: 'user', content: 'x' }] }, 'm').stream, false);
+  assert.equal(messagesToChatRequest({ stream: true, messages: [{ role: 'user', content: 'x' }] }, 'm').stream, true);
+});

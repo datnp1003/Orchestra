@@ -12,6 +12,8 @@ import { retrospective } from './retro.js';
 import { runConformance } from './conformance.js';
 import { vaultSet, vaultGet, vaultList, vaultDelete } from './vault.js';
 import { syncSkills } from './skillsync.js';
+import { createProviderStore } from './router/providers.js';
+import { startRouter } from './router/server.js';
 import type { FleetEvent, MapResult } from './types.js';
 import type { NodeType } from './brief.js';
 
@@ -448,6 +450,12 @@ async function main(): Promise<number> {
       console.log(`đã ghi ${n} task records MÔ PHỎNG vào ${dir} (codex pass ~70%, claude ~95%)`);
       return 0;
     }
+    case 'router': {
+      const store = createProviderStore();
+      const r = await startRouter({ store, port: Number(f1(flags, 'port') ?? 0), defaultModel: f1(flags, 'default-model'), onLog: (l) => console.log(l) });
+      console.log(`router http://127.0.0.1:${r.port}  token=${r.token}  providers=${store.listProviders().map((p) => p.id).join(',') || '(chưa có — ~/.orchestra/router.json)'}`);
+      return new Promise<number>(() => {}); // chạy tới Ctrl+C
+    }
     default:
       console.log(`Orchestra prototype — P1 + P2
 
@@ -470,7 +478,8 @@ async function main(): Promise<number> {
   node dist/cli.js conformance <repo> <id>       Worker Protocol §10 — [--with-smoke] [--model m]
   node dist/cli.js vault <list|set|get|delete>   credential vault DPAPI (key không qua LLM)
   node dist/cli.js install <id>                  cài worker qua npm -g (P6.3)
-  node dist/cli.js uninstall <id>                gỡ worker`);
+  node dist/cli.js uninstall <id>                gỡ worker
+  node dist/cli.js router [--port n] [--default-model p/m]  LLM proxy local (providers: ~/.orchestra/router.json)`);
       return cmd ? 2 : 0;
   }
 }
