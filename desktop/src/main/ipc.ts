@@ -2,7 +2,7 @@
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
 import { app } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
-import { IPC, EVENTS, type AppSettings, type DispatchPayload } from './contract.js';
+import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshot, tasksSnapshot, policyMatrixHtml, promoteWorker, mergeableTasks, reviewMerge,
@@ -15,6 +15,8 @@ import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/
 import { vaultSet, vaultDelete } from '../../../prototype/src/vault.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
 import path from 'node:path';
+import os from 'node:os';
+import { existsSync } from 'node:fs';
 
 export interface IpcContext {
   win: () => BrowserWindow | null;
@@ -25,14 +27,20 @@ export interface IpcContext {
 
 export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const settings = () => loadSettings(ctx.settingsFile);
-  const activeRepo = (): string => {
-    const s = settings();
-    return s.activeRepo || s.repos[0] || '';
+  // chạy fn với repo hợp lệ; không có repo → fallback(lỗi) thay vì chạy trong process cwd
+  const withRepo = <T, F>(fn: (repo: string) => T, fallback: (err: string) => F): T | F => {
+    let repo: string;
+    try {
+      repo = requireRepo(settings());
+    } catch (e) {
+      return fallback((e as Error).message);
+    }
+    return fn(repo);
   };
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
 
   ipcMain.handle(IPC.APP_INFO, () => ({
-    version: process.env.npm_package_version ?? '0.1.0',
+    version: app.getVersion(),
     platform: process.platform,
     channels: Object.values(IPC),
   }));
@@ -56,18 +64,18 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
 
   ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
-  ipcMain.handle(IPC.TASKS_LIST, () => tasksSnapshot(activeRepo()));
-  ipcMain.handle(IPC.MATRIX_HTML, () => policyMatrixHtml(activeRepo()));
-  ipcMain.handle(IPC.PROMOTE, (_e, p: { role: string; cli: string }) => promoteWorker(activeRepo(), p.role, p.cli));
-  ipcMain.handle(IPC.REVIEW_LIST, () => mergeableTasks(activeRepo()));
+  ipcMain.handle(IPC.TASKS_LIST, () => withRepo(tasksSnapshot, () => []));
+  ipcMain.handle(IPC.MATRIX_HTML, () => withRepo((repo) => policyMatrixHtml(repo, true), () => ''));
+  ipcMain.handle(IPC.PROMOTE, (_e, p: { role: string; cli: string }) =>
+    withRepo((repo) => promoteWorker(repo, p.role, p.cli), (detail) => ({ ok: false, detail })));
+  ipcMain.handle(IPC.REVIEW_LIST, () => withRepo(mergeableTasks, () => []));
   ipcMain.handle(IPC.REVIEW_ACT, (_e, p: { taskId: string; action: 'merge' | 'reject' }) => {
-    const r = reviewMerge(activeRepo(), p.taskId, p.action);
+    const r = withRepo((repo) => reviewMerge(repo, p.taskId, p.action), (detail) => ({ ok: false, detail }));
     ctx.notify('Orchestra Review & Merge', r.detail);
     return r;
   });
 
-  ipcMain.handle(IPC.DISPATCH, async (_e, p: DispatchPayload) => {
-    const repo = activeRepo();
+  ipcMain.handle(IPC.DISPATCH, (_e, p: DispatchPayload) => withRepo(async (repo) => {
     const s = settings();
     const r = await dispatchTracked(repo, {
       node: 'implement',
@@ -83,10 +91,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     });
     ctx.notify('Orchestra Dispatch', `${r.result.ok ? '✓ OK' : '✗ FAILED'} — ${r.result.taskId}`);
     return r;
-  });
+  }, (error) => ({ error })));
 
-  ipcMain.handle(IPC.PIPELINE_RUN, async (_e, p: { template: string; goal: string; scope: string[]; acceptance?: string[] }) => {
-    const repo = activeRepo();
+  ipcMain.handle(IPC.PIPELINE_RUN, (_e, p: { template: string; goal: string; scope: string[]; acceptance?: string[] }) => withRepo(async (repo) => {
     const s = settings();
     const tplDir = s.templatesDir || path.join(ctx.protoDir, 'prototype', 'templates');
     const r = await runPipeline({
@@ -114,12 +121,19 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     });
     ctx.notify('Orchestra Pipeline', `${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} (merged=${r.merged})`);
     return { ok: r.ok, runId: r.runId, merged: r.merged, nodes: r.nodes };
-  });
+  }, (error) => ({ ok: false, error })));
 
   ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string }) => {
-    const s = settings();
-    const r = await chatExchangeFlow(activeRepo(), p.text, s, (m) => send(EVENTS.CHAT_MESSAGE, m));
-    return { session: r.session };
+    const notify = (m: unknown) => send(EVENTS.CHAT_MESSAGE, m);
+    try {
+      const r = await chatExchangeFlow(requireRepo(settings()), p.text, settings(), notify);
+      return { session: r.session };
+    } catch (err) {
+      // báo lỗi thành message — không để bubble '…đang xử lý' treo
+      const error = err instanceof Error ? err.message : String(err);
+      notify({ kind: 'result', text: `✗ ${error}` });
+      return { error };
+    }
   });
 
   ipcMain.handle(IPC.INSTALL_WORKER, async (_e, id: string) => {
@@ -142,9 +156,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   ipcMain.handle(IPC.CONFORMANCE_RUN, async (_e, id: string) => {
     const m = getManifest(id);
     if (!m) return { badge: 'fail', cases: [], detail: `unknown worker ${id}` };
-    return runConformance(m, { repo: activeRepo(), withSmoke: true });
+    return withRepo((repo) => runConformance(m, { repo, withSmoke: true }), (detail) => ({ badge: 'fail', cases: [], detail }));
   });
-  ipcMain.handle(IPC.SKILLS_SYNC, () => syncSkills(activeRepo()));
+  ipcMain.handle(IPC.SKILLS_SYNC, () => withRepo(syncSkills, (error) => ({ error })));
   // P-D3: update check — autoUpdater đã wired ở setupAutoUpdater; channel này trigger lại
   ipcMain.handle(IPC.UPDATE_CHECK, async () => {
     if (!app.isPackaged) return { status: 'skipped-dev' };
@@ -167,12 +181,14 @@ async function chatExchangeFlow(
   notify: (m: unknown) => void,
 ): Promise<{ session?: string }> {
   const { chatExchange } = await import('../../../extension/src/logic.js');
-  return chatExchange(repo, text, chatSession, {
+  const r = await chatExchange(repo, text, chatSession, {
     workerId: s.orchestratorWorker,
     notify: notify as never,
     hooksEnabled: s.hooksEnabled,
     skillSync: s.skillSync,
   });
+  chatSession = r.session ?? chatSession;
+  return r;
 }
 
 // giữ import MANIFESTS cho wizard (đếm worker chưa cài)
@@ -204,8 +220,11 @@ export function killAllTerminals(): void {
 export function wireTerminals(ipcMain: IpcMain, ctx: IpcContext): void {
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
   const activeRepo = (): string => {
-    const s = loadSettings(ctx.settingsFile);
-    return s.activeRepo || s.repos[0] || '';
+    try {
+      return requireRepo(loadSettings(ctx.settingsFile));
+    } catch {
+      return os.homedir(); // không có repo → home, không phải process cwd
+    }
   };
   ipcMain.handle(IPC.TERMINAL_CREATE, (_e, p: { id: string; cwd?: string; cols?: number; rows?: number }) => {
     const term = terminals.get(p.id);
@@ -215,7 +234,7 @@ export function wireTerminals(ipcMain: IpcMain, ctx: IpcContext): void {
       name: 'xterm',
       cols: p.cols ?? 100,
       rows: p.rows ?? 28,
-      cwd: p.cwd || activeRepo() || '.',
+      cwd: p.cwd && existsSync(p.cwd) ? p.cwd : activeRepo(),
       env: process.env as Record<string, string>,
     }) as unknown as PtyProc;
     terminals.set(p.id, proc);

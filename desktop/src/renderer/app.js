@@ -4,7 +4,7 @@ const api = window.orchestra ?? devStub(); // stub chỉ dùng khi chạy render
 const page = document.getElementById('page');
 const composerWrap = document.getElementById('composerWrap');
 const $ = (sel) => document.querySelector(sel);
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 let SETTINGS = null;
@@ -133,7 +133,7 @@ async function renderChat() {
   });
   on('chat:message', (m) => {
     const pending = $('#chatMsgs .pending');
-    if (m.kind === 'orch' && pending) pending.remove();
+    if (pending) pending.remove(); // kể cả 'result' lỗi (vd. chưa chọn repo)
     add(m.kind, m.text);
   });
   input.focus();
@@ -169,16 +169,18 @@ async function renderDashboard() {
     </div>
     <div class="card"><h3>Task records</h3>
       <table><thead><tr><th>id</th><th>node</th><th>worker</th><th>exit</th><th>scope</th><th>files</th></tr></thead>
-      <tbody>${tasks.map((t) => `<tr class="click-row" onclick="location.hash='#/transcript'"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${t.files}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">chưa có</td></tr>'}</tbody>
+      <tbody>${tasks.map((t) => `<tr class="click-row"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.scopeOk ? '<span class="ok">OK</span>' : '<span class="err">VIOLATION</span>'}</td><td>${t.files}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">chưa có</td></tr>'}</tbody>
       </table>
     </div>
     <div class="card"><h3>Live stream</h3><div id="log"></div></div>`;
+  page.querySelectorAll('.click-row').forEach((el) => { el.onclick = () => (location.hash = '#/transcript'); });
   $('#btnToWizard').onclick = () => { settingsTab = 'workers'; location.hash = '#/settings'; };
   $('#dGo').onclick = async () => {
     const goal = $('#dGoal').value.trim();
     if (!goal) return alert('Nhập goal');
     logLine('▶ dispatch: ' + goal);
     const r = await api.invoke('dispatch', { goal, scope: split($('#dScope').value), worker: $('#dWorker').value, model: $('#dModel').value.trim() });
+    if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.result.ok ? '✓ OK' : '✗ FAILED'} ${r.result.taskId}${r.override && r.override.startsWith('override') ? ' — ' + r.override : ''}`);
     loadSideTasks();
   };
@@ -187,6 +189,7 @@ async function renderDashboard() {
     if (!goal) return alert('Nhập goal');
     logLine('▶ pipeline: ' + goal);
     const r = await api.invoke('pipeline:run', { template: $('#pTpl').value, goal, scope: split($('#pScope').value) });
+    if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} merged=${r.merged}`);
     loadSideTasks();
   };
@@ -202,10 +205,11 @@ async function renderTranscript() {
   page.innerHTML = `
     <h2>Transcript</h2>
     <div class="card"><h3>Task records — click để xem JSON</h3>
-      <table><tbody>${tasks.map((t) => `<tr class="click-row" onclick="alert('${esc(t.id)} — ${esc(t.node)}/${esc(t.worker)} exit=${t.exit}')"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.files} file</td></tr>`).join('') || '<tr><td class="dim">chưa có record</td></tr>'}</tbody>
+      <table><tbody>${tasks.map((t) => `<tr class="click-row" data-info="${esc(`${t.id} — ${t.node}/${t.worker} exit=${t.exit}`)}"><td class="mono">${esc(t.id)}</td><td>${esc(t.node)}</td><td>${esc(t.worker)}</td><td>${t.exit ?? '-'}</td><td>${t.files} file</td></tr>`).join('') || '<tr><td class="dim">chưa có record</td></tr>'}</tbody>
       </table>
     </div>
     <div class="card"><h3>Live stream (mọi run)</h3><div id="log"></div></div>`;
+  page.querySelectorAll('[data-info]').forEach((el) => { el.onclick = () => alert(el.dataset.info); });
   on('dispatch:event', (d) => logLine(`[${d.t}] ${JSON.stringify(d.payload).slice(0, 160)}`));
   on('pipeline:log', (line) => logLine(line));
   on('install:log', (line) => logLine('[install] ' + line));
@@ -216,15 +220,21 @@ async function renderMatrix() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const html = await api.invoke('matrix:html');
-  page.innerHTML = `<h2>Policy Matrix</h2><div class="card" id="iframeWrap"><iframe srcdoc="${esc(html)}"></iframe></div>`;
-  // promote từ iframe: policyMatrixHtml tương thích host — postMessage lên parent
-  window.addEventListener('message', async (e) => {
-    const d = e.data || {};
-    if (d.kind === 'promote') {
-      const r = await api.invoke('matrix:promote', d);
+  if (!html) {
+    page.innerHTML = `<h2>Policy Matrix</h2><div class="card dim">Chưa chọn repo (hoặc repo không tồn tại) — thêm repo ở Cài đặt.</div>`;
+    return;
+  }
+  // <script> inline của policyMatrixHtml bị CSP chặn → bỏ; parent gắn click qua contentDocument (srcdoc cùng origin)
+  page.innerHTML = `<h2>Policy Matrix</h2><div class="card" id="iframeWrap"><iframe srcdoc="${esc(html.replace(/<script[\s\S]*?<\/script>/gi, ''))}"></iframe></div>`;
+  const frame = page.querySelector('iframe');
+  frame.addEventListener('load', () => {
+    frame.contentDocument.addEventListener('click', async (e) => {
+      const td = e.target.closest?.('td[data-role]');
+      if (!td) return;
+      const r = await api.invoke('matrix:promote', { role: td.dataset.role, cli: td.dataset.cli });
       if (!r.ok) alert(r.detail);
-      route();
-    }
+      renderMatrix();
+    });
   });
 }
 
@@ -354,13 +364,13 @@ async function renderSettings() {
   $('#cRun').onclick = async () => {
     $('#cOut').textContent = 'đang chạy (smoke thật, ~30-60s)…';
     const r = await api.invoke('conformance:run', $('#cWorker').value);
-    $('#cOut').innerHTML = (r.cases || []).map((c) => `<span class="${c.status === 'ok' ? 'ok' : 'err'}">[${c.status}]</span> ${esc(c.case)} — ${esc(c.detail)}`).join('<br>') + `<br><b>badge: ${r.badge ?? '?'}</b>`;
+    $('#cOut').innerHTML = (r.cases || []).map((c) => `<span class="${c.status === 'ok' ? 'ok' : 'err'}">[${c.status}]</span> ${esc(c.case)} — ${esc(c.detail)}`).join('<br>') + (r.detail ? `<br>${esc(r.detail)}` : '') + `<br><b>badge: ${esc(r.badge ?? '?')}</b>`;
     loadFleet();
   };
   // tab skills
   $('#skSync').onclick = async () => {
     const r = await api.invoke('skills:sync');
-    $('#skOut').textContent = `✓ ${r.entries} KB → ${r.files.join(' + ')}`;
+    $('#skOut').textContent = r.error ? '✗ ' + r.error : `✓ ${r.entries} KB → ${r.files.join(' + ')}`;
   };
   on('install:log', (line) => logLine(line));
 }

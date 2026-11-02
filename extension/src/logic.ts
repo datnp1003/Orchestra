@@ -265,7 +265,7 @@ export async function orchestratorTurn(
   return { text: texts.join('\n\n') || r.stderrTail || '(không có phản hồi)', session: r.session, rawLines: r.rawLines };
 }
 
-export async function executeAction(repo: string, a: OrchestraAction): Promise<string> {
+export async function executeAction(repo: string, a: OrchestraAction, opts: { hooksEnabled?: boolean; skillSync?: boolean } = {}): Promise<string> {
   switch (a.action) {
     case 'status': {
       const fleet = fleetSnapshot().map((f) => `${f.id}@${f.version ?? '?'}${f.installed ? '' : ' (chưa cài)'}`).join(', ');
@@ -287,8 +287,8 @@ export async function executeAction(repo: string, a: OrchestraAction): Promise<s
         acceptance: [],
         pin: a.worker && a.worker !== 'auto' ? a.worker : undefined,
         model: a.model,
-        hooksEnabled: true,
-        skillSync: true,
+        hooksEnabled: opts.hooksEnabled ?? true,
+        skillSync: opts.skillSync ?? true,
       });
       const files = r.result.record ? (r.result.record as Record<string, any>).artifacts?.files_changed ?? [] : [];
       return `dispatch ${r.result.ok ? 'OK' : 'FAILED'} ${r.result.taskId} worker=${r.result.record ? pickOf(r.result.record) : '?'} files=[${files.join(', ')}] record=${r.result.recordPath ?? ''}`;
@@ -343,7 +343,7 @@ export async function chatExchange(
   const results: string[] = [];
   for (const a of actions) {
     try {
-      results.push(await executeAction(repo, a));
+      results.push(await executeAction(repo, a, opts));
     } catch (err) {
       results.push(`${a.action} lỗi: ${err instanceof Error ? err.message : String(err)}`);
     }

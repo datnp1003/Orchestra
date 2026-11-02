@@ -1,5 +1,7 @@
 // IPC contract — thuần, KHÔNG import electron (unit test được bằng node thường)
 // Mỗi channel map 1:1 vào 1 hàm của logic.ts — Desktop không viết logic mới (plan §5)
+import { existsSync } from 'node:fs';
+
 export const IPC = {
   APP_INFO: 'app:info',
   SETTINGS_GET: 'settings:get',
@@ -75,6 +77,14 @@ export function validateSettings(raw: unknown): AppSettings {
     skillSync: r.skillSync !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
   };
+}
+
+/** repo active (hoặc repos[0]) — throw nếu trống/không tồn tại, tránh chạy trong process cwd */
+export function requireRepo(s: Pick<AppSettings, 'activeRepo' | 'repos'>): string {
+  const repo = s.activeRepo || s.repos[0] || '';
+  if (!repo) throw new Error('Chưa chọn repo — thêm repo ở Cài đặt');
+  if (!existsSync(repo)) throw new Error(`Repo không tồn tại: ${repo}`);
+  return repo;
 }
 
 /** payload types — renderer gửi đúng shape, main validate lại */
