@@ -2,12 +2,12 @@
 // Nguyên tắc giữ nguyên: router deterministic, log pick + reason (§1), agent đề xuất user chốt (§6)
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 import { MANIFESTS, getManifest } from './manifests.js';
 import { checkStatus } from './registry.js';
 import { buildFleetStats, statsKey, type FleetStat } from './memory.js';
 import { resolveModelFor } from './models.js';
+import { protoAsset } from './paths.js';
 
 export interface BindingDef {
   worker: { cli: string; model?: string };
@@ -48,8 +48,8 @@ export interface LoadedPolicy {
 export function loadPolicy(repo?: string): LoadedPolicy {
   const candidates: { p: string; source: string }[] = [];
   if (repo) candidates.push({ p: path.join(repo, '.orchestra', 'policy.yml'), source: 'project' });
-  const protoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url))); // dist/.. = prototype/
-  candidates.push({ p: path.join(protoDir, 'policy.yml'), source: 'proto-default' });
+  const def = protoAsset('policy.yml');
+  if (def) candidates.push({ p: def, source: 'proto-default' });
 
   for (const c of candidates) {
     if (existsSync(c.p)) {

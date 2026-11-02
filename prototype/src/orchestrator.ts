@@ -22,6 +22,8 @@ export interface RunPipelineOptions {
   onLog?: (line: string) => void;
   /** D1: callback hỏi user — Desktop/Extension inject (GUI không có stdin); mặc định readline */
   askUser?: (q: string) => Promise<string>;
+  /** model override cho implement + fixer — plan/verify/review giữ policy (cross-review độc lập) */
+  model?: string;
 }
 
 export interface NodeState {
@@ -157,7 +159,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
           repo: o.repo, node: 'implement', role: node.role ?? 'coder',
           goal: o.goal, scope,
           constraints: [], acceptance: o.acceptance ?? [],
-          excludeWorkers: exclude,
+          excludeWorkers: exclude, model: o.model,
           wallMs: node.budget?.minutes ? node.budget.minutes * 60_000 : 300_000,
           resumeSession: lastSessionByNode[node.id], // P6.2 — retry tiếp tục session cũ
         });
@@ -329,7 +331,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
           repo: o.repo, node: 'implement', role: 'fixer',
           goal: `Sửa theo feedback: ${res.reason ?? ''}`,
           scope: o.scope ?? [], constraints: [], acceptance: [],
-          reuseWorktree: implWt, wallMs: 240_000,
+          reuseWorktree: implWt, wallMs: 240_000, model: o.model,
           promptOverride: [
             `Feedback từ bước kiểm tra: "${lastMsgOf[nodeId] ?? res.reason ?? ''}"`,
             `Nhiệm vụ gốc: "${o.goal}". Phạm vi: ${(o.scope ?? []).join(', ')}.`,

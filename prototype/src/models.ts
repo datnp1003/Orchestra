@@ -5,9 +5,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 import { vaultStatus } from './vault.js';
+import { protoAsset } from './paths.js';
 
 export interface ModelDef {
   id: string;
@@ -27,8 +27,8 @@ export interface ModelRegistry {
 export function loadModels(repo?: string): { registry: ModelRegistry; source: string } {
   const candidates: { p: string; source: string }[] = [];
   if (repo) candidates.push({ p: path.join(repo, '.orchestra', 'models.yml'), source: 'project' });
-  const protoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  candidates.push({ p: path.join(protoDir, 'models.yml'), source: 'proto-default' });
+  const def = protoAsset('models.yml');
+  if (def) candidates.push({ p: def, source: 'proto-default' });
   for (const c of candidates) {
     if (existsSync(c.p)) {
       try {

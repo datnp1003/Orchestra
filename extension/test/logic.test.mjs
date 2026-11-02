@@ -5,6 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, promoteWorker, restoreDefaultPolicy, trackOverride, conformanceBadge } from '../out/extension/src/logic.js';
 
+// 0. default policy/models tìm được từ extension/out + modelsList
+const { loadPolicy } = await import('../out/prototype/src/policy.js');
+const { loadModels } = await import('../out/prototype/src/models.js');
+assert.equal(loadPolicy().source, 'proto-default', 'loadPolicy từ out/');
+assert.equal(loadModels().source, 'proto-default', 'loadModels từ out/');
+const { modelsList } = await import('../out/extension/src/logic.js');
+const ml = modelsList();
+const opus = (w) => ml.byWorker[w].find((m) => m.id === 'opus-4.6');
+assert.ok(opus('claude').ok && opus('claude').channel === 'native', 'claude+opus-4.6 native');
+assert.equal(opus('antigravity').ok, false, 'antigravity+opus-4.6 không phân phối');
+console.log('✓ proto-default từ out/ + modelsList byWorker');
+
 // 1. Fleet snapshot — CLI thật trên máy
 const fleet = fleetSnapshot();
 assert.ok(Array.isArray(fleet) && fleet.length >= 2, `fleet: ${JSON.stringify(fleet)}`);
@@ -47,7 +59,7 @@ assert.ok(htmlAfter.includes('policy source: <b>project</b>'), 'policy source ph
 assert.ok(existsSync(path.join(repo, '.orchestra', 'policy.yml')), 'policy.yml project được ghi');
 // yaml ghi ra phải có coder đứng claude trước codex
 const yamlText = readFileSync(path.join(repo, '.orchestra', 'policy.yml'), 'utf8');
-const coderSection = yamlText.split('coder:')[1]?.split(/\n  \w/)?.[0] ?? '';
+const coderSection = yamlText.split('bindings:')[1]?.split('coder:')[1]?.split(/\n  \w/)?.[0] ?? '';
 assert.ok(coderSection.indexOf('claude') < coderSection.indexOf('codex'), `bindings.coder phải claude trước codex: ${coderSection}`);
 restoreDefaultPolicy(repo); // cleanup — trả lại trạng thái proto-default
 console.log('✓ promoteWorker: cell click → policy.yml project ghi đúng thứ tự + source=project (đã cleanup)');

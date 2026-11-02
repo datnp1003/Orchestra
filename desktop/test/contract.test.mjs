@@ -20,7 +20,27 @@ assert.equal(v1.orchestratorWorker, 'claude', 'worker rỗng → default');
 assert.equal(v1.hooksEnabled, true, 'hooksEnabled mặc định true');
 const v2 = validateSettings(null);
 assert.deepEqual(v2, DEFAULT_SETTINGS, 'null → defaults');
+assert.equal(v1.orchestratorModel, '', 'model thiếu → mặc định CLI');
+assert.equal(validateSettings({ orchestratorModel: 'opus-4.6' }).orchestratorModel, 'opus-4.6', 'giữ model');
+assert.equal(validateSettings({ orchestratorModel: 42 }).orchestratorModel, '', 'model rác → mặc định');
+assert.ok(chans.includes('models:list'), 'có channel models:list');
 console.log('✓ validateSettings: filter + defaults đúng');
+
+// 2b. policy/models mặc định tìm được từ out/ (desktop + extension)
+for (const pkg of ['desktop', 'extension']) {
+  const base = new URL(`../../${pkg}/out/prototype/src/`, import.meta.url);
+  const { loadPolicy } = await import(new URL('policy.js', base));
+  const { loadModels } = await import(new URL('models.js', base));
+  assert.equal(loadPolicy().source, 'proto-default', `${pkg} loadPolicy`);
+  assert.equal(loadModels().source, 'proto-default', `${pkg} loadModels`);
+}
+const { modelsList } = await import('../out/extension/src/logic.js'); // desktop/out (rootDir ..)
+const ml = modelsList();
+const opus = (w) => ml.byWorker[w].find((m) => m.id === 'opus-4.6');
+assert.ok(ml.models.some((m) => m.id === 'opus-4.6' && m.family === 'anthropic'), 'registry có opus-4.6');
+assert.deepEqual([opus('claude').ok, opus('claude').channel], [true, 'native'], 'claude+opus native');
+assert.equal(opus('antigravity').ok, false, 'antigravity không chạy opus');
+console.log('✓ proto-default policy/models từ desktop/out + extension/out; modelsList byWorker đúng');
 
 // 3. settingsStore roundtrip
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'orch-set-'));

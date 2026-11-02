@@ -9,6 +9,7 @@ const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Bool
 
 let SETTINGS = null;
 let FLEET = [];
+let MODELS = { models: [], byWorker: {} };
 
 // ---------- event bus: đăng ký listener đúng 1 lần, route mới chỉ gắn handler ----------
 const handlers = {};
@@ -27,6 +28,17 @@ async function loadFleet() {
   FLEET = await api.invoke('fleet:list');
   renderChrome();
   return FLEET;
+}
+async function loadModels() {
+  MODELS = await api.invoke('models:list');
+  renderChrome();
+  return MODELS;
+}
+// <option> model: '' = mặc định; worker rỗng (auto) = toàn bộ registry; model worker không chạy được → disabled + lý do
+function modelOptions(worker, cur, defLabel) {
+  const list = worker ? MODELS.byWorker[worker] || [] : MODELS.models.map((m) => ({ id: m.id, ok: true, reason: `${m.family} · ${m.cost_tier ?? '-'}` }));
+  return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
+    `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
 const repo = () => SETTINGS?.activeRepo || '';
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
@@ -48,15 +60,20 @@ function renderChrome() {
     pill.innerHTML = `<span class="dot ${n === FLEET.length ? 'ok' : 'err'}"></span>${n}/${FLEET.length} workers`;
   }
   // statusbar
-  $('#stWorker').textContent = `worker: ${SETTINGS?.orchestratorWorker ?? '—'} (auto policy)`;
+  $('#stWorker').textContent = `worker: ${SETTINGS?.orchestratorWorker ?? '—'} · model: ${SETTINGS?.orchestratorModel || 'mặc định'}`;
   $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || '(chưa chọn)');
   const stFleet = $('#stFleet');
   if (FLEET.length) {
     const n = fleetInstalled();
     stFleet.innerHTML = `<span class="dot ${n ? 'ok' : 'err'}"></span> ${n}/${FLEET.length} workers`;
   }
-  const brain = $('#composerBrain');
-  if (brain) brain.textContent = `orchestrator: ${SETTINGS?.orchestratorWorker ?? '—'}`;
+  // composer: chọn worker + model cho orchestrator
+  if (SETTINGS) {
+    const w = SETTINGS.orchestratorWorker;
+    const ids = [...new Set([w, ...FLEET.filter((f) => f.installed).map((f) => f.id)])];
+    $('#cbWorker').innerHTML = ids.map((id) => `<option ${id === w ? 'selected' : ''}>${esc(id)}</option>`).join('');
+    $('#cbModel').innerHTML = modelOptions(w, SETTINGS.orchestratorModel, '(mặc định CLI)');
+  }
 }
 
 async function loadSideTasks() {
@@ -89,8 +106,21 @@ $('#repoSel').addEventListener('change', async (e) => {
   if (!r || r.startsWith('(')) return;
   await api.invoke('repo:set-active', r);
   await loadSettings();
+  await loadModels(); // models.yml của project có thể khác
   route(); // nạp lại trang hiện tại với repo mới
 });
+
+// đổi brain → lưu ngay (main reset chat session)
+async function setBrain(patch) {
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, ...patch });
+  renderChrome();
+}
+$('#cbWorker').addEventListener('change', (e) => {
+  const w = e.target.value;
+  const keep = (MODELS.byWorker[w] || []).some((m) => m.ok && m.id === SETTINGS.orchestratorModel);
+  setBrain({ orchestratorWorker: w, orchestratorModel: keep ? SETTINGS.orchestratorModel : '' });
+});
+$('#cbModel').addEventListener('change', (e) => setBrain({ orchestratorModel: e.target.value }));
 
 function logLine(s) {
   const el = $('#log');
@@ -157,13 +187,14 @@ async function renderDashboard() {
         <label>Goal</label><textarea id="dGoal" rows="2" placeholder="Thêm cổng thanh toán X theo pattern Y"></textarea>
         <label>Scope (glob, phẩy cách)</label><input id="dScope" value="src/payment/**" />
         <label>Worker</label><select id="dWorker"><option value="">auto (Role Policy)</option>${FLEET.filter((f) => f.installed).map((f) => `<option>${esc(f.id)}</option>`).join('')}</select>
-        <label>Model (để trống = theo policy)</label><input id="dModel" placeholder="worker-codex…" />
+        <label>Model</label><select id="dModel">${modelOptions('', '', '(theo policy)')}</select>
         <button id="dGo">Dispatch</button>
       </div>
       <div class="card"><h3>Run pipeline</h3>
         <label>Template</label><select id="pTpl"><option>feature-dev</option><option>hotfix</option></select>
         <label>Goal</label><textarea id="pGoal" rows="2"></textarea>
         <label>Scope</label><input id="pScope" value="src/payment/**" />
+        <label>Model (implement + fixer)</label><select id="pModel">${modelOptions('', '', '(theo policy)')}</select>
         <button id="pGo">Chạy pipeline</button>
       </div>
     </div>
@@ -174,12 +205,13 @@ async function renderDashboard() {
     </div>
     <div class="card"><h3>Live stream</h3><div id="log"></div></div>`;
   page.querySelectorAll('.click-row').forEach((el) => { el.onclick = () => (location.hash = '#/transcript'); });
+  $('#dWorker').onchange = () => { $('#dModel').innerHTML = modelOptions($('#dWorker').value, '', '(theo policy)'); };
   $('#btnToWizard').onclick = () => { settingsTab = 'workers'; location.hash = '#/settings'; };
   $('#dGo').onclick = async () => {
     const goal = $('#dGoal').value.trim();
     if (!goal) return alert('Nhập goal');
     logLine('▶ dispatch: ' + goal);
-    const r = await api.invoke('dispatch', { goal, scope: split($('#dScope').value), worker: $('#dWorker').value, model: $('#dModel').value.trim() });
+    const r = await api.invoke('dispatch', { goal, scope: split($('#dScope').value), worker: $('#dWorker').value, model: $('#dModel').value });
     if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.result.ok ? '✓ OK' : '✗ FAILED'} ${r.result.taskId}${r.override && r.override.startsWith('override') ? ' — ' + r.override : ''}`);
     loadSideTasks();
@@ -188,7 +220,7 @@ async function renderDashboard() {
     const goal = $('#pGoal').value.trim();
     if (!goal) return alert('Nhập goal');
     logLine('▶ pipeline: ' + goal);
-    const r = await api.invoke('pipeline:run', { template: $('#pTpl').value, goal, scope: split($('#pScope').value) });
+    const r = await api.invoke('pipeline:run', { template: $('#pTpl').value, goal, scope: split($('#pScope').value), model: $('#pModel').value });
     if (r.error) return logLine('✗ ' + r.error);
     logLine(`${r.ok ? '✓ OK' : '✗ FAILED'} ${r.runId} merged=${r.merged}`);
     loadSideTasks();
@@ -254,7 +286,7 @@ async function renderSettings() {
         <label>Repos (mỗi dòng 1 đường dẫn)</label>
         <textarea id="sRepos" rows="4" class="mono">${esc(s.repos.join('\n'))}</textarea>
         <label>Orchestrator worker (chat brain)</label>
-        <select id="sWorker"><option ${s.orchestratorWorker === 'claude' ? 'selected' : ''}>claude</option><option ${s.orchestratorWorker === 'codex' ? 'selected' : ''}>codex</option></select>
+        <select id="sWorker">${[...new Set([s.orchestratorWorker, 'claude', 'codex', ...FLEET.filter((f) => f.installed).map((f) => f.id)])].map((id) => `<option ${id === s.orchestratorWorker ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>
         <label>Templates dir (để trống = mặc định)</label><input id="sTpl" value="${esc(s.templatesDir)}" />
         <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> Tự duyệt plan (pipeline không dừng hỏi)</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
@@ -314,6 +346,7 @@ async function renderSettings() {
       ...s,
       repos: $('#sRepos').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
       orchestratorWorker: $('#sWorker').value,
+      orchestratorModel: $('#sWorker').value === s.orchestratorWorker ? s.orchestratorModel : '', // đổi worker → model về mặc định
       templatesDir: $('#sTpl').value.trim(),
       autoApprovePlan: $('#sAuto').checked,
       hooksEnabled: $('#sHooks').checked,
@@ -442,14 +475,14 @@ window.addEventListener('hashchange', route);
 // ---------- init ----------
 (async () => {
   await loadSettings();
-  await Promise.all([loadFleet(), loadSideTasks()]);
+  await Promise.all([loadFleet(), loadSideTasks(), loadModels()]);
   route();
 })();
 
 // Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
-  const settings = { activeRepo: repos[0], repos, orchestratorWorker: 'claude', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
+  const settings = { activeRepo: repos[0], repos, orchestratorWorker: 'claude', orchestratorModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true },
@@ -462,10 +495,12 @@ function devStub() {
   ];
   const listeners = {};
   const bus = { on: (ch, cb) => { (listeners[ch] ||= []).push(cb); } };
-  const reply = async (ch) => {
+  const reply = async (ch, p) => {
     if (ch === 'settings:get') return settings;
     if (ch === 'fleet:list') return fleet;
     if (ch === 'tasks:list') return tasks;
+    if (ch === 'models:list') return { models: [{ id: 'opus-4.6', family: 'anthropic', cost_tier: 'high' }], byWorker: { claude: [{ id: 'opus-4.6', ok: true, channel: 'native', reason: 'native' }] } };
+    if (ch === 'settings:set') return Object.assign(settings, p);
     if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
     return { ok: true };

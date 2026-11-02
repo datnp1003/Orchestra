@@ -47,6 +47,18 @@
         "filter": [
           "guard.cjs"
         ]
+      },
+      {
+        "from": "../prototype",
+        "to": "prototype",
+        "filter": [
+          "policy.yml",
+          "models.yml"
+        ]
+      },
+      {
+        "from": "../prototype/templates",
+        "to": "prototype/templates"
       }
     ],
     "asarUnpack": [

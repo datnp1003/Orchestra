@@ -3,7 +3,8 @@ import { MANIFESTS } from '../../prototype/src/manifests.js';
 import { checkStatus } from '../../prototype/src/registry.js';
 import { loadPolicy, resolveWorker, DEFAULT_BINDINGS, type PolicyFile } from '../../prototype/src/policy.js';
 import { buildFleetStats, loadKB, addFeedback, recallKB } from '../../prototype/src/memory.js';
-import { resolveModelFor } from '../../prototype/src/models.js';
+import { resolveModelFor, loadModels, type ModelChannel } from '../../prototype/src/models.js';
+import { protoAsset } from '../../prototype/src/paths.js';
 import { mergeBranch } from '../../prototype/src/worktree.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -17,6 +18,18 @@ export function fleetSnapshot(): { id: string; installed: boolean; version?: str
     const s = checkStatus(m);
     return { id: m.id, installed: s.installed, version: s.version, auth: s.auth };
   });
+}
+
+/** model registry + khả năng chạy từng model của từng worker (luật phân phối resolveModelFor) */
+export function modelsList(repo?: string): {
+  models: { id: string; family: string; cost_tier?: string }[];
+  byWorker: Record<string, { id: string; ok: boolean; channel: ModelChannel; reason: string }[]>;
+} {
+  const { registry } = loadModels(repo);
+  return {
+    models: registry.models.map(({ id, family, cost_tier }) => ({ id, family, cost_tier })),
+    byWorker: Object.fromEntries(MANIFESTS.map((m) => [m.id, registry.models.map((x) => ({ id: x.id, ...resolveModelFor(m, x.id, repo) }))])),
+  };
 }
 
 export function tasksSnapshot(repo = FALLBACK_REPO): { id: string; node: string; worker: string; exit: number | null; scopeOk: boolean; files: number }[] {
@@ -295,11 +308,12 @@ export async function executeAction(repo: string, a: OrchestraAction, opts: { ho
     }
     case 'pipeline': {
       if (!a.goal) return 'pipeline thiếu goal';
-      const protoDir = path.dirname(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')));
+      const templates = protoAsset('templates');
+      if (!templates) return 'pipeline: không tìm thấy thư mục prototype/templates';
       const { runPipeline } = await import('../../prototype/src/orchestrator.js');
       const r = await runPipeline({
         repo,
-        templatePath: path.join(protoDir, 'prototype', 'templates', `${a.template ?? 'feature-dev'}.yml`),
+        templatePath: path.join(templates, `${a.template ?? 'feature-dev'}.yml`),
         goal: a.goal,
         scope: a.scope ?? [],
         acceptance: [],

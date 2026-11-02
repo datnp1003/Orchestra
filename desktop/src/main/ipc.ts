@@ -6,7 +6,7 @@ import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshot, tasksSnapshot, policyMatrixHtml, promoteWorker, mergeableTasks, reviewMerge,
-  dispatchTracked, conformanceBadge,
+  dispatchTracked, conformanceBadge, modelsList,
 } from '../../../extension/src/logic.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
 import { syncSkills } from '../../../prototype/src/skillsync.js';
@@ -14,6 +14,7 @@ import { runConformance } from '../../../prototype/src/conformance.js';
 import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/src/registry.js';
 import { vaultSet, vaultDelete } from '../../../prototype/src/vault.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
+import { protoAsset } from '../../../prototype/src/paths.js';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync } from 'node:fs';
@@ -47,9 +48,13 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
 
   ipcMain.handle(IPC.SETTINGS_GET, () => settings());
   ipcMain.handle(IPC.SETTINGS_SET, (_e, s: AppSettings) => {
+    const prev = settings();
     const saved = saveSettings(ctx.settingsFile, s);
+    // session gắn với CLI/model — đổi brain thì bắt đầu session mới
+    if (prev.orchestratorWorker !== saved.orchestratorWorker || prev.orchestratorModel !== saved.orchestratorModel) chatSession = undefined;
     return saved;
   });
+  ipcMain.handle(IPC.MODELS_LIST, () => withRepo((repo) => modelsList(repo), () => modelsList()));
   ipcMain.handle(IPC.REPO_SET_ACTIVE, (_e, repo: string) => {
     const s = settings();
     if (!s.repos.includes(repo)) s.repos.push(repo);
@@ -93,9 +98,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return r;
   }, (error) => ({ error })));
 
-  ipcMain.handle(IPC.PIPELINE_RUN, (_e, p: { template: string; goal: string; scope: string[]; acceptance?: string[] }) => withRepo(async (repo) => {
+  ipcMain.handle(IPC.PIPELINE_RUN, (_e, p: { template: string; goal: string; scope: string[]; acceptance?: string[]; model?: string }) => withRepo(async (repo) => {
     const s = settings();
-    const tplDir = s.templatesDir || path.join(ctx.protoDir, 'prototype', 'templates');
+    const tplDir = s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates');
     const r = await runPipeline({
       repo,
       templatePath: path.join(tplDir, `${p.template ?? 'feature-dev'}.yml`),
@@ -103,6 +108,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       scope: p.scope ?? [],
       acceptance: p.acceptance ?? [],
       autoYes: s.autoApprovePlan,
+      model: p.model || undefined,
       onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
       // D1: approval qua modal của Desktop — không có stdin
       askUser: async (q) => {
@@ -183,6 +189,7 @@ async function chatExchangeFlow(
   const { chatExchange } = await import('../../../extension/src/logic.js');
   const r = await chatExchange(repo, text, chatSession, {
     workerId: s.orchestratorWorker,
+    model: s.orchestratorModel || undefined,
     notify: notify as never,
     hooksEnabled: s.hooksEnabled,
     skillSync: s.skillSync,

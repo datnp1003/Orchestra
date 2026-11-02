@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FleetEvent, HeadlessOpts, Manifest } from './types.js';
 import { resolveVaultEnv } from './vault.js';
+import { protoAsset } from './paths.js';
 
 // ---------- Supervisor Lớp 3 helpers (Worker Protocol §9b) ----------
 
@@ -48,10 +49,7 @@ export function computeFsCrossCheck(changed: string[], targets: string[]): { ok:
  * → resources/prototype/hooks (extraResources, ngoài asar vì hook do `node` ngoài chạy).
  */
 export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): string | undefined {
-  const dir = path.dirname(fromFile);
-  return [path.resolve(dir, '..', 'hooks', 'guard.cjs'), path.resolve(dir, '..', '..', '..', '..', 'prototype', 'hooks', 'guard.cjs')].find((p) =>
-    existsSync(p),
-  );
+  return protoAsset(path.join('hooks', 'guard.cjs'), fromFile);
 }
 
 export interface RunOptions {

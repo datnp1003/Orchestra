@@ -28,6 +28,7 @@ export const IPC = {
   TERMINAL_RESIZE: 'terminal:resize',
   TERMINAL_KILL: 'terminal:kill',
   UPDATE_CHECK: 'update:check',
+  MODELS_LIST: 'models:list',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -50,6 +51,8 @@ export interface AppSettings {
   repos: string[];
   activeRepo: string;
   orchestratorWorker: string;
+  /** '' = model mặc định của CLI */
+  orchestratorModel: string;
   autoApprovePlan: boolean;
   hooksEnabled: boolean;
   skillSync: boolean;
@@ -60,6 +63,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   repos: [],
   activeRepo: '',
   orchestratorWorker: 'claude',
+  orchestratorModel: '',
   autoApprovePlan: false,
   hooksEnabled: true,
   skillSync: true,
@@ -72,6 +76,7 @@ export function validateSettings(raw: unknown): AppSettings {
     repos: Array.isArray(r.repos) ? r.repos.filter((x): x is string => typeof x === 'string' && x.length > 0) : [],
     activeRepo: typeof r.activeRepo === 'string' ? r.activeRepo : '',
     orchestratorWorker: typeof r.orchestratorWorker === 'string' && r.orchestratorWorker ? r.orchestratorWorker : DEFAULT_SETTINGS.orchestratorWorker,
+    orchestratorModel: typeof r.orchestratorModel === 'string' ? r.orchestratorModel : '',
     autoApprovePlan: r.autoApprovePlan === true,
     hooksEnabled: r.hooksEnabled !== false,
     skillSync: r.skillSync !== false,
