@@ -2,6 +2,7 @@
 // Orchestra guard hook — PreToolUse chặn TRƯỚC khi lệnh chạy (Worker Protocol §9 Lớp 1/§9b, conformance case 8)
 // Đọc JSON từ stdin ({tool_name, tool_input}), deny bằng JSON permissionDecision.
 // Cấu hình qua env: ORCH_GUARD_NET=off|on, ORCH_GUARD_ROOT=<worktree cwd>
+const path = require('node:path');
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
@@ -15,7 +16,10 @@ process.stdin.on('end', () => {
   const ti = input.tool_input || {};
   const cmd = String(ti.command || '');
   const fp = String(ti.file_path || '');
-  const root = (process.env.ORCH_GUARD_ROOT || '').replace(/[\\/]+$/, '').toLowerCase();
+  // resolve (khử ..), \ → /, bỏ / cuối, lowercase (Windows FS không phân biệt hoa thường)
+  const norm = (p) => path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const rawRoot = process.env.ORCH_GUARD_ROOT || '';
+  const root = rawRoot ? norm(rawRoot) : '';
   const netOff = process.env.ORCH_GUARD_NET === 'off';
 
   const deny = (reason) => {
@@ -41,9 +45,10 @@ process.stdin.on('end', () => {
   if (tool === 'Bash' && /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\s+\/(\s|$)/.test(cmd)) {
     return deny('rm -rf / bị chặn');
   }
-  // path escape: file_path ngoài worktree root
-  if (fp && root && !fp.toLowerCase().startsWith(root)) {
-    return deny(`ghi ngoài worktree bị chặn: ${fp}`);
+  // path escape: file_path ngoài worktree root (path tương đối → resolve theo root)
+  if (fp && root) {
+    const abs = norm(path.resolve(rawRoot, fp));
+    if (abs !== root && !abs.startsWith(root + '/')) return deny(`ghi ngoài worktree bị chặn: ${fp}`);
   }
   process.exit(0);
 });

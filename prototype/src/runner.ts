@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdirSync, createWriteStream, watch, existsSync, writeFileSync, type FSWatcher } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FleetEvent, HeadlessOpts, Manifest } from './types.js';
 import { resolveVaultEnv } from './vault.js';
 
@@ -39,6 +40,18 @@ export function computeFsCrossCheck(changed: string[], targets: string[]): { ok:
     return !baselines.some((t) => t.includes(base));
   });
   return { ok: unreported.length === 0, unreported };
+}
+
+/**
+ * Tìm guard.cjs: prototype/dist → prototype/hooks; <pkg>/out/prototype/src → repo/prototype/hooks
+ * (extension/desktop dev) — cùng đường đó cho desktop packaged: resources/app.asar/out/prototype/src
+ * → resources/prototype/hooks (extraResources, ngoài asar vì hook do `node` ngoài chạy).
+ */
+export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): string | undefined {
+  const dir = path.dirname(fromFile);
+  return [path.resolve(dir, '..', 'hooks', 'guard.cjs'), path.resolve(dir, '..', '..', '..', '..', 'prototype', 'hooks', 'guard.cjs')].find((p) =>
+    existsSync(p),
+  );
 }
 
 export interface RunOptions {
@@ -95,9 +108,12 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
 
   // P6.2 — hooks pre-execution: CLI hỗ trợ → sinh settings file + splice vào args
   const extraEnv: Record<string, string> = {};
+  let guardMissing: FleetEvent | undefined;
   if (m.hooksSupport && opts.hooksEnabled !== false) {
-    const hookScript = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'hooks', 'guard.cjs');
-    if (existsSync(hookScript)) {
+    const hookScript = resolveGuardHook();
+    if (!hookScript) {
+      guardMissing = { t: 'error', worker: m.id, ts: new Date().toISOString(), code: 'guard_missing', detail: 'guard.cjs không tìm thấy — PreToolUse hook KHÔNG gắn' };
+    } else {
       const settingsPath = path.join(opts.rawDir, `guard-settings-${Date.now()}.json`);
       mkdirSync(opts.rawDir, { recursive: true });
       writeFileSync(
@@ -153,6 +169,10 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   }
 
   const events: FleetEvent[] = [];
+  if (guardMissing) {
+    events.push(guardMissing);
+    opts.onEvent?.(guardMissing);
+  }
   let rawLines = 0;
   let unmappedLines = 0;
   let killed = false;

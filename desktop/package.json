@@ -40,6 +40,15 @@
       "prototype/templates/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../prototype/hooks",
+        "to": "prototype/hooks",
+        "filter": [
+          "guard.cjs"
+        ]
+      }
+    ],
     "asarUnpack": [
       "**/*.node",
       "node_modules/@lydell/**"

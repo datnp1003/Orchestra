@@ -52,6 +52,12 @@ export interface DispatchResult {
   record?: Record<string, unknown>;
 }
 
+/** Chỉ node ghi code (implement + fixer chạy node implement) mới commit; verify có sandbox
+ *  worktree-write để chạy test nhưng không được tạo commit (plan/review read-only). */
+export function shouldCommit(node: NodeType): boolean {
+  return node === 'implement';
+}
+
 // glob đơn giản không dependency: ** → .*  |  * → [^\/]*
 export function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
@@ -237,8 +243,8 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   const recordPath = path.join(tasksDir, `${taskId}.json`);
   writeFileSync(recordPath, JSON.stringify(record, null, 2), 'utf8');
 
-  // P3: commit thay đổi lên branch của worktree để merge gate merge được
-  if (!o.reuseWorktree) {
+  // P3: commit thay đổi lên branch của worktree để merge gate merge được — kể cả worktree tái dùng (fixer)
+  if (shouldCommit(o.node)) {
     commitAll(wt.path, `orchestra: ${o.node} ${taskId}`);
   }
 
