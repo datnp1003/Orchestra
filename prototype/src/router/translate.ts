@@ -2,7 +2,9 @@
 // Hàm thuần, input là JSON client gửi (đã parse) — không validate sâu, upstream sẽ báo lỗi schema.
 // Lossy có chủ ý: thinking/redacted_thinking/reasoning bị bỏ; ảnh trong tool_result bị bỏ;
 // cache_control, metadata, top_k, logprobs, n>1 không map.
+// R2b: Responses (codex) → Chat (→ Messages qua chatToMessagesRequest, 2 bước — lossy cộng dồn), response/stream dịch ngược.
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomUUID } from 'node:crypto';
 
 const parseArgs = (s: unknown): Record<string, unknown> => {
   try {
@@ -129,7 +131,93 @@ export function chatToMessagesRequest(body: any, model: string): any {
   return out;
 }
 
+// ───────────── request: Responses → Chat ─────────────
+// Lossy: reasoning/include/store/prompt_cache_key/client_metadata bỏ; item reasoning/custom_tool_call bỏ;
+// tool hosted (web_search, file_search…) và custom bỏ; developer/system gộp thành 1 system đầu (mất vị trí giữa hội thoại);
+// tool trong namespace (MCP) dẹt thành `${ns}__${fn}` — names map ngược khi trả function_call (name gốc + namespace).
+export type ToolNames = Map<string, { name: string; namespace: string }>;
+const partsText = (c: unknown): string =>
+  typeof c === 'string' ? c : Array.isArray(c) ? c.filter((p) => typeof p?.text === 'string').map((p) => p.text).join('\n') : '';
+
+export function responsesToChatRequest(body: any, model: string): { req: any; names: ToolNames } {
+  const names: ToolNames = new Map();
+  const system: string[] = body.instructions ? [String(body.instructions)] : [];
+  const messages: any[] = [];
+  const input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : Array.isArray(body.input) ? body.input : [];
+  for (const it of input) {
+    const type = it?.type ?? 'message'; // EasyInputMessage không bắt buộc type
+    if (type === 'message') {
+      if (it.role === 'system' || it.role === 'developer') system.push(partsText(it.content));
+      else if (it.role === 'assistant') {
+        const text = partsText(it.content);
+        if (text) messages.push({ role: 'assistant', content: text });
+      } else {
+        const parts: any[] = typeof it.content === 'string' ? [{ type: 'text', text: it.content }] : (it.content ?? []).flatMap((p: any) =>
+          p.type === 'input_image' && p.image_url ? [{ type: 'image_url', image_url: { url: p.image_url } }] : typeof p.text === 'string' ? [{ type: 'text', text: p.text }] : []);
+        if (parts.length) messages.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => p.text).join('\n') : parts });
+      }
+    } else if (type === 'function_call') {
+      // function_call liên tiếp (+ text assistant ngay trước) → 1 assistant message
+      const call = { id: it.call_id, type: 'function', function: { name: it.namespace ? `${it.namespace}__${it.name}` : it.name, arguments: it.arguments || '{}' } };
+      const last = messages.at(-1);
+      if (last?.role === 'assistant') (last.tool_calls ??= []).push(call);
+      else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
+    } else if (type === 'function_call_output') {
+      messages.push({ role: 'tool', tool_call_id: it.call_id, content: partsText(it.output) });
+    }
+  }
+  const fn = (t: any, name: string) => ({ type: 'function', function: { name, description: t.description, parameters: t.parameters ?? { type: 'object' } } });
+  const tools: any[] = [];
+  for (const t of body.tools ?? []) {
+    if (t.type === 'function') tools.push(fn(t, t.name));
+    else if (t.type === 'namespace') {
+      for (const f of t.tools ?? []) {
+        if (f.type !== 'function') continue;
+        names.set(`${t.name}__${f.name}`, { name: f.name, namespace: t.name });
+        tools.push(fn(f, `${t.name}__${f.name}`));
+      }
+    }
+  }
+  const req: any = { model, messages: system.length ? [{ role: 'system', content: system.join('\n\n') }, ...messages] : messages };
+  if (body.max_output_tokens !== undefined) req.max_tokens = body.max_output_tokens;
+  if (body.temperature !== undefined) req.temperature = body.temperature;
+  if (body.top_p !== undefined) req.top_p = body.top_p;
+  req.stream = !!body.stream; // tường minh — xem messagesToChatRequest
+  if (body.stream) req.stream_options = { include_usage: true };
+  if (tools.length) {
+    req.tools = tools;
+    const tc = body.tool_choice;
+    if (typeof tc === 'string') req.tool_choice = tc; // auto | none | required
+    else if (tc?.type === 'function' && tc.name) req.tool_choice = { type: 'function', function: { name: tc.name } };
+    if (typeof body.parallel_tool_calls === 'boolean') req.parallel_tool_calls = body.parallel_tool_calls; // OpenAI từ chối field này khi không có tools
+  }
+  return { req, names };
+}
+
 // ───────────── response (non-stream) ─────────────
+const rid = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '')}`;
+const outText = (text: string) => ({ type: 'output_text', annotations: [], text });
+const msgItem = (id: string, text: string, status: string) => ({ id, type: 'message', status, role: 'assistant', content: status === 'completed' ? [outText(text)] : [] });
+const fcItem = (names: ToolNames, id: string, callId: string, flat: string, args: string, status: string) => {
+  const n = names.get(flat);
+  return { id, type: 'function_call', status, call_id: callId, name: n?.name ?? flat, ...(n ? { namespace: n.namespace } : {}), arguments: args };
+};
+const resUsage = (u: any) => {
+  const i = u?.prompt_tokens ?? 0;
+  const o = u?.completion_tokens ?? 0;
+  return { input_tokens: i, output_tokens: o, total_tokens: i + o };
+};
+
+/** Chat completion → Responses object (upstream messages: đi qua messagesToChatResponse trước) */
+export function chatToResponsesResponse(r: any, names: ToolNames = new Map()): any {
+  const msg = r.choices?.[0]?.message ?? {};
+  const output: any[] = [];
+  const text = textOf(msg.content);
+  if (text) output.push(msgItem(rid('msg'), text, 'completed'));
+  (msg.tool_calls ?? []).forEach((t: any, i: number) => output.push(fcItem(names, rid('fc'), t.id ?? `call_${i}`, t.function?.name ?? '', t.function?.arguments ?? '', 'completed')));
+  return { id: rid('resp'), object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model: r.model, output, usage: resUsage(r.usage) };
+}
+
 export function chatToMessagesResponse(r: any): any {
   const choice = r.choices?.[0] ?? {};
   const msg = choice.message ?? {};
@@ -259,6 +347,95 @@ export class ChatToMessagesStream extends SseLines {
       sse('message_delta', { delta: { stop_reason: this.stop ?? 'end_turn', stop_sequence: null }, usage: this.usage }) +
       sse('message_stop', {})
     );
+  }
+}
+
+/** upstream Chat SSE → client Responses SSE (chuỗi event như OpenAI thật — xem test/fixtures/codex-responses-stream.txt).
+ *  Upstream Messages: xích MessagesToChatStream → class này. Cùng giả định tool_calls tuần tự theo index. */
+export class ChatToResponsesStream extends SseLines {
+  private id = rid('resp');
+  private model = '';
+  private seq = 0;
+  private started = false;
+  private open: { kind: 'msg'; id: string; idx: number; text: string } | { kind: 'fc'; index: number; item: any; idx: number } | null = null;
+  private output: any[] = [];
+  private finishReason: string | null = null;
+  private usage = resUsage(null);
+  constructor(private names: ToolNames = new Map()) {
+    super();
+  }
+
+  private ev(type: string, data: object): string {
+    return `event: ${type}\ndata: ${JSON.stringify({ type, ...data, sequence_number: this.seq++ })}\n\n`;
+  }
+  private resp(status: string, extra: object = {}) {
+    return { id: this.id, object: 'response', created_at: Math.floor(Date.now() / 1000), status, model: this.model, output: this.output, ...extra };
+  }
+  private start(j: any): string {
+    if (this.started) return '';
+    this.started = true;
+    this.model = j?.model ?? '';
+    return this.ev('response.created', { response: this.resp('in_progress', { output: [] }) }) + this.ev('response.in_progress', { response: this.resp('in_progress', { output: [] }) });
+  }
+  private close(): string {
+    const o = this.open;
+    if (!o) return '';
+    this.open = null;
+    if (o.kind === 'msg') {
+      const item = msgItem(o.id, o.text, 'completed');
+      this.output.push(item);
+      const at = { item_id: o.id, output_index: o.idx, content_index: 0 };
+      return this.ev('response.output_text.done', { ...at, text: o.text }) + this.ev('response.content_part.done', { ...at, part: outText(o.text) }) + this.ev('response.output_item.done', { output_index: o.idx, item });
+    }
+    o.item.status = 'completed';
+    this.output.push(o.item);
+    return this.ev('response.function_call_arguments.done', { item_id: o.item.id, output_index: o.idx, arguments: o.item.arguments }) + this.ev('response.output_item.done', { output_index: o.idx, item: o.item });
+  }
+  protected data(j: any): string {
+    if (j.error) {
+      this.done = true;
+      return this.start(j) + this.ev('response.failed', { response: this.resp('failed', { error: { code: 'upstream_error', message: j.error.message ?? JSON.stringify(j.error) } }) }) + 'data: [DONE]\n\n';
+    }
+    let out = this.start(j);
+    if (j.usage) this.usage = resUsage(j.usage);
+    const choice = j.choices?.[0];
+    if (!choice) return out;
+    const d = choice.delta ?? {};
+    // output_index = output.length sau close() (item vừa đóng đã nằm trong output)
+    if (typeof d.content === 'string' && d.content) {
+      if (this.open?.kind !== 'msg') {
+        out += this.close();
+        const id = rid('msg');
+        this.open = { kind: 'msg', id, idx: this.output.length, text: '' };
+        out += this.ev('response.output_item.added', { output_index: this.open.idx, item: msgItem(id, '', 'in_progress') });
+        out += this.ev('response.content_part.added', { item_id: id, output_index: this.open.idx, content_index: 0, part: outText('') });
+      }
+      this.open.text += d.content;
+      out += this.ev('response.output_text.delta', { item_id: this.open.id, output_index: this.open.idx, content_index: 0, delta: d.content });
+    }
+    for (const t of d.tool_calls ?? []) {
+      const index = t.index ?? 0;
+      if (this.open?.kind !== 'fc' || this.open.index !== index) {
+        out += this.close();
+        const item = fcItem(this.names, rid('fc'), t.id ?? `call_${index}`, t.function?.name ?? '', '', 'in_progress');
+        this.open = { kind: 'fc', index, item, idx: this.output.length };
+        out += this.ev('response.output_item.added', { output_index: this.open.idx, item: { ...item } });
+      }
+      const a = t.function?.arguments;
+      if (a) {
+        this.open.item.arguments += a;
+        out += this.ev('response.function_call_arguments.delta', { item_id: this.open.item.id, output_index: this.open.idx, delta: a });
+      }
+    }
+    if (choice.finish_reason) this.finishReason = choice.finish_reason;
+    return out;
+  }
+  protected finish(): string {
+    this.done = true;
+    const out = this.start(null) + this.close();
+    const extra = this.finishReason === 'length' ? { incomplete_details: { reason: 'max_output_tokens' } } : {};
+    const status = this.finishReason === 'length' ? 'incomplete' : 'completed';
+    return out + this.ev(`response.${status}`, { response: this.resp(status, { ...extra, usage: this.usage }) }) + 'data: [DONE]\n\n';
   }
 }
 

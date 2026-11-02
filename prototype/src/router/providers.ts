@@ -73,7 +73,10 @@ export function routerModelOk(cli: string, modelId: string, providers: ProviderC
   if (!p) return { ok: false, reason: `không có provider cho '${modelId}' (dùng <provider>/<model>)` };
   if (!p.enabled) return { ok: false, reason: `provider ${p.id} đang tắt` };
   if (cli === 'codex') {
-    return p.formats.includes('responses') ? { ok: true, reason: `${p.id} nói responses` } : { ok: false, reason: 'codex cần provider nói responses — R2b' };
+    if (p.formats.includes('responses')) return { ok: true, reason: `${p.id} nói responses` };
+    return p.formats.includes('chat') || p.formats.includes('messages')
+      ? { ok: true, reason: `${p.id} ${p.formats.includes('chat') ? 'chat' : 'messages'} (router dịch Responses→Chat/Messages)` }
+      : { ok: false, reason: `codex cần provider nói responses, chat hoặc messages — ${p.id}: ${p.formats.join(',')}` };
   }
   return p.formats.includes('messages') || p.formats.includes('chat')
     ? { ok: true, reason: `${p.id} ${p.formats.includes('messages') ? 'nói messages' : 'chat (router dịch)'}` }

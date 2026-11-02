@@ -50,7 +50,7 @@ const { modelsList } = await import('../out/extension/src/logic.js'); // desktop
 const ml = modelsList(['gw/opus'], [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'x', formats: ['messages'], enabled: true }]);
 assert.deepEqual(ml.models, ['gw/opus']);
 assert.equal(ml.byWorker.claude[0].ok, true, 'claude + messages');
-assert.match(ml.byWorker.codex[0].reason, /R2b/, 'codex cần responses');
+assert.equal(ml.byWorker.codex[0].ok, true, 'codex + messages qua router dịch Responses');
 console.log('✓ proto-default policy từ desktop/out + extension/out; modelsList byWorker đúng');
 
 // 3. settingsStore roundtrip

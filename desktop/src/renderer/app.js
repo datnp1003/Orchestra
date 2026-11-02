@@ -601,7 +601,7 @@ function devStub() {
     if (ch === 'settings:get') return settings;
     if (ch === 'fleet:list') return fleet;
     if (ch === 'tasks:list') return tasks;
-    if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw nói messages' }], codex: [{ id: 'gw/claude-opus', ok: false, reason: 'codex cần provider nói responses — R2b' }] } };
+    if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw nói messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router dịch Responses→Chat/Messages)' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
     if (ch === 'brain:models') return { models: ['gw/claude-opus'] };
     if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true }];

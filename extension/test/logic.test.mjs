@@ -16,7 +16,7 @@ const ml = modelsList(['gw/opus', 'oa/gpt'], [
 const pick = (w, id) => ml.byWorker[w].find((m) => m.id === id);
 assert.deepEqual(ml.models, ['gw/opus', 'oa/gpt']);
 assert.ok(pick('claude', 'gw/opus').ok && pick('codex', 'oa/gpt').ok, 'claude+messages, codex+responses');
-assert.match(pick('codex', 'gw/opus').reason, /R2b/, 'codex cần responses');
+assert.match(pick('codex', 'gw/opus').reason, /router dịch Responses/, 'codex + messages qua router dịch');
 assert.equal(pick('antigravity', 'gw/opus').ok, false, 'antigravity chưa hỗ trợ router');
 console.log('✓ proto-default từ out/ + modelsList byWorker');
 

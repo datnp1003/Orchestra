@@ -1,5 +1,5 @@
 // Router R1 — proxy LLM local: 1 endpoint 127.0.0.1, model `<providerId>/<upstreamModel>`.
-// Passthrough khi upstream nói native format của client; không thì dịch Messages ⇄ Chat.
+// Passthrough khi upstream nói native format của client; không thì dịch Messages ⇄ Chat, Responses → Chat/Messages (R2b).
 // Không bao giờ log/echo key hay local token.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
@@ -8,11 +8,15 @@ import { pipeline } from 'node:stream/promises';
 import { authHeaders, type Format, type ProviderConfig } from './providers.js';
 import {
   ChatToMessagesStream,
+  ChatToResponsesStream,
   MessagesToChatStream,
   chatToMessagesRequest,
   chatToMessagesResponse,
+  chatToResponsesResponse,
   messagesToChatRequest,
   messagesToChatResponse,
+  responsesToChatRequest,
+  type ToolNames,
 } from './translate.js';
 
 export interface RouterOptions {
@@ -124,7 +128,8 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     const native = p.formats.includes(clientFmt);
     let target: string;
     let upstreamBody: any;
-    let mode: 'pass' | 'm2c' | 'c2m' = 'pass';
+    let mode: 'pass' | 'm2c' | 'c2m' | 'r2c' | 'r2m' = 'pass';
+    let names: ToolNames = new Map();
     if (native) {
       target = `${url.pathname}${url.search}`; // giữ query (claude gửi ?beta=true)
       upstreamBody = { ...body, model };
@@ -138,8 +143,14 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       mode = 'c2m';
       target = '/v1/messages';
       upstreamBody = chatToMessagesRequest(body, model);
+    } else if (clientFmt === 'responses' && (p.formats.includes('chat') || p.formats.includes('messages'))) {
+      const r = responsesToChatRequest(body, model);
+      names = r.names;
+      mode = p.formats.includes('chat') ? 'r2c' : 'r2m';
+      target = mode === 'r2c' ? '/v1/chat/completions' : '/v1/messages';
+      upstreamBody = mode === 'r2c' ? r.req : chatToMessagesRequest(r.req, model);
     } else {
-      throw new HttpError(400, 'unsupported_route', `provider ${p.id} (${p.formats.join(',')}) không nhận ${clientFmt} — R1 chưa dịch format này`);
+      throw new HttpError(400, 'unsupported_route', `provider ${p.id} (${p.formats.join(',')}) không nhận ${clientFmt}`);
     }
 
     const headers: Record<string, string> = { ...authHeaders(p.kind, opts.store.getKey(p.id)), 'content-type': 'application/json' };
@@ -165,11 +176,22 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     if (!body.stream) {
       const j = await up.json().catch(() => null);
       if (!j) throw new HttpError(502, 'upstream_error', 'upstream trả JSON không hợp lệ');
-      const out = mode === 'm2c' ? chatToMessagesResponse(j) : messagesToChatResponse(j);
+      const out =
+        mode === 'm2c' ? chatToMessagesResponse(j)
+        : mode === 'c2m' ? messagesToChatResponse(j)
+        : chatToResponsesResponse(mode === 'r2c' ? j : messagesToChatResponse(j), names);
       sendJson(res, 200, { ...out, model: body.model });
       return;
     }
-    const tr = mode === 'm2c' ? new ChatToMessagesStream() : new MessagesToChatStream();
+    let tr: { push(s: string): string; end(): string };
+    if (mode === 'm2c') tr = new ChatToMessagesStream();
+    else if (mode === 'c2m') tr = new MessagesToChatStream();
+    else if (mode === 'r2c') tr = new ChatToResponsesStream(names);
+    else {
+      const a = new MessagesToChatStream();
+      const b = new ChatToResponsesStream(names);
+      tr = { push: (s) => b.push(a.push(s)), end: () => b.push(a.end()) + b.end() };
+    }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     const dec = new TextDecoder();
     await pipeline(

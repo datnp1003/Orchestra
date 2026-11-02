@@ -2,12 +2,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startRouter } from '../dist/router/server.js';
 import { createProviderStore, normalizeProvider, authHeaders } from '../dist/router/providers.js';
-import { messagesToChatRequest, chatToMessagesRequest, ChatToMessagesStream, MessagesToChatStream } from '../dist/router/translate.js';
+import { messagesToChatRequest, chatToMessagesRequest, ChatToMessagesStream, MessagesToChatStream, responsesToChatRequest, ChatToResponsesStream } from '../dist/router/translate.js';
 
 const TOKEN = 'a'.repeat(64);
 const ANT_SSE = [
@@ -235,12 +235,138 @@ test('chat client → anthropic, STREAM kết thúc bằng [DONE]', async () => 
   assert.deepEqual(ch.at(-1).usage, { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 });
 });
 
-test('responses → upstream chỉ chat → 400 unsupported_route; count_tokens không native → 404', async () => {
-  const r = await call('/v1/responses', { body: { model: 'oai/gpt-x', input: 'x' } });
-  assert.equal(r.status, 400);
-  assert.equal(r.json().error.type, 'unsupported_route');
+test('count_tokens không native → 404', async () => {
   assert.equal((await call('/v1/messages/count_tokens', { body: { model: 'oai/gpt-x', messages: [] } })).status, 404);
 });
+
+// ───── R2b: Responses (codex) → chat / messages ─────
+const CODEX = JSON.parse(readFileSync(new URL('./fixtures/codex-responses-request.json', import.meta.url), 'utf8'));
+const REAL_SSE = readFileSync(new URL('./fixtures/codex-responses-stream.txt', import.meta.url), 'utf8');
+const evNames = (text) => text.split(/\r?\n/).filter((l) => l.startsWith('event: ')).map((l) => l.slice(7));
+const collapse = (names) => names.filter((n, i) => n !== names[i - 1]); // gộp delta liên tiếp
+function checkResponsesStream(text) {
+  assert.ok(text.endsWith('data: [DONE]\n\n'));
+  const ev = sseEvents(text);
+  assert.deepEqual(ev.map((e) => e.type), evNames(text));
+  ev.forEach((e, i) => assert.equal(e.sequence_number, i));
+  const done = ev.at(-1);
+  assert.equal(done.type, 'response.completed');
+  return ev;
+}
+
+test('responsesToChatRequest: fixture codex thật', () => {
+  const { req, names } = responsesToChatRequest(CODEX, 'm');
+  assert.equal(req.model, 'm');
+  assert.equal(req.messages.filter((m) => m.role === 'system').length, 1);
+  assert.equal(req.messages[0].role, 'system');
+  assert.match(req.messages[0].content, /You are a coding agent/);
+  assert.match(req.messages[0].content, /skills_instructions/);
+  assert.deepEqual(req.messages.slice(1).map((m) => m.role), ['user', 'user', 'assistant', 'tool']);
+  const fc = CODEX.input.find((i) => i.type === 'function_call');
+  const a = req.messages[3];
+  assert.match(a.content, /a\.txt/); // text assistant ngay trước gộp cùng tool_calls
+  assert.deepEqual(a.tool_calls, [{ id: fc.call_id, type: 'function', function: { name: 'exec_command', arguments: fc.arguments } }]);
+  assert.equal(req.messages[4].tool_call_id, fc.call_id);
+  assert.match(req.messages[4].content, /Process exited with code 0/);
+  const tn = req.tools.map((t) => t.function.name);
+  assert.deepEqual(tn, ['exec_command', 'write_stdin', 'multi_agent_v1__close_agent']); // web_search bỏ
+  assert.deepEqual(names.get('multi_agent_v1__close_agent'), { name: 'close_agent', namespace: 'multi_agent_v1' });
+  assert.equal(req.tool_choice, 'auto');
+  assert.equal(req.parallel_tool_calls, true);
+  assert.equal(req.stream, true);
+  assert.deepEqual(req.stream_options, { include_usage: true });
+  for (const k of ['reasoning', 'include', 'store', 'prompt_cache_key', 'client_metadata', 'input']) assert.equal(req[k], undefined, k);
+
+  const s = responsesToChatRequest({ input: 'hi', instructions: 'be nice', max_output_tokens: 5 }, 'm').req;
+  assert.deepEqual(s.messages, [{ role: 'system', content: 'be nice' }, { role: 'user', content: 'hi' }]);
+  assert.equal(s.max_tokens, 5);
+  assert.equal(s.stream, false);
+  // function_call có namespace (lượt sau) → tên dẹt cho upstream
+  const n = responsesToChatRequest({ input: [{ type: 'function_call', call_id: 'c', namespace: 'ns', name: 'f', arguments: '{}' }] }, 'm').req;
+  assert.equal(n.messages[0].tool_calls[0].function.name, 'ns__f');
+});
+
+test('ChatToResponsesStream: text + 2 tool call (args cắt mảnh) + usage, chuỗi event như fixture thật', () => {
+  const sse = OAI_SSE.replace('"name":"echo"', '"name":"multi_agent_v1__close_agent"');
+  const names = responsesToChatRequest(CODEX, 'm').names;
+  const t = new ChatToResponsesStream(names);
+  let out = '';
+  for (let i = 0; i < sse.length; i += 7) out += t.push(sse.slice(i, i + 7));
+  out += t.end();
+  const ev = checkResponsesStream(out);
+  // mẫu event giống fixture thật (fixture có text rồi 1 function_call; ở đây thêm function_call thứ 2)
+  const fcPattern = ['response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done'];
+  const real = collapse(evNames(REAL_SSE)).filter((n) => n !== 'response.function_call_arguments.delta');
+  const mine = collapse(ev.map((e) => e.type));
+  assert.deepEqual(mine.filter((n) => n !== 'response.function_call_arguments.delta'), [...real.slice(0, -1), ...fcPattern.filter((n) => !n.endsWith('.delta')), 'response.completed']);
+  assert.deepEqual(mine.slice(-5, -1), fcPattern);
+  // text
+  assert.equal(ev.filter((e) => e.type === 'response.output_text.delta').map((e) => e.delta).join(''), 'Hi there');
+  assert.equal(ev.find((e) => e.type === 'response.output_text.done').text, 'Hi there');
+  // args: done = nối delta, JSON hợp lệ
+  const argsDone = ev.filter((e) => e.type === 'response.function_call_arguments.done');
+  assert.equal(argsDone.length, 2);
+  for (const d of argsDone) {
+    const deltas = ev.filter((e) => e.type === 'response.function_call_arguments.delta' && e.item_id === d.item_id).map((e) => e.delta).join('');
+    assert.equal(d.arguments, deltas);
+    JSON.parse(d.arguments);
+  }
+  assert.deepEqual(JSON.parse(argsDone[0].arguments), { x: [1, 2], y: 'z' });
+  const completed = ev.at(-1).response;
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(completed.output.map((o) => o.type), ['message', 'function_call', 'function_call']);
+  assert.deepEqual(ev.filter((e) => e.type === 'response.output_item.added').map((e) => e.output_index), [0, 1, 2]);
+  assert.equal(completed.output[0].content[0].text, 'Hi there');
+  assert.equal(completed.output[1].call_id, 'call_1');
+  assert.equal(completed.output[1].name, 'calc');
+  assert.deepEqual([completed.output[2].name, completed.output[2].namespace], ['close_agent', 'multi_agent_v1']); // un-flatten
+  assert.deepEqual(completed.usage, { input_tokens: 11, output_tokens: 4, total_tokens: 15 });
+  assert.equal(new Set([completed.id, ...completed.output.map((o) => o.id)]).size, 4);
+  assert.match(completed.id, /^resp_/);
+  assert.match(completed.output[1].id, /^fc_/);
+});
+
+for (const [label, model, up, route] of [['chat', 'oai/gpt-x', () => oai, '/v1/chat/completions'], ['messages', 'ant/claude-x', () => ant, '/v1/messages']]) {
+  test(`responses client → upstream chỉ ${label}: stream + non-stream + tool round trip`, async () => {
+    const r = await call('/v1/responses', { body: { ...CODEX, model } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-type'], /event-stream/);
+    const s = last(up());
+    assert.equal(s.url, route);
+    assert.equal(s.body.stream, true);
+    const ev = checkResponsesStream(r.text);
+    const out = ev.at(-1).response.output;
+    assert.deepEqual(out.map((o) => o.type), label === 'chat' ? ['message', 'function_call', 'function_call'] : ['message', 'function_call']);
+    assert.equal(out[1].name, 'calc');
+    JSON.parse(out[1].arguments);
+
+    // tool round trip: function_call + function_call_output → chat tool_calls + tool / messages tool_use + tool_result
+    const r2 = await call('/v1/responses', { body: { ...CODEX, model, stream: false } });
+    assert.equal(r2.status, 200);
+    const j = r2.json();
+    assert.equal(j.object, 'response');
+    assert.equal(j.status, 'completed');
+    assert.equal(j.model, model);
+    assert.equal(j.output[0].type, 'message');
+    assert.equal(j.output[1].type, 'function_call');
+    assert.equal(j.output[1].name, 'calc');
+    assert.equal(j.output[1].call_id, label === 'chat' ? 'call_7' : 'tu_1');
+    assert.ok(j.usage.total_tokens > 0);
+    const b = last(up()).body;
+    assert.equal(b.stream, false);
+    const callId = CODEX.input.find((i) => i.type === 'function_call').call_id;
+    if (label === 'chat') {
+      assert.equal(b.messages.find((m) => m.tool_calls).tool_calls[0].id, callId);
+      assert.equal(b.messages.find((m) => m.role === 'tool').tool_call_id, callId);
+    } else {
+      assert.match(b.system, /You are a coding agent/);
+      const blocks = b.messages.flatMap((m) => m.content);
+      assert.equal(blocks.find((x) => x.type === 'tool_use').id, callId);
+      assert.equal(blocks.find((x) => x.type === 'tool_result').tool_use_id, callId);
+      assert.ok(b.tools.some((t) => t.name === 'multi_agent_v1__close_agent'));
+    }
+  });
+}
 
 test('upstream 429 → pass status + body', async () => {
   const r = await call('/v1/messages', { body: { ...MSG, model: 'ant/rate' } });

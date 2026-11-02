@@ -118,7 +118,9 @@ test('routerModelOk', () => {
   assert.equal(routerModelOk('claude', 'a/m', ps).ok, true);
   assert.equal(routerModelOk('claude', 'o/m', ps).ok, true);
   assert.equal(routerModelOk('codex', 'o/m', ps).ok, true);
-  assert.match(routerModelOk('codex', 'a/m', ps).reason, /responses — R2b/);
+  assert.equal(routerModelOk('codex', 'a/m', ps).ok, true);
+  assert.match(routerModelOk('codex', 'a/m', ps).reason, /router dịch Responses/);
+  assert.equal(routerModelOk('codex', 'x/m', [{ id: 'x', kind: 'openai', baseUrl: 'x', formats: [], enabled: true }]).ok, false);
   assert.equal(routerModelOk('claude', 'off/m', ps).ok, false);
   assert.equal(routerModelOk('claude', 'nope/m', ps).ok, false);
   assert.match(routerModelOk('gemini', 'a/m', ps).reason, /chưa hỗ trợ router/);
