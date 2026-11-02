@@ -5,7 +5,7 @@ import { spawn as ptySpawn } from '@lydell/node-pty';
 import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
-  fleetSnapshot, tasksSnapshot, policyMatrixHtml, promoteWorker, mergeableTasks, reviewMerge,
+  fleetSnapshot, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
   dispatchTracked, conformanceBadge, modelsList, BRAIN_TOOLS, brainSystemPrompt, brainToolExecutor,
 } from '../../../extension/src/logic.js';
 import { runBrainTurn, listBrainModels, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
@@ -180,7 +180,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
 
   ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
   ipcMain.handle(IPC.TASKS_LIST, (_e, p?: { limit?: number }) => withRepo((repo) => tasksSnapshot(repo, p?.limit), () => []));
-  ipcMain.handle(IPC.MATRIX_HTML, () => withRepo((repo) => policyMatrixHtml(repo, true), () => ''));
+  ipcMain.handle(IPC.MATRIX_DATA, () => withRepo((repo) => policyMatrixData(repo), () => null));
   ipcMain.handle(IPC.PROMOTE, (_e, p: { role: string; cli: string }) =>
     withRepo((repo) => promoteWorker(repo, p.role, p.cli), (detail) => ({ ok: false, detail })));
   ipcMain.handle(IPC.REVIEW_LIST, () => withRepo(mergeableTasks, () => []));

@@ -662,29 +662,45 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
   };
 }
 
-export function policyMatrixHtml(repo = FALLBACK_REPO, interactive = false): string {
+/** dữ liệu Role × Worker matrix — Desktop render bằng CSS của app, VS Code dùng policyMatrixHtml */
+export function policyMatrixData(repo = FALLBACK_REPO) {
   const lp = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), lp.policy?.routing?.decay_days ?? 30);
-  const kb = loadKB(repo);
   const minSample = lp.policy?.routing?.min_sample ?? 10;
   const roles = [...new Set([...Object.keys(lp.policy?.bindings ?? {}), 'coder', 'planner', 'verifier', 'reviewer'])];
-  const rows = roles
-    .map((role) => {
+  return {
+    source: lp.source,
+    errors: lp.errors,
+    minSample,
+    workers: MANIFESTS.map((m) => ({ id: m.id, display: m.display })),
+    rows: roles.map((role) => {
       const binds = lp.policy?.bindings?.[role] ?? [];
-      const cells = MANIFESTS.map((m) => {
-        const idx = binds.findIndex((b) => b.worker.cli === m.id);
-        if (idx < 0) return `<td style="color:#555">—</td>`;
-        const s = stats.get(`${m.id}|${role}`);
-        const stat =
-          s && s.dispatched >= minSample
-            ? `ema ${s.ema.toFixed(2)} (n=${s.dispatched})`
-            : s
-              ? `n=${s.dispatched} (&lt; ${minSample})`
-              : 'chưa có số liệu';
-        const bModel = binds[idx]?.worker?.model;
-        return `<td data-role="${role}" data-cli="${m.id}" style="${interactive ? 'cursor:pointer' : ''}" title="${interactive ? 'Click = promote lên #1 (ghi policy.yml)' : ''}">${idx === 0 ? '●' : '○'} #${idx + 1}<br><small>${bModel ?? ''}</small><br><small>${stat}</small></td>`;
+      return {
+        role,
+        cells: MANIFESTS.map((m) => {
+          const idx = binds.findIndex((b) => b.worker.cli === m.id);
+          if (idx < 0) return null;
+          const s = stats.get(`${m.id}|${role}`);
+          return { cli: m.id, rank: idx + 1, model: binds[idx]?.worker?.model ?? null, n: s?.dispatched ?? 0, ema: s && s.dispatched >= minSample ? s.ema : null };
+        }),
+      };
+    }),
+    kb: loadKB(repo).map((e) => ({ id: e.id, title: e.title, scope: e.scope, source: e.source, pinned: !!e.pinned })),
+  };
+}
+
+export function policyMatrixHtml(repo = FALLBACK_REPO, interactive = false): string {
+  const d = policyMatrixData(repo);
+  const lp = { source: d.source, errors: d.errors };
+  const kb = d.kb;
+  const rows = d.rows
+    .map(({ role, cells }) => {
+      const tds = cells.map((c) => {
+        if (!c) return `<td style="color:#555">—</td>`;
+        const stat = c.ema !== null ? `ema ${c.ema.toFixed(2)} (n=${c.n})` : c.n ? `n=${c.n} (&lt; ${d.minSample})` : 'chưa có số liệu';
+        return `<td data-role="${role}" data-cli="${c.cli}" style="${interactive ? 'cursor:pointer' : ''}" title="${interactive ? 'Click = promote lên #1 (ghi policy.yml)' : ''}">${c.rank === 1 ? '●' : '○'} #${c.rank}<br><small>${c.model ?? ''}</small><br><small>${stat}</small></td>`;
       }).join('');
-      return `<tr><th>${role}</th>${cells}</tr>`;
+      return `<tr><th>${role}</th>${tds}</tr>`;
     })
     .join('');
   const kbRows = kb

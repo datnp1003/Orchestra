@@ -301,23 +301,33 @@ function renderTranscript(box, tasks) {
 
 // ---------- Policy Matrix (tab trong Cài đặt) ----------
 async function renderMatrix(box) {
-  const html = await api.invoke('matrix:html');
-  if (!html) {
+  const d = await api.invoke('matrix:data');
+  if (!d) {
     box.innerHTML = `<div class="card dim">Chưa chọn repo (hoặc repo không tồn tại) — thêm repo ở tab Chung.</div>`;
     return;
   }
-  // <script> inline của policyMatrixHtml bị CSP chặn → bỏ; parent gắn click qua contentDocument (srcdoc cùng origin)
-  box.innerHTML = `<div class="card" id="iframeWrap"><iframe srcdoc="${esc(html.replace(/<script[\s\S]*?<\/script>/gi, ''))}"></iframe></div>`;
-  const frame = box.querySelector('iframe');
-  frame.addEventListener('load', () => {
-    frame.contentDocument.addEventListener('click', async (e) => {
-      const td = e.target.closest?.('td[data-role]');
-      if (!td) return;
-      const r = await api.invoke('matrix:promote', { role: td.dataset.role, cli: td.dataset.cli });
-      if (!r.ok) alert(r.detail);
-      renderMatrix(box);
-    });
-  });
+  const stat = (c) => (c.ema !== null ? `ema ${c.ema.toFixed(2)} · n=${c.n}` : c.n ? `n=${c.n} (< ${d.minSample})` : 'chưa có số liệu');
+  const cell = (c, role) => (c
+    ? `<td><button class="mx-cell" data-role="${esc(role)}" data-cli="${esc(c.cli)}" title="${c.rank === 1 ? 'Đang #1' : 'Click = đưa lên #1 (ghi .orchestra/policy.yml)'}" ${c.rank === 1 ? 'disabled' : ''}>
+        <span class="mx-rank"><span class="dot ${c.rank === 1 ? 'ok' : ''}"></span>#${c.rank}${c.model ? ` <span class="mono dim">${esc(c.model)}</span>` : ''}</span><span class="mx-stat">${esc(stat(c))}</span></button></td>`
+    : '<td><span class="mx-none">không bind</span></td>');
+  box.innerHTML = `
+    <div class="card">
+      <h3>Role × Worker</h3>
+      <div class="dim mx-src">policy: <span class="mono">${esc(d.source)}</span> ${d.errors.length ? `<span class="err">⚠ ${esc(d.errors.join('; '))}</span>` : '<span class="ok">— hợp lệ</span>'}</div>
+      <table class="mx"><thead><tr><th>role</th>${d.workers.map((w) => `<th>${esc(w.display)}<div class="mx-id">${esc(w.id)}</div></th>`).join('')}</tr></thead>
+      <tbody>${d.rows.map((r) => `<tr><td><b>${esc(r.role)}</b></td>${r.cells.map((c) => cell(c, r.role)).join('')}</tr>`).join('')}</tbody></table>
+      <div class="dim mx-hint">Click ô = đưa worker lên #1 cho role đó (ghi <span class="mono">.orchestra/policy.yml</span> — là diff review được).</div>
+    </div>
+    <div class="card">
+      <h3>Project KB (${d.kb.length})</h3>
+      ${d.kb.length ? `<table><thead><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th></th></tr></thead><tbody>${d.kb.map((e) => `<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.title)}</td><td class="mono">${esc(e.scope.join(', '))}</td><td>${esc(e.source)}</td><td>${e.pinned ? '📌' : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="dim">Chưa có mục KB.</div>'}
+    </div>`;
+  box.querySelectorAll('.mx-cell:not([disabled])').forEach((b) => b.addEventListener('click', async () => {
+    const r = await api.invoke('matrix:promote', { role: b.dataset.role, cli: b.dataset.cli });
+    if (!r.ok) alert(r.detail);
+    renderMatrix(box);
+  }));
 }
 
 // ---------- Cài đặt (1 nút duy nhất — gộp Settings + Setup Wizard, kiểu tab như ZCode) ----------
@@ -712,7 +722,7 @@ function devStub() {
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
     if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Thêm cổng thanh toán X', updatedAt: new Date().toISOString(), turns: 2, active: false }];
     if (ch === 'chat:open') return { ok: true, messages: [{ role: 'user', text: 'Thêm cổng thanh toán X' }, { role: 'orch', text: '(stub) session đã mở' }] };
-    if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
+    if (ch === 'matrix:data') return { source: 'preview', errors: [], minSample: 10, workers: [{ id: 'claude', display: 'Claude Code' }], rows: [{ role: 'coder', cells: [{ cli: 'claude', rank: 1, model: null, n: 0, ema: null }] }], kb: [] };
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
     return { ok: true };
   };

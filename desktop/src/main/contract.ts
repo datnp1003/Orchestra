@@ -13,7 +13,7 @@ export const IPC = {
   DISPATCH: 'dispatch',
   PIPELINE_RUN: 'pipeline:run',
   CHAT_EXCHANGE: 'chat:exchange',
-  MATRIX_HTML: 'matrix:html',
+  MATRIX_DATA: 'matrix:data',
   PROMOTE: 'matrix:promote',
   REVIEW_LIST: 'review:list',
   REVIEW_ACT: 'review:act',
