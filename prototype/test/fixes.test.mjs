@@ -6,7 +6,8 @@ import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveGuardHook, withHookArgs, runHeadless } from '../dist/runner.js';
+import { resolveGuardHook, spawnArgs, runHeadless } from '../dist/runner.js';
+import { routerModelOk } from '../dist/router/providers.js';
 import { getManifest } from '../dist/manifests.js';
 import { shouldCommit } from '../dist/dispatch.js';
 import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '../dist/worktree.js';
@@ -56,14 +57,71 @@ test('codex hook args: -c hooks.PreToolUse + bypass trust, trước prompt', () 
   const m = getManifest('codex');
   assert.equal(m.hooksSupport, true);
   const spec = m.headless('PROMPT', { sandbox: 'worktree-write' });
-  const args = withHookArgs(m, spec.args, 'C:\\a b\\hooks\\guard.cjs', tmpdir());
+  const { args, env } = spawnArgs(m, spec.args, { hookScript: 'C:\\a b\\hooks\\guard.cjs', rawDir: tmpdir() });
+  assert.deepEqual(env, {});
   assert.equal(args.at(-1), 'PROMPT');
   const c = args.indexOf('-c');
   assert.equal(args[c + 1], 'hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command="node \\"C:/a b/hooks/guard.cjs\\"",timeout=30}]}]');
   assert.ok(args.indexOf('--dangerously-bypass-hook-trust') > c && args.indexOf('--dangerously-bypass-hook-trust') < args.length - 1);
-  // claude giữ --settings <file>
-  const cl = withHookArgs(getManifest('claude'), ['-p', 'P'], 'x.cjs', mkdtempSync(path.join(tmpdir(), 'orch-hk-')));
-  assert.deepEqual([cl[0], cl[1], cl.at(-1)], ['-p', '--settings', 'P']);
+  // claude không router: giữ --settings <file>
+  const cl = spawnArgs(getManifest('claude'), ['-p', 'P'], { hookScript: 'x.cjs', rawDir: mkdtempSync(path.join(tmpdir(), 'orch-hk-')) });
+  assert.deepEqual([cl.args[0], cl.args[1], cl.args.at(-1)], ['-p', '--settings', 'P']);
+  assert.ok(existsSync(cl.args[2]));
+  // không hook, không router → args nguyên vẹn
+  assert.deepEqual(spawnArgs(getManifest('claude'), ['-p', 'P'], { rawDir: tmpdir() }), { args: ['-p', 'P'], env: {} });
+});
+
+const router = { baseUrl: 'http://127.0.0.1:4567', token: 'TOK', defaultModel: 'gw/def' };
+
+test('router claude: đúng 1 --settings inline có env + hooks, prompt cuối', () => {
+  const m = getManifest('claude');
+  const spec = m.headless('PROMPT', { sandbox: 'worktree-write', model: 'gw/sonnet' });
+  const { args, env } = spawnArgs(m, spec.args, { hookScript: 'x.cjs', rawDir: tmpdir(), router, model: 'gw/sonnet' });
+  assert.equal(args.at(-1), 'PROMPT');
+  assert.equal(args.filter((a) => a === '--settings').length, 1);
+  const s = JSON.parse(args[args.indexOf('--settings') + 1]);
+  assert.equal(s.env.ANTHROPIC_BASE_URL, router.baseUrl);
+  assert.equal(s.env.ANTHROPIC_AUTH_TOKEN, 'TOK');
+  for (const k of ['HAIKU', 'SONNET', 'OPUS']) assert.equal(s.env[`ANTHROPIC_DEFAULT_${k}_MODEL`], 'gw/sonnet');
+  assert.ok(s.hooks.PreToolUse[0].hooks[0].command.includes('x.cjs'));
+  assert.deepEqual(env, {});
+  // không model → defaultModel router; không hook → không có hooks
+  const d = spawnArgs(m, ['-p', 'P'], { rawDir: tmpdir(), router });
+  const sd = JSON.parse(d.args[d.args.indexOf('--settings') + 1]);
+  assert.equal(sd.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'gw/def');
+  assert.equal(sd.hooks, undefined);
+});
+
+test('router codex: -c model_provider orch + env ORCH_ROUTER_TOKEN, prompt cuối', () => {
+  const m = getManifest('codex');
+  const spec = m.headless('PROMPT', { sandbox: 'worktree-write', model: 'gw/gpt' });
+  const { args, env } = spawnArgs(m, spec.args, { rawDir: tmpdir(), router, model: 'gw/gpt' });
+  assert.equal(args.at(-1), 'PROMPT');
+  for (const v of ['model_provider="orch"', 'model_providers.orch.name="orch"', 'model_providers.orch.base_url="http://127.0.0.1:4567/v1"',
+    'model_providers.orch.wire_api="responses"', 'model_providers.orch.env_key="ORCH_ROUTER_TOKEN"', 'model="gw/gpt"']) {
+    assert.equal(args[args.indexOf(v) - 1], '-c', v);
+  }
+  assert.equal(args.filter((a) => a.startsWith('model=')).length, 1);
+  assert.deepEqual(env, { ORCH_ROUTER_TOKEN: 'TOK' });
+  assert.ok(!args.includes('TOK'), 'token không nằm trong args');
+  // không model → model = defaultModel router
+  const d = spawnArgs(m, m.headless('P', { sandbox: 'worktree-write' }).args, { rawDir: tmpdir(), router });
+  assert.ok(d.args.includes('model="gw/def"'));
+});
+
+test('routerModelOk', () => {
+  const ps = [
+    { id: 'a', kind: 'anthropic', baseUrl: 'x', formats: ['messages'], enabled: true },
+    { id: 'o', kind: 'openai-compatible', baseUrl: 'x', formats: ['chat', 'responses'], enabled: true },
+    { id: 'off', kind: 'openai', baseUrl: 'x', formats: ['responses'], enabled: false },
+  ];
+  assert.equal(routerModelOk('claude', 'a/m', ps).ok, true);
+  assert.equal(routerModelOk('claude', 'o/m', ps).ok, true);
+  assert.equal(routerModelOk('codex', 'o/m', ps).ok, true);
+  assert.match(routerModelOk('codex', 'a/m', ps).reason, /responses — R2b/);
+  assert.equal(routerModelOk('claude', 'off/m', ps).ok, false);
+  assert.equal(routerModelOk('claude', 'nope/m', ps).ok, false);
+  assert.match(routerModelOk('gemini', 'a/m', ps).reason, /chưa hỗ trợ router/);
 });
 
 test('runHeadless: abort → kill_reason aborted', async (t) => {

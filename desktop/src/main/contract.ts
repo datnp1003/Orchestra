@@ -19,8 +19,12 @@ export const IPC = {
   REVIEW_ACT: 'review:act',
   INSTALL_WORKER: 'install:worker',
   UNINSTALL_WORKER: 'install:uninstall',
-  VAULT_SET: 'vault:set',
-  VAULT_DELETE: 'vault:delete',
+  PROVIDERS_LIST: 'providers:list',
+  PROVIDERS_SAVE: 'providers:save',
+  PROVIDERS_DELETE: 'providers:delete',
+  PROVIDERS_TEST: 'providers:test',
+  PROVIDERS_IMPORT: 'providers:import',
+  ROUTER_STATUS: 'router:status',
   CONFORMANCE_RUN: 'conformance:run',
   SKILLS_SYNC: 'skills:sync',
   TERMINAL_CREATE: 'terminal:create',
@@ -30,7 +34,6 @@ export const IPC = {
   UPDATE_CHECK: 'update:check',
   MODELS_LIST: 'models:list',
   BRAIN_MODELS: 'brain:models',
-  BRAIN_CONFIG: 'brain:config',
   CHAT_RESET: 'chat:reset',
   CHAT_CANCEL: 'chat:cancel',
 } as const;
@@ -55,8 +58,10 @@ export type Page = (typeof PAGES)[number];
 export interface AppSettings {
   repos: string[];
   activeRepo: string;
-  /** model của Orchestra brain (LLM API, provider vault 'orchestra-brain') */
+  /** model của Orchestra brain — id router `<provider>/<model>`; '' = chưa chọn */
   brainModel: string;
+  /** model mặc định của router (CLI gửi model không prefix); '' = dùng brainModel */
+  routerDefaultModel: string;
   autoApprovePlan: boolean;
   hooksEnabled: boolean;
   skillSync: boolean;
@@ -66,7 +71,8 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   repos: [],
   activeRepo: '',
-  brainModel: 'worker-claude',
+  brainModel: '',
+  routerDefaultModel: '',
   autoApprovePlan: false,
   hooksEnabled: true,
   skillSync: true,
@@ -79,7 +85,9 @@ export function validateSettings(raw: unknown): AppSettings {
     repos: Array.isArray(r.repos) ? r.repos.filter((x): x is string => typeof x === 'string' && x.length > 0) : [],
     activeRepo: typeof r.activeRepo === 'string' ? r.activeRepo : '',
     // orchestratorWorker/orchestratorModel (CLI brain cũ) trong settings file cũ: bỏ qua, không lỗi
-    brainModel: typeof r.brainModel === 'string' && r.brainModel.trim() ? r.brainModel.trim() : DEFAULT_SETTINGS.brainModel,
+    // phải là id router `<provider>/<model>` — giá trị cũ kiểu 'worker-claude' → '' (bắt chọn lại)
+    brainModel: typeof r.brainModel === 'string' && r.brainModel.includes('/') ? r.brainModel.trim() : '',
+    routerDefaultModel: typeof r.routerDefaultModel === 'string' ? r.routerDefaultModel.trim() : '',
     autoApprovePlan: r.autoApprovePlan === true,
     hooksEnabled: r.hooksEnabled !== false,
     skillSync: r.skillSync !== false,

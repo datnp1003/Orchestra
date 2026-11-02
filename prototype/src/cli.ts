@@ -363,8 +363,8 @@ async function main(): Promise<number> {
         }
         console.log(`# Đăng nhập cho ${m.display} (${m.id})`);
         console.log(`  1. Chạy '${m.bin}' lần đầu trong terminal — CLI sẽ mở trình duyệt để OAuth (subscription)`);
-        console.log(`  2. Hoặc dùng API key / custom provider: vault set ${m.vault?.provider ?? '<provider>'} <key> [base_url]`);
-        console.log(`  3. Kiểm tra: node dist/cli.js list  (cột auth) — key/base_url sẽ được inject lúc spawn, không đụng config CLI`);
+        console.log(`  2. Hoặc dùng provider của Orchestra router (~/.orchestra/router.json) — Desktop trỏ CLI vào router lúc spawn`);
+        console.log(`  3. Kiểm tra: node dist/cli.js list  (cột auth)`);
         return 0;
       }
       if (sub === 'get') {

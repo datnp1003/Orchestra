@@ -3,7 +3,8 @@ import { MANIFESTS } from '../../prototype/src/manifests.js';
 import { checkStatus } from '../../prototype/src/registry.js';
 import { loadPolicy, resolveWorker, DEFAULT_BINDINGS, type PolicyFile } from '../../prototype/src/policy.js';
 import { buildFleetStats, loadKB, addFeedback, recallKB } from '../../prototype/src/memory.js';
-import { resolveModelFor, loadModels, type ModelChannel } from '../../prototype/src/models.js';
+import { routerModelOk, type ProviderConfig } from '../../prototype/src/router/providers.js';
+import type { RouterInfo } from '../../prototype/src/types.js';
 import { protoAsset } from '../../prototype/src/paths.js';
 import { mergeBranch } from '../../prototype/src/worktree.js';
 import { globToRegex } from '../../prototype/src/dispatch.js';
@@ -21,15 +22,14 @@ export function fleetSnapshot(): { id: string; installed: boolean; version?: str
   });
 }
 
-/** model registry + khả năng chạy từng model của từng worker (luật phân phối resolveModelFor) */
-export function modelsList(repo?: string): {
-  models: { id: string; family: string; cost_tier?: string }[];
-  byWorker: Record<string, { id: string; ok: boolean; channel: ModelChannel; reason: string }[]>;
+/** R2a: model của router (/v1/models) + worker nào chạy được model nào (routerModelOk) */
+export function modelsList(ids: string[], providers: ProviderConfig[]): {
+  models: string[];
+  byWorker: Record<string, { id: string; ok: boolean; reason: string }[]>;
 } {
-  const { registry } = loadModels(repo);
   return {
-    models: registry.models.map(({ id, family, cost_tier }) => ({ id, family, cost_tier })),
-    byWorker: Object.fromEntries(MANIFESTS.map((m) => [m.id, registry.models.map((x) => ({ id: x.id, ...resolveModelFor(m, x.id, repo) }))])),
+    models: ids,
+    byWorker: Object.fromEntries(MANIFESTS.map((m) => [m.id, ids.map((id) => ({ id, ...routerModelOk(m.id, id, providers) }))])),
   };
 }
 
@@ -172,16 +172,16 @@ export function trackOverride(
 
 export async function dispatchTracked(
   repo: string,
-  o: { node: 'implement'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal },
+  o: { node: 'implement'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal; router?: RouterInfo },
 ): Promise<{ autoPick?: string; result: Awaited<ReturnType<typeof import('../../prototype/src/dispatch.js').dispatch>>; override: string }> {
   const pol = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
-  const auto = resolveWorker(o.role, { policy: pol.policy, stats });
+  const auto = resolveWorker(o.role, { policy: pol.policy, stats, router: o.router });
   const { dispatch } = await import('../../prototype/src/dispatch.js');
   const result = await dispatch({
     repo, node: o.node, role: o.role, goal: o.goal, scope: o.scope,
     constraints: [], acceptance: o.acceptance, workerPin: o.pin, model: o.model,
-    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal,
+    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal, router: o.router,
     onEvent: o.onEvent as ((e: { t: string; [k: string]: unknown }) => void) | undefined,
   });
   const tr = trackOverride(repo, { autoPick: auto.pick, pin: o.pin, taskId: result.taskId, ok: result.ok });
@@ -415,6 +415,8 @@ export interface BrainToolDeps {
   onLog?: (line: string) => void;
   /** user bấm Dừng → kill worker đang chạy */
   signal?: AbortSignal;
+  /** R2a: worker chạy qua Orchestra router */
+  router?: RouterInfo;
 }
 type ToolOut = { ok: boolean; content: string };
 
@@ -595,7 +597,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
           acceptance: (i.acceptance as string[] | undefined) ?? [],
           pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
           model: isStr(i.model) ? i.model : undefined,
-          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true, signal: deps.signal,
+          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true, signal: deps.signal, router: deps.router,
           onEvent: deps.onLog
             ? (e) => deps.onLog!(e.t === 'tool_use' ? `[tool_use] ${e.tool} ${e.target}` : e.t === 'message' ? `[message] ${e.text}` : `[${e.t}] ${JSON.stringify(e).slice(0, 160)}`)
             : undefined,
@@ -617,7 +619,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const { runPipeline } = await import('../../prototype/src/orchestrator.js');
         const r = await runPipeline({
           repo, templatePath: tpl, goal: i.goal, scope: i.scope, acceptance: [],
-          model: isStr(i.model) ? i.model : undefined, signal: deps.signal,
+          model: isStr(i.model) ? i.model : undefined, signal: deps.signal, router: deps.router,
           autoYes: deps.autoApprovePlan ?? false, askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
         });
         const nodes = Object.entries(r.nodes).map(([k, n]) => `${k}:${n.status}${n.worker ? `/${n.worker}` : ''}`).join(' ');
@@ -676,11 +678,8 @@ export function policyMatrixHtml(repo = FALLBACK_REPO, interactive = false): str
             : s
               ? `n=${s.dispatched} (&lt; ${minSample})`
               : 'chưa có số liệu';
-        // P6.6: channel tag theo luật phân phối model
         const bModel = binds[idx]?.worker?.model;
-        const ch = bModel ? resolveModelFor(m, bModel, repo) : null;
-        const tag = ch ? `<small style="color:${ch.ok ? '#6a9955' : '#f48771'}">${ch.channel}</small><br>` : '';
-        return `<td data-role="${role}" data-cli="${m.id}" style="${interactive ? 'cursor:pointer' : ''}" title="${interactive ? 'Click = promote lên #1 (ghi policy.yml)' : ''}${ch && !ch.ok ? ` — ⚠ ${ch.reason}` : ''}">${idx === 0 ? '●' : '○'} #${idx + 1}<br><small>${bModel ?? ''}</small>${tag}<small>${stat}</small></td>`;
+        return `<td data-role="${role}" data-cli="${m.id}" style="${interactive ? 'cursor:pointer' : ''}" title="${interactive ? 'Click = promote lên #1 (ghi policy.yml)' : ''}">${idx === 0 ? '●' : '○'} #${idx + 1}<br><small>${bModel ?? ''}</small><br><small>${stat}</small></td>`;
       }).join('');
       return `<tr><th>${role}</th>${cells}</tr>`;
     })

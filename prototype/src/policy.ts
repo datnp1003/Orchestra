@@ -6,7 +6,8 @@ import * as yaml from 'js-yaml';
 import { MANIFESTS, getManifest } from './manifests.js';
 import { checkStatus } from './registry.js';
 import { buildFleetStats, statsKey, type FleetStat } from './memory.js';
-import { resolveModelFor } from './models.js';
+import { routerModelOk } from './router/providers.js';
+import type { RouterInfo } from './types.js';
 import { protoAsset } from './paths.js';
 
 export interface BindingDef {
@@ -97,7 +98,7 @@ export function resolveWorker(
     policy?: PolicyFile | null;
     stats?: Map<string, FleetStat>;
     tasksDir?: string;
-    repo?: string;
+    router?: RouterInfo;
     onSkip?: (skipped: string[]) => void;
   } = {},
 ): RoutingDecision {
@@ -126,8 +127,9 @@ export function resolveWorker(
       const boost = (b.boost_when?.tags ?? []).some((t) => tags.includes(t)) ? 2 : 0;
       const model = b.worker.model;
       const cliManifest = getManifest(b.worker.cli);
-      if (model && cliManifest) {
-        const res = resolveModelFor(cliManifest, model, opts.repo);
+      // không có router info → model binding chấp nhận nguyên trạng (CLI tự lo auth)
+      if (model && cliManifest && opts.router?.providers) {
+        const res = routerModelOk(b.worker.cli, model, opts.router.providers);
         if (!res.ok) {
           skipped.push(`${b.worker.cli}/${model} (${res.reason})`);
           return;

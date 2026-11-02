@@ -31,4 +31,11 @@ assert.ok(!js.includes('orchestratorWorker'), 'renderer không dùng CLI brain c
 console.log('✓ composer: chỉ chọn model Orchestra');
 assert.ok(html.includes('id="chatStop"') && js.includes("'chat:cancel'"), 'composer có nút Dừng → chat:cancel');
 console.log('✓ composer: nút Dừng');
+
+// R2a: tab Providers thay Vault; key input là password, không còn kênh vault/brain:config
+assert.ok(js.includes("['providers', 'Providers']") && !js.includes("'vault'"), 'tab Providers thay Vault');
+for (const c of ["'brain:config'", "'vault:set'", "'vault:delete'"]) assert.ok(!js.includes(c), `renderer không gọi ${c}`);
+assert.ok(/id="prKey" type="password"/.test(js), 'key input type=password');
+assert.ok(/confirm\([^)]*claude\/settings\.json/.test(js), 'import có confirm()');
+console.log('✓ Providers tab: password key, import có confirm, không còn vault/brain:config');
 console.log('RENDERER TEST PASS ✓');

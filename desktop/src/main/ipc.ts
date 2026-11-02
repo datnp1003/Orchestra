@@ -8,17 +8,43 @@ import {
   fleetSnapshot, tasksSnapshot, policyMatrixHtml, promoteWorker, mergeableTasks, reviewMerge,
   dispatchTracked, conformanceBadge, modelsList, BRAIN_TOOLS, brainSystemPrompt, brainToolExecutor,
 } from '../../../extension/src/logic.js';
-import { runBrainTurn, listBrainModels, brainConfigured, brainCreds, BRAIN_PROVIDER, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
+import { runBrainTurn, listBrainModels, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
 import { syncSkills } from '../../../prototype/src/skillsync.js';
 import { runConformance } from '../../../prototype/src/conformance.js';
 import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/src/registry.js';
-import { vaultSet, vaultDelete } from '../../../prototype/src/vault.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
 import { protoAsset } from '../../../prototype/src/paths.js';
+import { createProviderStore, authHeaders, type ProviderConfig } from '../../../prototype/src/router/providers.js';
+import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
+import type { RouterInfo } from '../../../prototype/src/types.js';
+import { fromClaudeSettings, fromCodexConfig } from './importCli.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
+
+// R2a: 1 provider store + 1 router cho cả app — brain, dispatch, pipeline đều đi qua đây
+const store = createProviderStore();
+let router: RouterHandle | null = null;
+let routerSettingsFile = '';
+const routerDefault = () => {
+  const s = loadSettings(routerSettingsFile);
+  return s.routerDefaultModel || s.brainModel || undefined;
+};
+export async function startOrchestraRouter(settingsFile: string): Promise<void> {
+  routerSettingsFile = settingsFile;
+  router = await startRouter({ store, defaultModel: routerDefault, onLog: (l) => console.log('[router]', l) });
+  console.log(`[router] 127.0.0.1:${router.port}`);
+}
+export const stopOrchestraRouter = (): Promise<void> => router?.close() ?? Promise.resolve();
+const routerCreds = (): BrainCreds | null => (router ? { baseUrl: `http://127.0.0.1:${router.port}`, apiKey: router.token } : null);
+/** chưa có provider bật nào → undefined: CLI dùng auth riêng như trước (không phá máy mới cài) */
+const routerInfo = (): RouterInfo | undefined => {
+  const c = routerCreds();
+  const providers = store.listProviders();
+  return c && providers.some((p) => p.enabled) ? { baseUrl: c.baseUrl, token: c.apiKey, defaultModel: routerDefault(), providers } : undefined;
+};
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export interface IpcContext {
   win: () => BrowserWindow | null;
@@ -61,7 +87,62 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (prev.brainModel !== saved.brainModel) resetChat(); // đổi model brain → hội thoại mới
     return saved;
   });
-  ipcMain.handle(IPC.MODELS_LIST, () => withRepo((repo) => modelsList(repo), () => modelsList()));
+  ipcMain.handle(IPC.MODELS_LIST, async () => {
+    const c = routerCreds();
+    const { models } = c ? await listBrainModels(c) : { models: [] as string[] };
+    return modelsList(models, store.listProviders());
+  });
+
+  // ---- R2a Providers: key chỉ đi vào vault, KHÔNG bao giờ trả về renderer ----
+  ipcMain.handle(IPC.PROVIDERS_LIST, () =>
+    store.listProviders().map((p) => ({ id: p.id, kind: p.kind, baseUrl: p.baseUrl, formats: p.formats, enabled: p.enabled, hasKey: !!store.getKey(p.id) })));
+  ipcMain.handle(IPC.PROVIDERS_SAVE, (_e, p: { cfg: Partial<ProviderConfig>; key?: string }) => {
+    try {
+      const key = typeof p?.key === 'string' && p.key.trim() ? p.key.trim() : undefined; // trống = giữ key cũ
+      return { ok: true, id: store.saveProvider(p?.cfg ?? {}, key).id };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  });
+  ipcMain.handle(IPC.PROVIDERS_DELETE, (_e, id: string) => ({ ok: store.deleteProvider(String(id)) }));
+  // gọi thẳng upstream đúng như router làm (header auth giống hệt) — bỏ qua cache 5' của router để thấy lỗi thật
+  ipcMain.handle(IPC.PROVIDERS_TEST, async (_e, id: string) => {
+    const p = store.listProviders().find((x) => x.id === id);
+    if (!p) return { ok: false, count: 0, error: `không có provider ${id}` };
+    if (p.models) return { ok: true, count: p.models.length };
+    try {
+      const r = await fetch(`${p.baseUrl}/v1/models`, { headers: authHeaders(p.kind, store.getKey(p.id)), signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) return { ok: false, count: 0, error: `HTTP ${r.status}` };
+      const data = ((await r.json()) as { data?: unknown[] }).data;
+      return { ok: true, count: Array.isArray(data) ? data.length : 0 };
+    } catch (err) {
+      return { ok: false, count: 0, error: errMsg(err) };
+    }
+  });
+  ipcMain.handle(IPC.ROUTER_STATUS, () => ({ running: !!router, port: router?.port ?? null, providers: store.listProviders().length }));
+  // đọc config CLI của user trong main; trả id + lý do bỏ qua, không trả key
+  ipcMain.handle(IPC.PROVIDERS_IMPORT, () => {
+    const read = (f: string) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
+    const imported: string[] = [];
+    const skipped: string[] = [];
+    const cl = read(path.join(os.homedir(), '.claude', 'settings.json'));
+    const cx = read(path.join(os.homedir(), '.codex', 'config.toml'));
+    const found = [
+      cl === null ? { skip: 'claude: không có ~/.claude/settings.json' } : fromClaudeSettings(cl),
+      cx === null ? { skip: 'codex: không có ~/.codex/config.toml' } : fromCodexConfig(cx, process.env),
+    ];
+    for (const f of found) {
+      if ('skip' in f) skipped.push(f.skip);
+      else {
+        try {
+          imported.push(store.saveProvider(f.cfg, f.key).id);
+        } catch (err) {
+          skipped.push(`${f.cfg.id}: ${errMsg(err)}`);
+        }
+      }
+    }
+    return { imported, skipped };
+  });
   ipcMain.handle(IPC.REPO_SET_ACTIVE, (_e, repo: string) => {
     const s = settings();
     if (!s.repos.includes(repo)) s.repos.push(repo);
@@ -99,6 +180,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       model: p.model || undefined,
       hooksEnabled: s.hooksEnabled,
       skillSync: s.skillSync,
+      router: routerInfo(),
       onEvent: (e) => send(EVENTS.DISPATCH_EVENT, { t: e.t, payload: e }),
     });
     ctx.notify('Orchestra Dispatch', `${r.result.ok ? '✓ OK' : '✗ FAILED'} — ${r.result.taskId}`);
@@ -116,6 +198,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       acceptance: p.acceptance ?? [],
       autoYes: s.autoApprovePlan,
       model: p.model || undefined,
+      router: routerInfo(),
       onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
       // D1: approval qua modal của Desktop — không có stdin
       askUser: async (q) => {
@@ -137,8 +220,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     };
     if (typeof p?.text !== 'string' || !p.text.trim()) return fail('tin nhắn rỗng');
     if (chatBusy) return fail('Orchestra đang xử lý lượt trước — chờ xong rồi nhắn tiếp');
-    const creds = getCreds();
-    if (!creds) return fail('Chưa cấu hình Orchestra brain — vào Cài đặt › Vault / API key › "Orchestra brain" nhập base URL + key');
+    const creds = routerCreds();
+    if (!creds) return fail('Orchestra router chưa chạy');
+    if (!settings().brainModel) return fail('chọn Model Orchestra ở composer');
     chatBusy = true;
     const ac = new AbortController();
     chatAbort = ac;
@@ -172,6 +256,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           autoApprovePlan: s.autoApprovePlan,
           onLog: progress,
           signal: ac.signal,
+          router: routerInfo(),
         }),
         onStep: (step) => send(EVENTS.CHAT_STEP, step),
       });
@@ -195,20 +280,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { ok: true };
   });
   ipcMain.handle(IPC.BRAIN_MODELS, async () => {
-    const creds = getCreds();
-    return creds ? listBrainModels(creds) : { models: [], error: 'chưa cấu hình Orchestra brain' };
-  });
-  // lưu base_url + key vào vault — chỉ trả trạng thái, không bao giờ echo key
-  ipcMain.handle(IPC.BRAIN_CONFIG, (_e, p?: { baseUrl?: string; key?: string }) => {
-    if (p?.key !== undefined) {
-      const baseUrl = String(p.baseUrl ?? '').trim();
-      const key = String(p.key).trim();
-      if (!/^https?:\/\/\S+$/.test(baseUrl) || !key) return { configured: brainConfigured(), error: 'cần base URL http(s) và key' };
-      const ok = vaultSet(BRAIN_PROVIDER, key, baseUrl);
-      credsCache = undefined;
-      if (!ok) return { configured: brainConfigured(), error: 'lưu vault thất bại' };
-    }
-    return { configured: brainConfigured() };
+    const creds = routerCreds();
+    return creds ? listBrainModels(creds) : { models: [], error: 'Orchestra router chưa chạy' };
   });
 
   ipcMain.handle(IPC.INSTALL_WORKER, async (_e, id: string) => {
@@ -222,11 +295,6 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     const m = getManifest(id);
     return m ? uninstallWorker(m) : { ok: false, detail: 'unknown' };
   });
-
-  ipcMain.handle(IPC.VAULT_SET, (_e, p: { provider: string; secret: string; baseUrl?: string }) => ({
-    ok: vaultSet(p.provider, p.secret, p.baseUrl),
-  }));
-  ipcMain.handle(IPC.VAULT_DELETE, (_e, provider: string) => ({ ok: vaultDelete(provider) }));
 
   ipcMain.handle(IPC.CONFORMANCE_RUN, async (_e, id: string) => {
     const m = getManifest(id);
@@ -254,9 +322,6 @@ let chatAbort: AbortController | null = null; // lượt đang chạy — chat:c
 const resetChat = () => {
   chat = { history: [], startedAt: '' };
 };
-// đọc vault = spawn powershell → cache; brain:config xoá cache
-let credsCache: BrainCreds | null | undefined;
-const getCreds = (): BrainCreds | null => (credsCache ??= brainCreds());
 
 /** append message mới vào <repo>/.orchestra/chat/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */
 function persistChat(repo: string, conv: typeof chat, msgs: Msg[]): void {

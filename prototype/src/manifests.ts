@@ -247,7 +247,18 @@ const claude: Manifest = {
   requiredEvents: ['session', 'message', 'usage'],
   scopeRules: true,
   hooksSupport: true,
-  vault: { provider: 'anthropic', env: 'ANTHROPIC_AUTH_TOKEN', base_url_env: 'ANTHROPIC_BASE_URL' },
+  // R2a: claude bỏ qua ANTHROPIC_* của process (settings.json user đè) → env qua inline --settings
+  routerArgs: (r, model) => {
+    const m = model || r.defaultModel;
+    return {
+      settingsEnv: {
+        ANTHROPIC_BASE_URL: r.baseUrl,
+        ANTHROPIC_AUTH_TOKEN: r.token,
+        // request nền (title, haiku…) cũng đi qua router
+        ...(m ? { ANTHROPIC_DEFAULT_HAIKU_MODEL: m, ANTHROPIC_DEFAULT_SONNET_MODEL: m, ANTHROPIC_DEFAULT_OPUS_MODEL: m } : {}),
+      },
+    };
+  },
   notes: [
     'conformance pin: 2.1.310',
     'permission: --permission-mode plan (read-only) | acceptEdits (worktree-write)',
@@ -263,7 +274,21 @@ const codex: Manifest = {
   versionCmd: { cmd: 'codex', args: ['--version'] },
   versionRegex: /([0-9]+\.[0-9]+\.[0-9]+)/,
   authCmd: { cmd: 'codex', args: ['login', 'status'] },
-  vault: { provider: 'openai', env: 'OPENAI_API_KEY', base_url_env: 'OPENAI_BASE_URL' },
+  // R2a: codex 0.164 — provider 'orch' trỏ router; wire_api chat không gửi request → chỉ responses
+  routerArgs: (r, model) => {
+    const m = model ? undefined : r.defaultModel; // có model → headless đã gắn -c model
+    return {
+      args: [
+        '-c', 'model_provider="orch"',
+        '-c', 'model_providers.orch.name="orch"',
+        '-c', `model_providers.orch.base_url=${tomlStr(`${r.baseUrl}/v1`)}`,
+        '-c', 'model_providers.orch.wire_api="responses"',
+        '-c', 'model_providers.orch.env_key="ORCH_ROUTER_TOKEN"',
+        ...(m ? ['-c', `model=${tomlStr(m)}`] : []),
+      ],
+      env: { ORCH_ROUTER_TOKEN: r.token },
+    };
+  },
   headless: (prompt: string, opts: HeadlessOpts): SpawnSpec => {
     const args = [
       'exec',
@@ -272,7 +297,7 @@ const codex: Manifest = {
       '--sandbox',
       codexSandbox(opts.sandbox),
     ];
-    if (opts.model) args.push('-c', `model=${opts.model}`);
+    if (opts.model) args.push('-c', `model=${tomlStr(opts.model)}`);
     args.push(prompt);
     return { cmd: 'codex', args };
   },

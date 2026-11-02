@@ -79,19 +79,6 @@ export function vaultGetBaseUrl(provider: string): string | null {
   return readRaw(provider)?.base_url ?? null;
 }
 
-/**
- * P6.4 — resolveVaultEnv: biến env cần inject lúc spawn cho 1 manifest
- * (Worker Protocol §5/§6 — spawn-time override, auth "sync xuống" CLI không đụng config user)
- */
-export function resolveVaultEnv(m: { vault?: { provider: string; env: string; base_url_env?: string } }): Record<string, string> {
-  if (!m.vault) return {};
-  const entry = readRaw(m.vault.provider);
-  if (!entry) return {};
-  const env: Record<string, string> = { [m.vault.env]: entry.secret };
-  if (entry.base_url && m.vault.base_url_env) env[m.vault.base_url_env] = entry.base_url;
-  return env;
-}
-
 export function vaultList(): string[] {
   const dir = vaultDir();
   if (!existsSync(dir)) return [];

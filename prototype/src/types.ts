@@ -1,4 +1,15 @@
 // Event chuẩn hoá theo Worker Protocol spec v0.1 §8
+import type { ProviderConfig } from './router/providers.js';
+
+/** R2a: Orchestra router local — auth "sync xuống" CLI lúc spawn, không đụng config của user */
+export interface RouterInfo {
+  baseUrl: string; // http://127.0.0.1:<port>, không '/v1'
+  token: string;
+  defaultModel?: string;
+  /** có → model của policy binding được kiểm bằng routerModelOk */
+  providers?: ProviderConfig[];
+}
+
 export type EventType =
   | 'session'
   | 'message'
@@ -52,8 +63,6 @@ export interface Manifest {
   mapEvent: (raw: unknown, worker: string) => MapResult;
   /** event bắt buộc phải xuất hiện trong smoke test (Worker Protocol §10 case 2) */
   requiredEvents: EventType[];
-  /** P5.2: vault injection — key từ DPAPI vault set vào env lúc spawn, không qua LLM */
-  vault?: { provider: string; env: string; /** P6.4: custom provider base URL env (ANTHROPIC_BASE_URL / OPENAI_BASE_URL) */ base_url_env?: string };
   /**
    * P6.5 — Auth domain rule: OAuth của CLI chỉ áp dụng cho provider này.
    * Model của provider khác → CHỈ qua vault API key + custom provider (gateway dịch API).
@@ -72,6 +81,8 @@ export interface Manifest {
   hooksSupport?: boolean;
   /** P6.2: args gắn PreToolUse hook (runner chèn trước prompt) — không có = claude `--settings <file>` */
   hookArgs?: (hookCommand: string) => string[];
+  /** R2a: trỏ CLI vào Orchestra router — args + env; settingsEnv (claude) gộp với hooks vào 1 `--settings` JSON */
+  routerArgs?: (r: RouterInfo, model?: string) => { args?: string[]; env?: Record<string, string>; settingsEnv?: Record<string, string> };
   experimental?: boolean;
   notes: string[];
 }

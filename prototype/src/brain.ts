@@ -1,10 +1,6 @@
 // M1 — Orchestra brain: agent loop riêng gọi LLM API (Anthropic Messages, tool calling).
 // CLI chỉ là worker, chỉ chạm được qua tool fleet_dispatch / fleet_pipeline.
-// Key nằm trong vault (DPAPI) — không log, không vào prompt/record/event/message lỗi.
-import { vaultGet, vaultGetBaseUrl, vaultStatus } from './vault.js';
-
-export const BRAIN_PROVIDER = 'orchestra-brain';
-export const DEFAULT_BRAIN_MODEL = 'worker-claude';
+// R2a: gọi qua Orchestra router (baseUrl router, apiKey = token router) — key không log, không vào prompt/record/lỗi.
 
 export type Block =
   | { type: 'text'; text: string }
@@ -34,17 +30,6 @@ export interface BrainCreds {
   apiKey: string;
 }
 type FetchFn = typeof fetch;
-
-export function brainConfigured(): boolean {
-  return vaultStatus(BRAIN_PROVIDER).configured;
-}
-
-/** đọc vault (2 lần spawn powershell) — caller nên cache */
-export function brainCreds(): BrainCreds | null {
-  const apiKey = vaultGet(BRAIN_PROVIDER);
-  const baseUrl = vaultGetBaseUrl(BRAIN_PROVIDER);
-  return apiKey && baseUrl ? { baseUrl, apiKey } : null;
-}
 
 // chấp nhận cả "https://gw" lẫn "https://gw/v1/"
 const apiUrl = (baseUrl: string, p: string) => `${baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/${p}`;

@@ -5,16 +5,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, promoteWorker, restoreDefaultPolicy, trackOverride, conformanceBadge } from '../out/extension/src/logic.js';
 
-// 0. default policy/models tìm được từ extension/out + modelsList
+// 0. default policy tìm được từ extension/out + modelsList (router R2a)
 const { loadPolicy } = await import('../out/prototype/src/policy.js');
-const { loadModels } = await import('../out/prototype/src/models.js');
 assert.equal(loadPolicy().source, 'proto-default', 'loadPolicy từ out/');
-assert.equal(loadModels().source, 'proto-default', 'loadModels từ out/');
 const { modelsList } = await import('../out/extension/src/logic.js');
-const ml = modelsList();
-const opus = (w) => ml.byWorker[w].find((m) => m.id === 'opus-4.6');
-assert.ok(opus('claude').ok && opus('claude').channel === 'native', 'claude+opus-4.6 native');
-assert.equal(opus('antigravity').ok, false, 'antigravity+opus-4.6 không phân phối');
+const ml = modelsList(['gw/opus', 'oa/gpt'], [
+  { id: 'gw', kind: 'anthropic', baseUrl: 'x', formats: ['messages'], enabled: true },
+  { id: 'oa', kind: 'openai', baseUrl: 'x', formats: ['responses', 'chat'], enabled: true },
+]);
+const pick = (w, id) => ml.byWorker[w].find((m) => m.id === id);
+assert.deepEqual(ml.models, ['gw/opus', 'oa/gpt']);
+assert.ok(pick('claude', 'gw/opus').ok && pick('codex', 'oa/gpt').ok, 'claude+messages, codex+responses');
+assert.match(pick('codex', 'gw/opus').reason, /R2b/, 'codex cần responses');
+assert.equal(pick('antigravity', 'gw/opus').ok, false, 'antigravity chưa hỗ trợ router');
 console.log('✓ proto-default từ out/ + modelsList byWorker');
 
 // 1. Fleet snapshot — CLI thật trên máy

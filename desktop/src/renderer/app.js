@@ -10,7 +10,7 @@ const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Bool
 let SETTINGS = null;
 let FLEET = [];
 let MODELS = { models: [], byWorker: {} };
-let BRAIN_MODELS = []; // model của Orchestra brain (gateway /v1/models)
+let BRAIN_MODELS = []; // model của Orchestra brain (router /v1/models)
 
 // ---------- event bus: đăng ký listener đúng 1 lần, route mới chỉ gắn handler ----------
 const handlers = {};
@@ -39,9 +39,9 @@ async function loadBrainModels() {
   BRAIN_MODELS = (await api.invoke('brain:models')).models || [];
   renderChrome();
 }
-// <option> model: '' = mặc định; worker rỗng (auto) = toàn bộ registry; model worker không chạy được → disabled + lý do
+// <option> model: '' = mặc định; worker rỗng (auto) = toàn bộ model router; model worker không chạy được → disabled + lý do
 function modelOptions(worker, cur, defLabel) {
-  const list = worker ? MODELS.byWorker[worker] || [] : MODELS.models.map((m) => ({ id: m.id, ok: true, reason: `${m.family} · ${m.cost_tier ?? '-'}` }));
+  const list = worker ? MODELS.byWorker[worker] || [] : MODELS.models.map((id) => ({ id, ok: true, reason: '' }));
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
@@ -65,7 +65,7 @@ function renderChrome() {
     pill.innerHTML = `<span class="dot ${n === FLEET.length ? 'ok' : 'err'}"></span>${n}/${FLEET.length} workers`;
   }
   // statusbar
-  $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel ?? '—'}`;
+  $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
   $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || '(chưa chọn)');
   const stFleet = $('#stFleet');
   if (FLEET.length) {
@@ -75,7 +75,8 @@ function renderChrome() {
   // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
   if (SETTINGS) {
     const cur = SETTINGS.brainModel;
-    $('#cbModel').innerHTML = [...new Set([cur, ...BRAIN_MODELS])].map((id) => `<option ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
+    $('#cbModel').innerHTML = '<option value="">(chọn model)</option>' + [...new Set([cur, ...BRAIN_MODELS].filter(Boolean))]
+      .map((id) => `<option value="${esc(id)}" ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
   }
 }
 
@@ -109,7 +110,6 @@ $('#repoSel').addEventListener('change', async (e) => {
   if (!r || r.startsWith('(')) return;
   await api.invoke('repo:set-active', r);
   await loadSettings();
-  await loadModels(); // models.yml của project có thể khác
   route(); // nạp lại trang hiện tại với repo mới
 });
 
@@ -312,7 +312,9 @@ async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const [s] = await Promise.all([loadSettings(), loadFleet()]);
-  const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['vault', 'Vault / API key'], ['conformance', 'Conformance'], ['skills', 'Skills']];
+  const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills']];
+  const KINDS = ['anthropic', 'openai', 'anthropic-compatible', 'openai-compatible'];
+  const FORMATS = ['messages', 'chat', 'responses'];
   const pane = (id, html) => `<div class="tabpane" id="tab-${id}" ${settingsTab === id ? '' : 'hidden'}>${html}</div>`;
   page.innerHTML = `
     <h2>Cài đặt</h2>
@@ -342,23 +344,29 @@ async function renderSettings() {
         </div>`).join('')}
         <div id="log" style="margin-top:10px"></div>
       </div>`)}
-    ${pane('vault', `
+    ${pane('providers', `
       <div class="card">
-        <h3>Orchestra brain (LLM API — Anthropic Messages compatible)</h3>
-        <div class="dim">Trạng thái: <span id="bStatus">…</span></div>
-        <label>Base URL</label><input id="bUrl" placeholder="https://gateway.example.com" />
-        <label>API key</label><input id="bKey" type="password" autocomplete="off" />
-        <button id="bSave">Lưu</button>
+        <h3>Orchestra Router — providers</h3>
+        <div class="dim">Router: <span id="rStatus">…</span></div>
+        <table><thead><tr><th>id</th><th>kind</th><th>baseUrl</th><th>formats</th><th>bật</th><th>key</th><th></th></tr></thead>
+        <tbody id="prRows"></tbody></table>
+        <div class="row">
+          <button class="secondary" id="prImport">Import từ claude/codex config</button>
+          <span id="prOut" class="dim"></span>
+        </div>
+        <label>Model mặc định của router (CLI gửi model không prefix)</label>
+        <select id="rDefault"></select>
       </div>
       <div class="card">
-        <h3>Vault — API key / Custom provider (DPAPI)</h3>
-        <label>Provider</label><select id="vProvider"><option>anthropic</option><option>openai</option></select>
-        <label>Base URL (custom provider — để trống nếu dùng key gốc)</label><input id="vUrl" placeholder="https://gw.company.com/v1" />
-        <label>API key</label><input id="vKey" type="password" />
-        <div class="row">
-          <button id="vSave">Lưu vào vault</button>
-          <button class="secondary" id="vDel">Xoá provider</button>
-        </div>
+        <h3>Thêm / sửa provider</h3>
+        <label>id</label><input id="prId" placeholder="my-gw" autocomplete="off" />
+        <label>kind</label><select id="prKind">${KINDS.map((k) => `<option>${k}</option>`).join('')}</select>
+        <label>Base URL</label><input id="prUrl" placeholder="https://gw.company.com" />
+        <label>Formats upstream nói native</label>
+        <div class="row">${FORMATS.map((f) => `<label><input type="checkbox" data-fmt="${f}" /> ${f}</label>`).join('')}</div>
+        <label>API key (để trống = giữ key cũ)</label><input id="prKey" type="password" autocomplete="off" />
+        <label><input type="checkbox" id="prOn" checked /> Bật</label>
+        <button id="prSave">Lưu</button>
       </div>`)}
     ${pane('conformance', `
       <div class="card">
@@ -417,30 +425,75 @@ async function renderSettings() {
     };
   });
   page.querySelectorAll('[data-auth]').forEach((b) => {
-    b.onclick = () => alert(`Login: mở terminal chạy CLI này (OAuth ${b.dataset.auth === 'claude' ? 'anthropic' : 'openai'}) — hoặc cấu hình key/provider ở tab Vault.`);
+    b.onclick = () => alert(`Login: mở terminal chạy CLI này (OAuth ${b.dataset.auth === 'claude' ? 'anthropic' : 'openai'}) — key/gateway khác cấu hình ở tab Providers.`);
   });
-  // tab vault — Orchestra brain: key không bao giờ echo lại, chỉ hiện trạng thái
-  const brainStatus = (r) => {
-    $('#bStatus').textContent = (r.configured ? '✓ đã cấu hình' : '✗ chưa cấu hình') + (r.error ? ' — ' + r.error : '');
+  // tab providers — key không bao giờ về renderer (chỉ hasKey)
+  let PROVS = [];
+  const refreshModels = async () => {
+    await Promise.all([loadModels(), loadBrainModels()]);
+    const cur = SETTINGS.routerDefaultModel;
+    $('#rDefault').innerHTML = `<option value="">(theo model Orchestra: ${esc(SETTINGS.brainModel || 'chưa chọn')})</option>` +
+      MODELS.models.map((id) => `<option value="${esc(id)}" ${id === cur ? 'selected' : ''}>${esc(id)}</option>`).join('');
   };
-  api.invoke('brain:config').then(brainStatus);
-  $('#bSave').onclick = async () => {
-    const r = await api.invoke('brain:config', { baseUrl: $('#bUrl').value.trim(), key: $('#bKey').value.trim() });
-    $('#bKey').value = '';
-    brainStatus(r);
-    if (!r.error) loadBrainModels();
+  const renderProviders = async () => {
+    const [list, st] = await Promise.all([api.invoke('providers:list'), api.invoke('router:status')]);
+    PROVS = list;
+    $('#rStatus').textContent = st.running ? `✓ 127.0.0.1:${st.port} · ${st.providers} provider` : '✗ không chạy';
+    $('#prRows').innerHTML = list.map((p) => `<tr>
+      <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
+      <td>${p.enabled ? '✓' : '—'}</td><td>${p.hasKey ? '✓' : '—'}</td>
+      <td><button class="secondary" data-pedit="${esc(p.id)}">Sửa</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">Xoá</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" class="dim">chưa có provider — CLI dùng auth riêng</td></tr>';
+    page.querySelectorAll('[data-pedit]').forEach((b) => {
+      b.onclick = () => {
+        const p = PROVS.find((x) => x.id === b.dataset.pedit);
+        $('#prId').value = p.id;
+        $('#prKind').value = p.kind;
+        $('#prUrl').value = p.baseUrl;
+        page.querySelectorAll('[data-fmt]').forEach((c) => { c.checked = p.formats.includes(c.dataset.fmt); });
+        $('#prOn').checked = p.enabled;
+        $('#prKey').value = '';
+      };
+    });
+    page.querySelectorAll('[data-ptest]').forEach((b) => {
+      b.onclick = async () => {
+        $('#prOut').textContent = `đang test ${b.dataset.ptest}…`;
+        const r = await api.invoke('providers:test', b.dataset.ptest);
+        $('#prOut').textContent = r.ok ? `✓ ${b.dataset.ptest}: ${r.count} model` : `✗ ${b.dataset.ptest}: ${r.error}`;
+      };
+    });
+    page.querySelectorAll('[data-pdel]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm(`Xoá provider '${b.dataset.pdel}' (cả key trong vault)?`)) return;
+        await api.invoke('providers:delete', b.dataset.pdel);
+        await renderProviders();
+      };
+    });
+    await refreshModels();
   };
-  $('#vSave').onclick = async () => {
-    const provider = $('#vProvider').value;
-    const key = $('#vKey').value.trim();
-    if (!key) return alert('Nhập key');
-    const url = $('#vUrl').value.trim() || undefined;
-    const r = await api.invoke('vault:set', { provider, secret: key, baseUrl: url });
-    alert(r.ok ? `✓ ${provider} lưu (base_url: ${url ?? 'mặc định'})` : '✗ thất bại');
+  renderProviders();
+  $('#prSave').onclick = async () => {
+    const cfg = {
+      id: $('#prId').value.trim(),
+      kind: $('#prKind').value,
+      baseUrl: $('#prUrl').value.trim(),
+      formats: [...page.querySelectorAll('[data-fmt]')].filter((c) => c.checked).map((c) => c.dataset.fmt),
+      enabled: $('#prOn').checked,
+    };
+    const key = $('#prKey').value;
+    const r = await api.invoke('providers:save', { cfg, key: key || undefined });
+    $('#prKey').value = '';
+    $('#prOut').textContent = r.ok ? `✓ đã lưu ${r.id}` : `✗ ${r.error}`;
+    if (r.ok) await renderProviders();
   };
-  $('#vDel').onclick = async () => {
-    await api.invoke('vault:delete', $('#vProvider').value);
-    alert('đã xoá');
+  $('#prImport').onclick = async () => {
+    if (!confirm('Đọc ~/.claude/settings.json và ~/.codex/config.toml, lưu gateway + key (vault DPAPI) thành provider claude-gw / codex-gw?')) return;
+    const r = await api.invoke('providers:import');
+    $('#prOut').textContent = `import: ${r.imported.join(', ') || '(không có)'}${r.skipped.length ? ' · bỏ qua: ' + r.skipped.join('; ') : ''}`;
+    await renderProviders();
+  };
+  $('#rDefault').onchange = async (e) => {
+    SETTINGS = await api.invoke('settings:set', { ...SETTINGS, routerDefaultModel: e.target.value });
   };
   // tab conformance
   $('#cRun').onclick = async () => {
@@ -531,7 +584,7 @@ window.addEventListener('hashchange', route);
 // Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
-  const settings = { activeRepo: repos[0], repos, brainModel: 'worker-claude', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
+  const settings = { activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true },
@@ -548,10 +601,12 @@ function devStub() {
     if (ch === 'settings:get') return settings;
     if (ch === 'fleet:list') return fleet;
     if (ch === 'tasks:list') return tasks;
-    if (ch === 'models:list') return { models: [{ id: 'opus-4.6', family: 'anthropic', cost_tier: 'high' }], byWorker: { claude: [{ id: 'opus-4.6', ok: true, channel: 'native', reason: 'native' }] } };
+    if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw nói messages' }], codex: [{ id: 'gw/claude-opus', ok: false, reason: 'codex cần provider nói responses — R2b' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
-    if (ch === 'brain:models') return { models: ['worker-claude'] };
-    if (ch === 'brain:config') return { configured: false };
+    if (ch === 'brain:models') return { models: ['gw/claude-opus'] };
+    if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true }];
+    if (ch === 'router:status') return { running: false, port: null, providers: 1 };
+    if (ch === 'providers:import') return { imported: [], skipped: ['(stub)'] };
     if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) đã nhận — chạy preview ngoài Electron.' })), 400);
     return { ok: true };

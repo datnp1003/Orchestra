@@ -38,6 +38,8 @@ export interface DispatchOptions {
   excludeWorkers?: string[];
   /** user bấm Dừng → kill worker (kill_reason 'aborted') */
   signal?: AbortSignal;
+  /** R2a: Orchestra router — CLI chạy qua router thay vì auth riêng */
+  router?: import('./types.js').RouterInfo;
 }
 
 export interface ScopeCheck {
@@ -138,6 +140,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     tags: o.tags,
     policy: pol.policy,
     stats,
+    router: o.router,
   });
   if (!routing.pick) {
     return { ok: false, taskId, stage: 'routing', reason: routing.reason };
@@ -192,6 +195,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     resumeSession: o.resumeSession,
     hooksEnabled: o.hooksEnabled,
     signal: o.signal,
+    router: o.router,
   });
   const durationMs = Date.now() - started;
 

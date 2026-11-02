@@ -2,7 +2,7 @@
 import { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals } from './ipc.js';
+import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals, startOrchestraRouter, stopOrchestraRouter } from './ipc.js';
 import { IPC } from './contract.js';
 import { loadSettings } from './settingsStore.js';
 
@@ -77,9 +77,11 @@ if (!gotLock) {
     });
   };
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // smoke settings sớm — fail nhanh nếu userData không ghi được
     loadSettings(settingsFile);
+    // R2a: router trước IPC — chat/dispatch đầu tiên đã có router; lỗi (router.json hỏng…) không chặn app
+    await startOrchestraRouter(settingsFile).catch((err) => console.error('[router] không khởi động được:', err));
     wireIpc(ipcMain, {
       win: () => win,
       settingsFile,
@@ -118,7 +120,10 @@ if (!gotLock) {
     }
   });
 
-  app.on('before-quit', () => killAllTerminals());
+  app.on('before-quit', () => {
+    killAllTerminals();
+    void stopOrchestraRouter();
+  });
 
   // export cho test nội bộ — IPC channel list hiển thị trong About
   void IPC;

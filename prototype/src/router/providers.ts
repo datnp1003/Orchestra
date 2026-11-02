@@ -65,6 +65,21 @@ export function authHeaders(kind: ProviderKind, key: string | null): Record<stri
   return h;
 }
 
+/** R2a: CLI chạy được model `<provider>/<model>` qua router không (theo format provider nói + router dịch được) */
+export function routerModelOk(cli: string, modelId: string, providers: ProviderConfig[]): { ok: boolean; reason: string } {
+  if (cli !== 'claude' && cli !== 'codex') return { ok: false, reason: `${cli} chưa hỗ trợ router` };
+  const i = modelId.indexOf('/');
+  const p = i > 0 ? providers.find((x) => x.id === modelId.slice(0, i)) : undefined;
+  if (!p) return { ok: false, reason: `không có provider cho '${modelId}' (dùng <provider>/<model>)` };
+  if (!p.enabled) return { ok: false, reason: `provider ${p.id} đang tắt` };
+  if (cli === 'codex') {
+    return p.formats.includes('responses') ? { ok: true, reason: `${p.id} nói responses` } : { ok: false, reason: 'codex cần provider nói responses — R2b' };
+  }
+  return p.formats.includes('messages') || p.formats.includes('chat')
+    ? { ok: true, reason: `${p.id} ${p.formats.includes('messages') ? 'nói messages' : 'chat (router dịch)'}` }
+    : { ok: false, reason: `claude cần provider nói messages hoặc chat — ${p.id}: ${p.formats.join(',')}` };
+}
+
 export interface ProviderStore {
   listProviders(): ProviderConfig[];
   saveProvider(cfg: Partial<ProviderConfig>, key?: string): ProviderConfig;

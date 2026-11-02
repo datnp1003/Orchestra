@@ -21,32 +21,37 @@ assert.equal(v1.hooksEnabled, true, 'hooksEnabled mặc định true');
 assert.ok(!('orchestratorWorker' in v1) && !('orchestratorModel' in v1), 'field CLI brain cũ bị bỏ');
 const v2 = validateSettings(null);
 assert.deepEqual(v2, DEFAULT_SETTINGS, 'null → defaults');
-assert.equal(DEFAULT_SETTINGS.brainModel, 'worker-claude', 'brainModel mặc định');
-assert.equal(v1.brainModel, 'worker-claude', 'brainModel thiếu → mặc định');
+assert.equal(DEFAULT_SETTINGS.brainModel, '', 'brainModel mặc định rỗng (phải chọn)');
+assert.equal(DEFAULT_SETTINGS.routerDefaultModel, '', 'routerDefaultModel mặc định rỗng');
+assert.equal(v1.brainModel, '', 'brainModel thiếu → rỗng');
 assert.equal(validateSettings({ brainModel: ' cc/claude-sonnet-5-5 ' }).brainModel, 'cc/claude-sonnet-5-5', 'giữ model (trim)');
-for (const junk of [42, '', '  ', null]) assert.equal(validateSettings({ brainModel: junk }).brainModel, 'worker-claude', `brainModel rác ${JSON.stringify(junk)} → mặc định`);
+for (const junk of [42, '', '  ', null, 'worker-claude']) assert.equal(validateSettings({ brainModel: junk }).brainModel, '', `brainModel ${JSON.stringify(junk)} → rỗng`);
+assert.equal(validateSettings({ routerDefaultModel: ' gw/m ' }).routerDefaultModel, 'gw/m');
+assert.equal(validateSettings({ routerDefaultModel: 7 }).routerDefaultModel, '');
+// settings cũ (CLI brain + brainModel kiểu cũ) vẫn load, không lỗi
+const old = validateSettings({ repos: ['C:/a'], activeRepo: 'C:/a', orchestratorWorker: 'claude', orchestratorModel: 'opus', brainModel: 'worker-claude', hooksEnabled: false });
+assert.deepEqual([old.activeRepo, old.brainModel, old.routerDefaultModel, old.hooksEnabled], ['C:/a', '', '', false]);
 assert.ok(chans.includes('models:list'), 'có channel models:list');
-for (const c of ['brain:models', 'brain:config', 'chat:reset', 'chat:cancel']) assert.ok(chans.includes(c), `có channel ${c}`);
+for (const c of ['brain:models', 'chat:reset', 'chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'providers:import', 'router:status']) {
+  assert.ok(chans.includes(c), `có channel ${c}`);
+}
+for (const c of ['brain:config', 'vault:set', 'vault:delete']) assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
 assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');
 console.log('✓ validateSettings: filter + defaults đúng');
 
-// 2b. policy/models mặc định tìm được từ out/ (desktop + extension)
+// 2b. policy mặc định tìm được từ out/ (desktop + extension); modelsList theo router
 for (const pkg of ['desktop', 'extension']) {
-  const base = new URL(`../../${pkg}/out/prototype/src/`, import.meta.url);
-  const { loadPolicy } = await import(new URL('policy.js', base));
-  const { loadModels } = await import(new URL('models.js', base));
+  const { loadPolicy } = await import(new URL(`../../${pkg}/out/prototype/src/policy.js`, import.meta.url));
   assert.equal(loadPolicy().source, 'proto-default', `${pkg} loadPolicy`);
-  assert.equal(loadModels().source, 'proto-default', `${pkg} loadModels`);
 }
 const { modelsList } = await import('../out/extension/src/logic.js'); // desktop/out (rootDir ..)
-const ml = modelsList();
-const opus = (w) => ml.byWorker[w].find((m) => m.id === 'opus-4.6');
-assert.ok(ml.models.some((m) => m.id === 'opus-4.6' && m.family === 'anthropic'), 'registry có opus-4.6');
-assert.deepEqual([opus('claude').ok, opus('claude').channel], [true, 'native'], 'claude+opus native');
-assert.equal(opus('antigravity').ok, false, 'antigravity không chạy opus');
-console.log('✓ proto-default policy/models từ desktop/out + extension/out; modelsList byWorker đúng');
+const ml = modelsList(['gw/opus'], [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'x', formats: ['messages'], enabled: true }]);
+assert.deepEqual(ml.models, ['gw/opus']);
+assert.equal(ml.byWorker.claude[0].ok, true, 'claude + messages');
+assert.match(ml.byWorker.codex[0].reason, /R2b/, 'codex cần responses');
+console.log('✓ proto-default policy từ desktop/out + extension/out; modelsList byWorker đúng');
 
 // 3. settingsStore roundtrip
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'orch-set-'));

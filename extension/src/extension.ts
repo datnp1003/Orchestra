@@ -9,7 +9,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FALLBACK_REPO, fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, reviewMerge, promoteWorker, dispatchTracked, conformanceBadge, orchestratorTurn, executeAction, parseOrchestraActions } from './logic.js';
 import { syncSkills } from '../../prototype/src/skillsync.js';
-import { vaultSet, vaultDelete, vaultStatus } from '../../prototype/src/vault.js';
 import type { Manifest } from '../../prototype/src/types.js';
 
 function cfg<T>(key: string, fallback: T): T {
@@ -417,7 +416,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Auth & Custom Provider (P6.4): Login OAuth qua terminal | API key vault | base_url
+  // Auth (P6.4): Login OAuth qua terminal
   context.subscriptions.push(
     vscode.commands.registerCommand('orchestra.authWorker', async (id?: string) => {
       const m = (id ? MANIFESTS.find((x) => x.id === id) : undefined) ?? (await (async () => {
@@ -425,64 +424,11 @@ export function activate(context: vscode.ExtensionContext): void {
         return pick ? MANIFESTS.find((x) => x.id === pick.id) : undefined;
       })());
       if (!m) return;
-      const provider = m.vault?.provider ?? m.id;
-      const st = vaultStatus(provider);
-      const oauth = m.oauthProvider ?? '(không)';
-      const choice = await vscode.window.showQuickPick(
-        [
-          {
-            label: `$(key) Login — OAuth ${oauth} (subscription của CLI này)`,
-            detail: `OAuth chỉ áp dụng cho provider '${oauth}'. Model của provider KHÁC → dùng 'Custom provider' bên dưới.`,
-            value: 'login',
-          },
-          {
-            label: `$(shield) API key → Vault`,
-            detail: st.configured ? `đã có key cho provider '${provider}' (sẽ ghi đè)` : `lưu key cho provider '${provider}' — inject lúc spawn`,
-            value: 'apikey',
-          },
-          {
-            label: `$(globe) Custom provider (base URL + key)`,
-            detail: `ĐƯỜNG DUY NHẤT để CLI chạy model của provider khác — qua gateway tương thích API của nó (vd: https://gw.company.com/v1 → ${m.vault?.base_url_env ?? 'BASE_URL'})`,
-            value: 'provider',
-          },
-          { label: `$(trash) Xoá credential vault`, detail: st.configured ? `xoá entry '${provider}'` : '(chưa có)', value: 'delete' },
-        ],
-        { title: `Auth cho ${m.display} — OAuth domain: ${oauth}` },
-      );
-      if (!choice) return;
-      switch (choice.value) {
-        case 'login': {
-          const term = vscode.window.createTerminal({ name: `Orchestra — login ${m.id}` });
-          term.show();
-          term.sendText(m.id === 'codex' ? 'codex login' : m.bin!, true); // claude: interactive TUI → /login trong đó
-          vscode.window.showInformationMessage(
-            `OAuth ${oauth}: chỉ áp dụng cho provider của CLI này. Muốn ${m.display} chạy model provider khác → dùng 'Custom provider'. Hoàn tất login rồi bấm Refresh Fleet.`,
-          );
-          return;
-        }
-        case 'apikey': {
-          const key = await vscode.window.showInputBox({ prompt: `API key cho provider '${provider}' (lưu DPAPI — không plaintext)`, password: true });
-          if (!key) return;
-          const { vaultGetBaseUrl } = await import('../../prototype/src/vault.js');
-          const ok = vaultSet(provider, key, vaultGetBaseUrl(provider) ?? undefined); // giữ base_url cũ nếu đã cấu hình
-          vscode.window.showInformationMessage(ok ? `Orchestra: key '${provider}' lưu — sẽ inject env ${m.vault?.env} lúc spawn` : 'Lưu thất bại (vault chỉ hỗ trợ Windows/DPAPI)');
-          return;
-        }
-        case 'provider': {
-          const baseUrl = await vscode.window.showInputBox({ prompt: `Custom provider base URL (→ env ${m.vault?.base_url_env ?? 'BASE_URL'})`, placeHolder: 'https://gateway.example.com/v1' });
-          if (!baseUrl) return;
-          const key = await vscode.window.showInputBox({ prompt: `API key cho gateway này`, password: true });
-          if (!key) return;
-          const ok = vaultSet(provider, key, baseUrl);
-          vscode.window.showInformationMessage(ok ? `Orchestra: custom provider '${provider}' lưu — ${m.vault?.base_url_env} + ${m.vault?.env} inject lúc spawn` : 'Lưu thất bại');
-          return;
-        }
-        case 'delete': {
-          vaultDelete(provider);
-          vscode.window.showInformationMessage(`Orchestra: đã xoá credential '${provider}'`);
-          return;
-        }
-      }
+      // R2a: key/provider khác → Orchestra router (Providers trong desktop); ở đây chỉ còn OAuth của chính CLI
+      const term = vscode.window.createTerminal({ name: `Orchestra — login ${m.id}` });
+      term.show();
+      term.sendText(m.id === 'codex' ? 'codex login' : m.bin!, true); // claude: interactive TUI → /login trong đó
+      vscode.window.showInformationMessage(`OAuth ${m.oauthProvider ?? '(không)'}: hoàn tất login rồi bấm Refresh Fleet.`);
     }),
   );
 

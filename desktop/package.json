@@ -53,8 +53,7 @@
         "from": "../prototype",
         "to": "prototype",
         "filter": [
-          "policy.yml",
-          "models.yml"
+          "policy.yml"
         ]
       },
       {

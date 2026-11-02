@@ -26,6 +26,8 @@ export interface RunPipelineOptions {
   model?: string;
   /** user bấm Dừng → kill worker đang chạy */
   signal?: AbortSignal;
+  /** R2a: Orchestra router cho mọi node */
+  router?: import('./types.js').RouterInfo;
 }
 
 export interface NodeState {
@@ -138,7 +140,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
     switch (node.type) {
       case 'plan': {
         d = await dispatch({
-          repo: o.repo, signal: o.signal, node:'plan', role: node.role ?? 'planner',
+          repo: o.repo, signal: o.signal, router: o.router, node:'plan', role: node.role ?? 'planner',
           goal: `Lên plan (tối đa 8 bước, files_touched, risks) cho nhiệm vụ: ${o.goal}`,
           scope: [], constraints: [], acceptance: [],
           excludeWorkers: exclude, wallMs: 180_000,
@@ -158,7 +160,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
 
       case 'implement': {
         d = await dispatch({
-          repo: o.repo, signal: o.signal, node:'implement', role: node.role ?? 'coder',
+          repo: o.repo, signal: o.signal, router: o.router, node:'implement', role: node.role ?? 'coder',
           goal: o.goal, scope,
           constraints: [], acceptance: o.acceptance ?? [],
           excludeWorkers: exclude, model: o.model,
@@ -179,7 +181,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       case 'verify': {
         if (!implWt) return { ok: false, reason: 'verify chạy trước implement — DAG sai' };
         d = await dispatch({
-          repo: o.repo, signal: o.signal, node:'verify', role: node.role ?? 'verifier',
+          repo: o.repo, signal: o.signal, router: o.router, node:'verify', role: node.role ?? 'verifier',
           goal: `Kiểm tra thay đổi cho nhiệm vụ: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
@@ -199,7 +201,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       case 'review': {
         if (!implWt) return { ok: false, reason: 'review chạy trước implement — DAG sai' };
         d = await dispatch({
-          repo: o.repo, signal: o.signal, node:'review', role: node.role ?? 'reviewer',
+          repo: o.repo, signal: o.signal, router: o.router, node:'review', role: node.role ?? 'reviewer',
           goal: `Review thay đổi cho nhiệm vụ: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
@@ -330,7 +332,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         fixAttempts++;
         log(`spawn fix #${fixAttempts} cho ${nodeId}`);
         const fix = await dispatch({
-          repo: o.repo, signal: o.signal, node:'implement', role: 'fixer',
+          repo: o.repo, signal: o.signal, router: o.router, node:'implement', role: 'fixer',
           goal: `Sửa theo feedback: ${res.reason ?? ''}`,
           scope: o.scope ?? [], constraints: [], acceptance: [],
           reuseWorktree: implWt, wallMs: 240_000, model: o.model,

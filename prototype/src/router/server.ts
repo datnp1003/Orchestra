@@ -19,7 +19,7 @@ export interface RouterOptions {
   store: { listProviders(): ProviderConfig[]; getKey(id: string): string | null };
   port?: number; // 0/undefined = random
   token?: string;
-  defaultModel?: string; // `<provider>/<model>` cho model không prefix (claude CLI gửi claude-haiku-… nền)
+  defaultModel?: string | (() => string | undefined); // `<provider>/<model>` cho model không prefix (claude CLI gửi claude-haiku-… nền); hàm = đọc lại mỗi request
   onLog?: (line: string) => void;
   upstreamTimeoutMs?: number;
 }
@@ -115,7 +115,8 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       throw new HttpError(400, 'invalid_request_error', 'body không phải JSON');
     }
     if (!body || typeof body !== 'object') throw new HttpError(400, 'invalid_request_error', 'body phải là JSON object');
-    const r = resolve(body.model) ?? (opts.defaultModel ? resolve(opts.defaultModel) : null);
+    const def = typeof opts.defaultModel === 'function' ? opts.defaultModel() : opts.defaultModel;
+    const r = resolve(body.model) ?? (def ? resolve(def) : null);
     if (!r) throw new HttpError(400, 'model_not_found', `model không route được: ${String(body.model)} (dùng <provider>/<model>)`);
     const { p, model } = r;
     Object.assign(log, { provider: p.id, model });

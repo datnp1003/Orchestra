@@ -3,8 +3,7 @@ import { createInterface } from 'node:readline';
 import { mkdirSync, createWriteStream, watch, existsSync, writeFileSync, realpathSync, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FleetEvent, HeadlessOpts, Manifest } from './types.js';
-import { resolveVaultEnv } from './vault.js';
+import type { FleetEvent, HeadlessOpts, Manifest, RouterInfo } from './types.js';
 import { protoAsset } from './paths.js';
 import { changedFiles as gitChangedFiles, isGitRepo } from './worktree.js';
 
@@ -63,28 +62,36 @@ export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): str
   return protoAsset(path.join('hooks', 'guard.cjs'), fromFile);
 }
 
-/** gắn PreToolUse hook: manifest.hookArgs (codex -c) hoặc claude --settings <file>; prompt luôn là arg cuối — chèn trước nó */
-export function withHookArgs(m: Manifest, args: string[], hookScript: string, rawDir: string): string[] {
-  let extra: string[];
-  if (m.hookArgs) {
-    extra = m.hookArgs(`node "${hookScript.replace(/\\/g, '/')}"`);
-  } else {
-    const settingsPath = path.join(rawDir, `guard-settings-${Date.now()}.json`);
-    mkdirSync(rawDir, { recursive: true });
-    writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        hooks: {
-          PreToolUse: [
-            { matcher: 'Bash|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: `node "${hookScript}"` }] },
-          ],
-        },
-      }),
-      'utf8',
-    );
-    extra = ['--settings', settingsPath];
+/**
+ * args + env spawn: PreToolUse hook (manifest.hookArgs codex -c | claude --settings) + router (manifest.routerArgs).
+ * claude: hooks + router env gộp vào ĐÚNG 1 `--settings`; có router → JSON inline (token không ghi ra đĩa),
+ * chỉ hooks → file như cũ. Prompt luôn là arg cuối — chèn trước nó.
+ */
+export function spawnArgs(
+  m: Manifest,
+  args: string[],
+  o: { hookScript?: string; rawDir: string; router?: RouterInfo; model?: string },
+): { args: string[]; env: Record<string, string> } {
+  const rt = o.router && m.routerArgs ? m.routerArgs(o.router, o.model) : {};
+  const extra: string[] = [];
+  const settings: Record<string, unknown> = {};
+  if (o.hookScript && m.hookArgs) extra.push(...m.hookArgs(`node "${o.hookScript.replace(/\\/g, '/')}"`));
+  else if (o.hookScript) {
+    settings.hooks = {
+      PreToolUse: [{ matcher: 'Bash|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: `node "${o.hookScript}"` }] }],
+    };
   }
-  return [...args.slice(0, -1), ...extra, args[args.length - 1]!];
+  if (rt.settingsEnv) {
+    settings.env = rt.settingsEnv;
+    extra.push('--settings', JSON.stringify(settings));
+  } else if (settings.hooks) {
+    const settingsPath = path.join(o.rawDir, `guard-settings-${Date.now()}.json`);
+    mkdirSync(o.rawDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(settings), 'utf8');
+    extra.push('--settings', settingsPath);
+  }
+  extra.push(...(rt.args ?? []));
+  return { args: [...args.slice(0, -1), ...extra, args[args.length - 1]!], env: rt.env ?? {} };
 }
 
 export interface RunOptions {
@@ -105,6 +112,8 @@ export interface RunOptions {
   hooksEnabled?: boolean;
   /** abort (user bấm Dừng) → kill cây tiến trình, kill_reason 'aborted' */
   signal?: AbortSignal;
+  /** R2a: có → CLI chạy qua Orchestra router; không → CLI dùng auth riêng của nó */
+  router?: RouterInfo;
 }
 
 export interface RunResult {
@@ -141,23 +150,22 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   if (opts.resumeSession) headless.resume = opts.resumeSession;
   const spec = m.headless(prompt, headless);
 
-  // P6.2 — hooks pre-execution: CLI hỗ trợ → sinh settings file + splice vào args
+  // P6.2 — hooks pre-execution + R2a router: splice vào args trước prompt
   const extraEnv: Record<string, string> = {};
   let guardMissing: FleetEvent | undefined;
+  let hookScript: string | undefined;
   if (m.hooksSupport && opts.hooksEnabled !== false) {
-    const hookScript = resolveGuardHook();
+    hookScript = resolveGuardHook();
     if (!hookScript) {
       guardMissing = { t: 'error', worker: m.id, ts: new Date().toISOString(), code: 'guard_missing', detail: 'guard.cjs không tìm thấy — PreToolUse hook KHÔNG gắn' };
     } else {
-      spec.args = withHookArgs(m, spec.args, hookScript, opts.rawDir);
       extraEnv['ORCH_GUARD_ROOT'] = opts.cwd;
       if (opts.netOff) extraEnv['ORCH_GUARD_NET'] = 'off';
     }
   }
-  if (m.vault) {
-    // P6.4: vault entry {secret, base_url} → env key + env base_url (custom provider)
-    Object.assign(extraEnv, resolveVaultEnv(m));
-  }
+  const sp = spawnArgs(m, spec.args, { hookScript, rawDir: opts.rawDir, router: opts.router, model: headless.model });
+  spec.args = sp.args;
+  Object.assign(extraEnv, sp.env);
 
   mkdirSync(opts.rawDir, { recursive: true });
   const rawPath = path.join(opts.rawDir, `${Date.now()}-${m.id}.jsonl`);
