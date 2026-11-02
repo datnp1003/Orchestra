@@ -508,6 +508,14 @@ khởi động sạch; 6 page dùng đúng các hàm logic đã qua 9 nhóm test
 
 Còn lại: unlock-máy [EYES] · macOS/Linux · code signing · repo public · beta — tất cả ngoài session.
 
+## ✅ Desktop E2E Gate — ĐÓNG (02/11/2026)
+
+User chạy thật trên máy: **[EYES] G1–G6 PASS** — 6 page v0.2.0 render đúng (ảnh trong
+`desktop/docs/e2e-shots/installed-020-*.png`), **3 bug runtime bắt được từ chạy thật đều đã fix**
+(node:sqlite lazy · ipcMain wiring · asar paths + CSP), **Release v0.2.0 published** →
+update feed công khai báo 0.2.0 → **auto-updater LIVE end-to-end**. Chi tiết:
+[desktop-e2e-gate.md — phụ lục chốt đóng](docs/desktop-e2e-gate.md).
+
 ## 📋 P7 Launch Kit — sẵn sàng
 
 - **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — onboarding 15 phút (Bước cài → login worker → task đầu → hiểu gate → nâng cao)
