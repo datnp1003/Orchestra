@@ -90,21 +90,34 @@ export interface BrainTurnOpts extends BrainCreds {
   fetchImpl?: FetchFn;
 }
 
-export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[] }> {
+export const ABORTED_TEXT = '⏹ đã dừng';
+
+export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
   const history: Msg[] = [...o.history, { role: 'user', content: o.userText }];
   const maxTurns = o.maxTurns ?? 12;
+  // dừng giữa chừng: history luôn kết thúc bằng assistant, mọi tool_use đều có tool_result
+  const stopped = () => {
+    history.push({ role: 'assistant', content: [{ type: 'text', text: ABORTED_TEXT }] });
+    return { text: ABORTED_TEXT, history, aborted: true };
+  };
   for (let turn = 0; turn < maxTurns; turn++) {
-    const r = await callJson(
-      o.fetchImpl ?? fetch,
-      apiUrl(o.baseUrl, 'messages'),
-      {
-        method: 'POST',
-        headers: headers(o.apiKey),
-        body: JSON.stringify({ model: o.model, max_tokens: 8192, system: o.system, messages: history, tools: o.tools, stream: false }),
-        signal: o.signal,
-      },
-      o.apiKey,
-    );
+    let r: any;
+    try {
+      r = await callJson(
+        o.fetchImpl ?? fetch,
+        apiUrl(o.baseUrl, 'messages'),
+        {
+          method: 'POST',
+          headers: headers(o.apiKey),
+          body: JSON.stringify({ model: o.model, max_tokens: 8192, system: o.system, messages: history, tools: o.tools, stream: false }),
+          signal: o.signal,
+        },
+        o.apiKey,
+      );
+    } catch (err) {
+      if (o.signal?.aborted) return stopped();
+      throw err;
+    }
     const content: Block[] = Array.isArray(r?.content) ? r.content : [];
     const text = content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
     const uses = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
@@ -118,6 +131,10 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
 
     const results: Block[] = [];
     for (const u of uses) {
+      if (o.signal?.aborted) {
+        results.push({ type: 'tool_result', tool_use_id: u.id, content: 'aborted', is_error: true });
+        continue;
+      }
       o.onStep?.({ kind: 'tool_call', name: u.name, input: u.input });
       let res: ToolResult;
       try {
@@ -130,6 +147,7 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
       results.push({ type: 'tool_result', tool_use_id: u.id, content: c, ...(res.ok ? {} : { is_error: true }) });
     }
     history.push({ role: 'user', content: results });
+    if (o.signal?.aborted) return stopped();
   }
   const text = `Đã chạm trần ${maxTurns} lượt tool — dừng lượt này. Nhắn tiếp để Orchestra làm tiếp.`;
   o.onStep?.({ kind: 'error', text });

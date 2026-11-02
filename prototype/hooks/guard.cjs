@@ -46,9 +46,17 @@ process.stdin.on('end', () => {
     return deny('rm -rf / bị chặn');
   }
   // path escape: file_path ngoài worktree root (path tương đối → resolve theo root)
-  if (fp && root) {
-    const abs = norm(path.resolve(rawRoot, fp));
-    if (abs !== root && !abs.startsWith(root + '/')) return deny(`ghi ngoài worktree bị chặn: ${fp}`);
+  const outside = (p) => {
+    const abs = norm(path.resolve(rawRoot, p));
+    return abs !== root && !abs.startsWith(root + '/');
+  };
+  if (fp && root && outside(fp)) return deny(`ghi ngoài worktree bị chặn: ${fp}`);
+  // codex: sửa file = apply_patch envelope (tool_name Bash hoặc apply_patch, nằm trong command)
+  if (root && cmd.includes('*** Begin Patch')) {
+    for (const m of cmd.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)) {
+      const p = m[1].trim();
+      if (outside(p)) return deny(`apply_patch ghi ngoài worktree bị chặn: ${p}`);
+    }
   }
   process.exit(0);
 });

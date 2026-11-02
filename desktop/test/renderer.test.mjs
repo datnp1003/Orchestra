@@ -29,4 +29,6 @@ assert.ok(!html.includes('cbWorker') && !js.includes('cbWorker'), 'composer khô
 assert.ok(html.includes('id="cbModel"') && js.includes("'brain:models'"), 'composer có model Orchestra từ brain:models');
 assert.ok(!js.includes('orchestratorWorker'), 'renderer không dùng CLI brain cũ');
 console.log('✓ composer: chỉ chọn model Orchestra');
+assert.ok(html.includes('id="chatStop"') && js.includes("'chat:cancel'"), 'composer có nút Dừng → chat:cancel');
+console.log('✓ composer: nút Dừng');
 console.log('RENDERER TEST PASS ✓');

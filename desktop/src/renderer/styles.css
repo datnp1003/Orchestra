@@ -155,6 +155,9 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .m.greet { background: transparent; border: 1px dashed var(--line); color: var(--dim); align-self: stretch; max-width: 100%; }
 .m.step { padding: 1px 4px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); align-self: stretch; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m.step.err { color: var(--err); }
+.m.progress { padding: 0 4px 0 18px; display: flex; flex-direction: column; align-self: stretch; max-width: 100%; }
+.m.progress div { font-family: var(--mono); font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#chatStop { margin: 0; padding: 5px 10px; border-radius: 9px; font-size: 11px; }
 .m.pending { color: var(--dim); font-style: italic; }
 .m.pending::after { content: "…"; animation: dots 1.2s steps(4) infinite; }
 @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }

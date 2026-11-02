@@ -49,3 +49,22 @@ test('filterRealChanges: file checkout không đổi bị loại, untracked đ�
   const plain = mkdtempSync(path.join(tmpdir(), 'orch-fsx-plain-'));
   assert.deepEqual(filterRealChanges(plain, ['a.txt']), ['a.txt']);
 });
+
+test('diffPatch giữ nguyên patch (không trim) → git apply --check được', async () => {
+  const { diffPatch } = await import('../dist/worktree.js');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = (await import('node:path')).default;
+  const { spawnSync } = await import('node:child_process');
+  const d = mkdtempSync(path.join(tmpdir(), 'patch-'));
+  const g = (...a) => spawnSync('git', a, { cwd: d, encoding: 'utf8' });
+  g('init', '-q'); g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  writeFileSync(path.join(d, 'a.ts'), 'line1\n  trailing   \nline3\n'); g('add', '-A'); g('commit', '-qm', 'i');
+  writeFileSync(path.join(d, 'a.ts'), 'line1\n  trailing   \nline3\nnew\n'); g('add', '-A');
+  const p = diffPatch(d);
+  writeFileSync(path.join(d, 'x.patch'), p);
+  g('reset', '-q', '--hard');
+  const r = g('apply', '--check', 'x.patch');
+  rmSync(d, { recursive: true, force: true });
+  assert.equal(r.status, 0, r.stderr);
+});

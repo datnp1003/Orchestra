@@ -6,7 +6,8 @@ import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveGuardHook } from '../dist/runner.js';
+import { resolveGuardHook, withHookArgs, runHeadless } from '../dist/runner.js';
+import { getManifest } from '../dist/manifests.js';
 import { shouldCommit } from '../dist/dispatch.js';
 import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '../dist/worktree.js';
 
@@ -36,6 +37,50 @@ test('guard path-escape + git push', () => {
   assert.equal(runGuard('Write', { file_path: 'src/x.ts' }, root), 'allow');
   assert.equal(runGuard('Write', { file_path: '../t-abc2/x.ts' }, root), 'deny');
   assert.equal(runGuard('Bash', { command: 'git push origin main' }, root), 'deny');
+});
+
+test('guard apply_patch envelope (codex): path ngoài worktree → deny', () => {
+  const root = path.join(tmpdir(), 'wt', 't-abc');
+  const patch = (...files) => `*** Begin Patch\n${files.map((f) => `*** Add File: ${f}\n+hello`).join('\n')}\n*** End Patch`;
+  const viaBash = (p) => ({ command: `apply_patch <<'PATCH'\n${p}\nPATCH` });
+  for (const [tool, input] of [['Bash', viaBash], ['apply_patch', (p) => ({ command: p })]]) {
+    assert.equal(runGuard(tool, input(patch('../evil.txt')), root), 'deny', `${tool} ../evil.txt`);
+    assert.equal(runGuard(tool, input(patch('src/ok.ts')), root), 'allow', `${tool} src/ok.ts`);
+    assert.equal(runGuard(tool, input(patch(path.join(tmpdir(), 'outside.txt'))), root), 'deny', `${tool} absolute`);
+    assert.equal(runGuard(tool, input(patch('src/ok.ts', '../../x.ts')), root), 'deny', `${tool} file thứ 2 thoát`);
+    assert.equal(runGuard(tool, input('*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../b.ts\n*** End Patch'), root), 'deny', `${tool} move`);
+  }
+});
+
+test('codex hook args: -c hooks.PreToolUse + bypass trust, trước prompt', () => {
+  const m = getManifest('codex');
+  assert.equal(m.hooksSupport, true);
+  const spec = m.headless('PROMPT', { sandbox: 'worktree-write' });
+  const args = withHookArgs(m, spec.args, 'C:\\a b\\hooks\\guard.cjs', tmpdir());
+  assert.equal(args.at(-1), 'PROMPT');
+  const c = args.indexOf('-c');
+  assert.equal(args[c + 1], 'hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command="node \\"C:/a b/hooks/guard.cjs\\"",timeout=30}]}]');
+  assert.ok(args.indexOf('--dangerously-bypass-hook-trust') > c && args.indexOf('--dangerously-bypass-hook-trust') < args.length - 1);
+  // claude giữ --settings <file>
+  const cl = withHookArgs(getManifest('claude'), ['-p', 'P'], 'x.cjs', mkdtempSync(path.join(tmpdir(), 'orch-hk-')));
+  assert.deepEqual([cl[0], cl[1], cl.at(-1)], ['-p', '--settings', 'P']);
+});
+
+test('runHeadless: abort → kill_reason aborted', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'orch-abort-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const fake = {
+    id: 'fake', display: 'f', bin: 'node', versionCmd: { cmd: 'node', args: [] }, versionRegex: /x/, requiredEvents: [], notes: [],
+    headless: (prompt) => ({ cmd: process.execPath, args: ['-e', 'setTimeout(()=>{},60000)', prompt] }),
+    mapEvent: () => ({ events: [], known: true }),
+  };
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 300);
+  const started = Date.now();
+  const r = await runHeadless(fake, 'p', { cwd: dir, rawDir: dir, signal: ac.signal });
+  assert.equal(r.killReason, 'aborted');
+  assert.equal(r.events.at(-1).kill_reason, 'aborted');
+  assert.ok(Date.now() - started < 20_000);
 });
 
 test('shouldCommit: chỉ node ghi code', () => {

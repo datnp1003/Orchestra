@@ -153,9 +153,16 @@ async function renderChat() {
     input.style.height = 'auto';
     add('user', t);
     add('orch pending', '…đang xử lý');
-    await api.invoke('chat:exchange', { text: t });
+    const stop = $('#chatStop');
+    stop.hidden = false;
+    try {
+      await api.invoke('chat:exchange', { text: t });
+    } finally {
+      stop.hidden = true;
+    }
   };
   $('#chatSend').onclick = send;
+  $('#chatStop').onclick = () => api.invoke('chat:cancel');
   // gán property (không addEventListener): #chatInput sống qua các lần render → tránh gửi trùng
   input.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -172,7 +179,19 @@ async function renderChat() {
     if (pending) $('#chatMsgs').appendChild(pending);
     return d;
   };
+  let progressBox = null; // tiến độ worker của tool call hiện tại — giữ 5 dòng cuối
   on('chat:step', (s) => {
+    if (s.kind === 'progress') {
+      progressBox ??= addStep('progress', '');
+      const line = document.createElement('div');
+      line.textContent = s.text;
+      line.title = s.text;
+      progressBox.appendChild(line);
+      while (progressBox.childElementCount > 5) progressBox.firstElementChild.remove();
+      $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
+      return;
+    }
+    progressBox = null;
     if (s.kind === 'tool_call') addStep('step', `⚙ ${s.name} ${JSON.stringify(s.input ?? {}).slice(0, 160)}`);
     else if (s.kind === 'tool_result') addStep(s.ok ? 'step' : 'step err', `${s.ok ? '✓' : '✗'} ${s.name}: ${s.preview}`);
     else if (s.kind === 'text') addStep('orch', s.text);

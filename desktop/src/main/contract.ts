@@ -32,6 +32,7 @@ export const IPC = {
   BRAIN_MODELS: 'brain:models',
   BRAIN_CONFIG: 'brain:config',
   CHAT_RESET: 'chat:reset',
+  CHAT_CANCEL: 'chat:cancel',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

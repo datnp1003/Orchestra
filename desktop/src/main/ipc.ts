@@ -140,7 +140,18 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     const creds = getCreds();
     if (!creds) return fail('Chưa cấu hình Orchestra brain — vào Cài đặt › Vault / API key › "Orchestra brain" nhập base URL + key');
     chatBusy = true;
+    const ac = new AbortController();
+    chatAbort = ac;
     const conv = chat; // reset giữa lượt → kết quả lượt này không ghi đè hội thoại mới
+    // tiến độ worker → chat: tool_use/message luôn gửi, dòng khác tối đa 1 lần / 2s
+    let lastProgress = 0;
+    const progress = (line: string) => {
+      send(EVENTS.PIPELINE_LOG, line);
+      const now = Date.now();
+      if (!/^\[(tool_use|message)\]/.test(line) && now - lastProgress < 2000) return;
+      lastProgress = now;
+      send(EVENTS.CHAT_STEP, { kind: 'progress', text: line.replace(/\s+/g, ' ').slice(0, 160) });
+    };
     try {
       const s = settings();
       const repo = requireRepo(s);
@@ -151,6 +162,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         model: s.brainModel,
         system: brainSystemPrompt(repo),
         tools: BRAIN_TOOLS,
+        signal: ac.signal,
         execTool: brainToolExecutor(repo, {
           approve: (q) => ask(q, ['Đồng ý', 'Từ chối']),
           askUser: async (q) => ((await ask(q, ['Tiếp tục', 'Dừng'])) ? 'y' : 'n'),
@@ -158,7 +170,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           skillSync: s.skillSync,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,
-          onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
+          onLog: progress,
+          signal: ac.signal,
         }),
         onStep: (step) => send(EVENTS.CHAT_STEP, step),
       });
@@ -170,7 +183,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       return fail(err instanceof Error ? err.message : String(err));
     } finally {
       chatBusy = false;
+      chatAbort = null;
     }
+  });
+  ipcMain.handle(IPC.CHAT_CANCEL, () => {
+    chatAbort?.abort();
+    return { ok: !!chatAbort };
   });
   ipcMain.handle(IPC.CHAT_RESET, () => {
     resetChat();
@@ -232,6 +250,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
 // hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
 let chat: { history: Msg[]; startedAt: string } = { history: [], startedAt: '' };
 let chatBusy = false;
+let chatAbort: AbortController | null = null; // lượt đang chạy — chat:cancel abort
 const resetChat = () => {
   chat = { history: [], startedAt: '' };
 };

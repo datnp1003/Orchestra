@@ -172,7 +172,7 @@ export function trackOverride(
 
 export async function dispatchTracked(
   repo: string,
-  o: { node: 'implement'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean },
+  o: { node: 'implement'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal },
 ): Promise<{ autoPick?: string; result: Awaited<ReturnType<typeof import('../../prototype/src/dispatch.js').dispatch>>; override: string }> {
   const pol = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
@@ -181,7 +181,7 @@ export async function dispatchTracked(
   const result = await dispatch({
     repo, node: o.node, role: o.role, goal: o.goal, scope: o.scope,
     constraints: [], acceptance: o.acceptance, workerPin: o.pin, model: o.model,
-    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync,
+    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal,
     onEvent: o.onEvent as ((e: { t: string; [k: string]: unknown }) => void) | undefined,
   });
   const tr = trackOverride(repo, { autoPick: auto.pick, pin: o.pin, taskId: result.taskId, ok: result.ok });
@@ -379,7 +379,8 @@ Quy tắc:
 2. Bạn KHÔNG tự sửa code. Việc trong repo: khảo sát trước (repo_glob/repo_grep/repo_read/git_diff), rồi fleet_dispatch hoặc fleet_pipeline với scope glob rõ ràng.
 3. Scope chưa rõ → HỎI user, đừng đoán.
 4. Merge / đổi policy cần user duyệt — hệ thống tự hỏi khi bạn gọi tool.
-5. Báo kết quả ngắn: worker, task id, file thay đổi, ok/fail. Không bao giờ bảo user tự nói chuyện với worker.`;
+5. Trước fleet_merge phải gọi task_diff và đọc diff; nêu rõ đã kiểm gì.
+6. Báo kết quả ngắn: worker, task id, file thay đổi, ok/fail. Không bao giờ bảo user tự nói chuyện với worker.`;
 
 export function brainSystemPrompt(repo: string): string {
   const kb = recallKB(repo, ['**'], 1500);
@@ -392,12 +393,13 @@ export const BRAIN_TOOLS: { name: string; description: string; input_schema: Rec
   { name: 'repo_glob', description: 'Liệt kê file trong repo khớp glob (vd src/**/*.ts). Tối đa 200.', input_schema: obj({ pattern: { type: 'string' } }, ['pattern']) },
   { name: 'repo_grep', description: 'Tìm regex (JS) trong file text của repo, lọc theo glob tuỳ chọn. Trả path:line. Tối đa 100.', input_schema: obj({ pattern: { type: 'string' }, glob: { type: 'string' } }, ['pattern']) },
   { name: 'repo_read', description: 'Đọc file trong repo (path tương đối). offset = dòng bắt đầu (1-based), limit = số dòng (≤2000).', input_schema: obj({ path: { type: 'string' }, offset: { type: 'integer' }, limit: { type: 'integer' } }, ['path']) },
-  { name: 'git_diff', description: 'git diff (stat + nội dung, cắt ngắn) so với ref tuỳ chọn (mặc định working tree vs HEAD).', input_schema: obj({ ref: { type: 'string' } }) },
+  { name: 'git_diff', description: 'git diff (stat + nội dung, cắt ngắn) so với ref tuỳ chọn (mặc định working tree vs HEAD). ref = task id (t-…) → như task_diff.', input_schema: obj({ ref: { type: 'string' } }) },
+  { name: 'task_diff', description: 'Xem kết quả 1 task: worker, file đổi, scope check, outcome + patch. Gọi trước fleet_merge.', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'fleet_status', description: 'Trạng thái fleet worker + 5 task gần nhất.', input_schema: obj({}) },
   { name: 'fleet_dispatch', description: 'Giao 1 task code cho worker (worktree riêng, có guard + scope check). scope BẮT BUỘC.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'id worker hoặc bỏ trống = auto theo policy' }, model: { type: 'string' }, acceptance: strArr }, ['goal', 'scope']) },
   { name: 'fleet_pipeline', description: 'Chạy pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' } }, ['template', 'goal', 'scope']) },
   { name: 'skills_sync', description: 'Sync project KB ra AGENTS.md + CLAUDE.md.', input_schema: obj({}) },
-  { name: 'fleet_merge', description: 'Merge branch của task vào main (CẦN user duyệt).', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
+  { name: 'fleet_merge', description: 'Merge branch của task vào main (CẦN user duyệt). Hệ thống tự kiểm task + chạy test trước khi hỏi.', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'policy_promote', description: 'Đưa worker lên #1 cho role trong policy (CẦN user duyệt).', input_schema: obj({ role: { type: 'string' }, cli: { type: 'string' } }, ['role', 'cli']) },
 ];
 
@@ -411,8 +413,75 @@ export interface BrainToolDeps {
   templatesDir?: string;
   autoApprovePlan?: boolean;
   onLog?: (line: string) => void;
+  /** user bấm Dừng → kill worker đang chạy */
+  signal?: AbortSignal;
 }
 type ToolOut = { ok: boolean; content: string };
+
+const TASK_ID = /^t-[a-z0-9-]+$/;
+const cap = (s: string, n = 15_000) => (s.length > n ? `${s.slice(0, n)}\n…(cắt)` : s);
+
+function loadTask(repo: string, taskId: string): Record<string, any> | string {
+  if (!TASK_ID.test(taskId)) return `taskId không hợp lệ: ${taskId}`;
+  try {
+    return JSON.parse(readFileSync(path.join(repo, '.orchestra', 'tasks', `${taskId}.json`), 'utf8'));
+  } catch {
+    return `không có task record ${taskId}`;
+  }
+}
+
+/** patch của task (patch_ref) hoặc diff <nhánh hiện tại>...<branch task>; stat = diffstat */
+function taskPatch(repo: string, rec: Record<string, any>): { patch: string; stat: string } {
+  const ref = rec.artifacts?.patch_ref;
+  if (typeof ref === 'string' && existsSync(ref)) {
+    const st = git(repo, ['apply', '--stat', ref]);
+    // patch cũ (trước fix diffPatch trim) có thể corrupt → rơi xuống diff branch
+    if (st.ok) return { patch: readFileSync(ref, 'utf8'), stat: st.out };
+  }
+  const base = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const range = `${base.ok ? base.out : 'main'}...${rec.worktree?.branch ?? `orchestra/task-${rec.id}`}`;
+  return { patch: git(repo, ['diff', range]).out, stat: git(repo, ['diff', '--stat', range]).out };
+}
+
+function taskDiff(repo: string, taskId: string): ToolOut {
+  const rec = loadTask(repo, taskId);
+  if (typeof rec === 'string') return bad(rec);
+  const { patch, stat } = taskPatch(repo, rec);
+  return {
+    ok: true,
+    content: [
+      `task ${taskId} worker=${pickOf(rec)} outcome=${rec.outcome ?? 'ok'}`,
+      `files_changed: ${(rec.artifacts?.files_changed ?? []).join(', ') || '(không)'}`,
+      `scope_check: ${JSON.stringify(rec.scope_check ?? null)}`,
+      stat,
+      '',
+      cap(patch) || '(không có patch)',
+    ].join('\n'),
+  };
+}
+
+const NPM_DEFAULT_TEST = /no test specified/;
+/** chạy `npm test` trong worktree nếu có scripts.test; null = không có test command */
+// async — không chặn Electron main; signal (Dừng) kill test
+async function runTaskTests(dir: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; line: string } | null> {
+  if (!dir) return null;
+  let script: unknown;
+  try {
+    script = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).scripts?.test;
+  } catch {
+    return null;
+  }
+  if (typeof script !== 'string' || NPM_DEFAULT_TEST.test(script)) return null;
+  const { spawn } = await import('node:child_process');
+  return new Promise((resolve) => {
+    const child = spawn('npm test', { cwd: dir, shell: true, windowsHide: true, timeout: 180_000, signal });
+    let out = '';
+    child.stdout?.on('data', (d) => (out = (out + d).slice(-4000)));
+    child.stderr?.on('data', (d) => (out = (out + d).slice(-4000)));
+    child.on('error', (err) => resolve({ ok: false, line: `test lỗi: ${err.message}` }));
+    child.on('close', (code) => resolve(code === 0 ? { ok: true, line: 'test pass (npm test)' } : { ok: false, line: `test fail (exit ${code}): ${out.slice(-500)}` }));
+  });
+}
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.orchestra']);
 // ponytail: walk đồng bộ, trần 20k file — repo khổng lồ cần index/ripgrep
@@ -503,12 +572,15 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       }
       case 'git_diff': {
         if (!optStr(i.ref) || (isStr(i.ref) && i.ref.startsWith('-'))) return bad('ref không hợp lệ');
+        if (isStr(i.ref) && TASK_ID.test(i.ref)) return taskDiff(repo, i.ref);
         const ref = isStr(i.ref) ? [i.ref] : [];
         const stat = git(repo, ['diff', '--stat', ...ref]);
         if (!stat.ok) return bad(stat.out.slice(0, 500));
         const d = git(repo, ['diff', ...ref]).out;
-        return { ok: true, content: `${stat.out || '(không có thay đổi)'}\n\n${d.length > 15_000 ? `${d.slice(0, 15_000)}\n…(cắt)` : d}` };
+        return { ok: true, content: `${stat.out || '(không có thay đổi)'}\n\n${cap(d)}` };
       }
+      case 'task_diff':
+        return isStr(i.taskId) ? taskDiff(repo, i.taskId) : bad('taskId phải là chuỗi');
       case 'fleet_status':
         return { ok: true, content: await executeAction(repo, { action: 'status' }) };
       case 'skills_sync':
@@ -523,8 +595,10 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
           acceptance: (i.acceptance as string[] | undefined) ?? [],
           pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
           model: isStr(i.model) ? i.model : undefined,
-          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true,
-          onEvent: deps.onLog ? (e) => deps.onLog!(`[${e.t}] ${JSON.stringify(e).slice(0, 160)}`) : undefined,
+          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true, signal: deps.signal,
+          onEvent: deps.onLog
+            ? (e) => deps.onLog!(e.t === 'tool_use' ? `[tool_use] ${e.tool} ${e.target}` : e.t === 'message' ? `[message] ${e.text}` : `[${e.t}] ${JSON.stringify(e).slice(0, 160)}`)
+            : undefined,
         });
         const rec = r.result.record as Record<string, any> | undefined;
         return {
@@ -543,7 +617,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const { runPipeline } = await import('../../prototype/src/orchestrator.js');
         const r = await runPipeline({
           repo, templatePath: tpl, goal: i.goal, scope: i.scope, acceptance: [],
-          model: isStr(i.model) ? i.model : undefined,
+          model: isStr(i.model) ? i.model : undefined, signal: deps.signal,
           autoYes: deps.autoApprovePlan ?? false, askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
         });
         const nodes = Object.entries(r.nodes).map(([k, n]) => `${k}:${n.status}${n.worker ? `/${n.worker}` : ''}`).join(' ');
@@ -551,7 +625,23 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       }
       case 'fleet_merge': {
         if (!isStr(i.taskId)) return bad('taskId phải là chuỗi');
-        if (!(await deps.approve(`Orchestra muốn MERGE task ${i.taskId} vào nhánh chính. Đồng ý?`))) return bad('user từ chối');
+        // gate trong code — brain không merge được task rỗng / ngoài scope / test đỏ
+        const rec = loadTask(repo, i.taskId);
+        if (typeof rec === 'string') return bad(rec);
+        const files: string[] = rec.artifacts?.files_changed ?? [];
+        if (rec.outcome === 'no_change') return bad('không merge: task outcome no_change');
+        if (!files.length) return bad('không merge: task không đổi file nào');
+        if (rec.scope_check?.ok === false) return bad(`không merge: scope check fail ${JSON.stringify(rec.scope_check.violations ?? [])}`);
+        const tests = await runTaskTests(rec.worktree?.path, deps.signal);
+        if (tests && !tests.ok) return bad(tests.line);
+        const q = [
+          `Orchestra muốn MERGE task ${i.taskId} (worker ${pickOf(rec)}) vào nhánh chính.`,
+          `File: ${files.join(', ')}`,
+          taskPatch(repo, rec).stat,
+          tests?.line ?? 'không có test command',
+          'Đồng ý?',
+        ].join('\n');
+        if (!(await deps.approve(q))) return bad('user từ chối');
         const r = reviewMerge(repo, i.taskId, 'merge');
         return { ok: r.ok, content: r.detail };
       }

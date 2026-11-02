@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdirSync, createWriteStream, watch, existsSync, writeFileSync, type FSWatcher } from 'node:fs';
+import { mkdirSync, createWriteStream, watch, existsSync, writeFileSync, realpathSync, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FleetEvent, HeadlessOpts, Manifest } from './types.js';
@@ -63,6 +63,30 @@ export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): str
   return protoAsset(path.join('hooks', 'guard.cjs'), fromFile);
 }
 
+/** gắn PreToolUse hook: manifest.hookArgs (codex -c) hoặc claude --settings <file>; prompt luôn là arg cuối — chèn trước nó */
+export function withHookArgs(m: Manifest, args: string[], hookScript: string, rawDir: string): string[] {
+  let extra: string[];
+  if (m.hookArgs) {
+    extra = m.hookArgs(`node "${hookScript.replace(/\\/g, '/')}"`);
+  } else {
+    const settingsPath = path.join(rawDir, `guard-settings-${Date.now()}.json`);
+    mkdirSync(rawDir, { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: 'Bash|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: `node "${hookScript}"` }] },
+          ],
+        },
+      }),
+      'utf8',
+    );
+    extra = ['--settings', settingsPath];
+  }
+  return [...args.slice(0, -1), ...extra, args[args.length - 1]!];
+}
+
 export interface RunOptions {
   cwd: string;
   rawDir: string;
@@ -79,6 +103,8 @@ export interface RunOptions {
   resumeSession?: string;
   /** P5.4: tắt guard hook (setting orchestra.hooksEnabled) */
   hooksEnabled?: boolean;
+  /** abort (user bấm Dừng) → kill cây tiến trình, kill_reason 'aborted' */
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -123,22 +149,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
     if (!hookScript) {
       guardMissing = { t: 'error', worker: m.id, ts: new Date().toISOString(), code: 'guard_missing', detail: 'guard.cjs không tìm thấy — PreToolUse hook KHÔNG gắn' };
     } else {
-      const settingsPath = path.join(opts.rawDir, `guard-settings-${Date.now()}.json`);
-      mkdirSync(opts.rawDir, { recursive: true });
-      writeFileSync(
-        settingsPath,
-        JSON.stringify({
-          hooks: {
-            PreToolUse: [
-              { matcher: 'Bash|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: `node "${hookScript}"` }] },
-            ],
-          },
-        }),
-        'utf8',
-      );
-      // prompt luôn là arg cuối — chèn --settings trước nó
-      const last = spec.args[spec.args.length - 1]!;
-      spec.args = [...spec.args.slice(0, -1), '--settings', settingsPath, last];
+      spec.args = withHookArgs(m, spec.args, hookScript, opts.rawDir);
       extraEnv['ORCH_GUARD_ROOT'] = opts.cwd;
       if (opts.netOff) extraEnv['ORCH_GUARD_NET'] = 'off';
     }
@@ -195,7 +206,8 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   let fsWatcher: FSWatcher | undefined;
   if (opts.watchDir && existsSync(opts.watchDir)) {
     try {
-      fsWatcher = watch(opts.watchDir, { recursive: true }, (_ev, filename) => {
+      // realpath: path 8.3 (NITROV~1) làm libuv fs-event assert → crash cả process (gặp thật trên Windows)
+      fsWatcher = watch(realpathSync.native(opts.watchDir), { recursive: true }, (_ev, filename) => {
         if (!filename) return;
         const rel = path.relative(opts.watchDir!, path.join(opts.watchDir!, filename.toString()));
         if (rel && !rel.startsWith('.git') && !rel.includes('node_modules')) changedFiles.add(rel.replace(/\\/g, '/'));
@@ -212,6 +224,9 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   };
   let silenceTimer: NodeJS.Timeout = setTimeout(() => {}, 0);
   const wallTimer = setTimeout(() => killTree(child, 'wall_clock_exceeded'), wallMs);
+  const onAbort = () => killTree(child, 'aborted');
+  if (opts.signal?.aborted) onAbort();
+  else opts.signal?.addEventListener('abort', onAbort, { once: true });
 
   const handleRawLine = (line: string) => {
     rawLines++;
@@ -260,6 +275,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
     const finish = (exitCode: number | null) => {
       clearTimeout(silenceTimer);
       clearTimeout(wallTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
       fsWatcher?.close();
       raw.end(() => {
         const killReason = (child as ChildProcess & { __killReason?: string }).__killReason;

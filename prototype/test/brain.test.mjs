@@ -76,6 +76,35 @@ test('non-JSON → throw', async () => {
   );
 });
 
+test('abort giữa tool → history hợp lệ (mọi tool_use có tool_result, kết thúc assistant)', async () => {
+  const two = { body: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'a', name: 'dummy', input: {} }, { type: 'tool_use', id: 'b', name: 'dummy', input: {} }] } };
+  const { fn, calls } = fakeFetch([two]);
+  const ac = new AbortController();
+  const r = await runBrainTurn({
+    baseUrl: 'https://gw.test', apiKey: KEY, history: [], userText: 'x', model: 'm', system: 's', tools: TOOLS, signal: ac.signal, fetchImpl: fn,
+    execTool: (_n, _i) => new Promise((res) => {
+      ac.signal.addEventListener('abort', () => res({ ok: false, content: 'killed' }));
+      setTimeout(() => ac.abort(), 20);
+    }),
+  });
+  assert.equal(r.aborted, true);
+  assert.equal(calls.length, 1, 'không gọi API lại sau abort');
+  const h = r.history;
+  assert.deepEqual(h.map((m) => m.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.deepEqual(h[2].content.map((b) => [b.tool_use_id, b.is_error]), [['a', true], ['b', true]]);
+  assert.equal(h[2].content[1].content, 'aborted');
+  assert.match(h[3].content[0].text, /đã dừng/);
+  // abort trước khi gọi API → fetch reject → vẫn trả history hợp lệ
+  const ac2 = new AbortController();
+  ac2.abort();
+  const r2 = await runBrainTurn({
+    baseUrl: 'https://gw.test', apiKey: KEY, history: [], userText: 'x', model: 'm', system: 's', tools: TOOLS, signal: ac2.signal,
+    fetchImpl: async () => { throw new DOMException('aborted', 'AbortError'); }, execTool: async () => ({ ok: true, content: '' }),
+  });
+  assert.equal(r2.aborted, true);
+  assert.deepEqual(r2.history.map((m) => m.role), ['user', 'assistant']);
+});
+
 test('listBrainModels: ok + lỗi', async () => {
   const ok = fakeFetch([{ body: { data: [{ id: 'worker-claude' }, { id: 'cc/claude-sonnet-5-5' }, {}] } }]);
   assert.deepEqual(await listBrainModels({ baseUrl: 'https://gw.test/v1', apiKey: KEY }, ok.fn), { models: ['worker-claude', 'cc/claude-sonnet-5-5'] });

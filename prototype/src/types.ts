@@ -68,8 +68,10 @@ export interface Manifest {
   install?: { npm?: string; winget?: string };
   /** P6: CLI hỗ trợ path-level permission rules (conformance case 4 chạy được) */
   scopeRules?: boolean;
-  /** P6.2: CLI hỗ trợ PreToolUse hooks qua --settings (conformance case 8 chạy được) */
+  /** P6.2: CLI hỗ trợ PreToolUse hooks (conformance case 8 chạy được) */
   hooksSupport?: boolean;
+  /** P6.2: args gắn PreToolUse hook (runner chèn trước prompt) — không có = claude `--settings <file>` */
+  hookArgs?: (hookCommand: string) => string[];
   experimental?: boolean;
   notes: string[];
 }

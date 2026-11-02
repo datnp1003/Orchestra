@@ -49,8 +49,10 @@ export function changedFiles(wtPath: string): string[] {
     .filter(Boolean);
 }
 
+// KHÔNG trim: patch mất newline cuối / khoảng trắng cuối dòng context = corrupt patch (git apply từ chối)
 export function diffPatch(wtPath: string): string {
-  return git(wtPath, ['diff', '--cached']).out;
+  const r = spawnSync('git', ['diff', '--cached'], { cwd: wtPath, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  return r.status === 0 ? r.stdout ?? '' : '';
 }
 
 export function commitAll(wtPath: string, message: string): { ok: boolean; out: string } {

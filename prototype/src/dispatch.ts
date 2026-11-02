@@ -36,6 +36,8 @@ export interface DispatchOptions {
   promptOverride?: string;
   /** P3: ràng buộc distinct_worker_from — loại worker đã dùng ở node khác */
   excludeWorkers?: string[];
+  /** user bấm Dừng → kill worker (kill_reason 'aborted') */
+  signal?: AbortSignal;
 }
 
 export interface ScopeCheck {
@@ -189,6 +191,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
     netOff: !perm.net, // P6.2 — guard hook chặn pattern network khi net off
     resumeSession: o.resumeSession,
     hooksEnabled: o.hooksEnabled,
+    signal: o.signal,
   });
   const durationMs = Date.now() - started;
 

@@ -22,6 +22,8 @@ const summarizeTarget = (input: unknown): string => {
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+// TOML basic string
+const tomlStr = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 // ---------- Claude Code (stream-json) ----------
 // Format tham chiếu: claude -p --output-format stream-json
@@ -276,12 +278,16 @@ const codex: Manifest = {
   },
   mapEvent: mapCodex,
   requiredEvents: ['session', 'usage'],
+  hooksSupport: true,
+  // codex 0.164 exec: hook qua -c (TOML) + --dangerously-bypass-hook-trust; deny = JSON stdout (exit 2 không dùng)
+  hookArgs: (cmd) => ['-c', `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=${tomlStr(cmd)},timeout=30}]}]`, '--dangerously-bypass-hook-trust'],
   experimental: true,
   notes: [
     'conformance pin: 0.164.0',
     'event format exec --json là experimental — unmapped lines là tín hiệu cần sửa adapter',
     '--skip-git-repo-check: prototype chạy ngoài git repo',
-    'Windows non-admin: workspace-write fail (restricted-token sandbox) → worktree-write dùng danger-full-access; isolation chỉ còn git worktree + scope check (Lớp 4) + fs cross-check (Lớp 3) — codex KHÔNG có PreToolUse hook nên guard.cjs không áp dụng',
+    'Windows non-admin: workspace-write fail (restricted-token sandbox) → worktree-write dùng danger-full-access; isolation = git worktree + guard.cjs + scope check (Lớp 4) + fs cross-check (Lớp 3)',
+    'guard.cjs là chặn mức pattern (lệnh shell + path trong apply_patch), KHÔNG phải OS sandbox; hook phụ thuộc --dangerously-bypass-hook-trust',
   ],
 };
 

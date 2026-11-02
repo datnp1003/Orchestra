@@ -26,7 +26,7 @@ assert.equal(v1.brainModel, 'worker-claude', 'brainModel thiếu → mặc đị
 assert.equal(validateSettings({ brainModel: ' cc/claude-sonnet-5-5 ' }).brainModel, 'cc/claude-sonnet-5-5', 'giữ model (trim)');
 for (const junk of [42, '', '  ', null]) assert.equal(validateSettings({ brainModel: junk }).brainModel, 'worker-claude', `brainModel rác ${JSON.stringify(junk)} → mặc định`);
 assert.ok(chans.includes('models:list'), 'có channel models:list');
-for (const c of ['brain:models', 'brain:config', 'chat:reset']) assert.ok(chans.includes(c), `có channel ${c}`);
+for (const c of ['brain:models', 'brain:config', 'chat:reset', 'chat:cancel']) assert.ok(chans.includes(c), `có channel ${c}`);
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
 assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');

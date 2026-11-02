@@ -76,7 +76,7 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
   git('commit', '-qm', 'work');
   git('checkout', '-q', 'main');
   mkdirSync(path.join(repo, '.orchestra', 'tasks'), { recursive: true });
-  writeFileSync(path.join(repo, '.orchestra', 'tasks', 't-1.json'), JSON.stringify({ id: 't-1', worktree: { branch: 'orch/t-1' } }));
+  writeFileSync(path.join(repo, '.orchestra', 'tasks', 't-1.json'), JSON.stringify({ id: 't-1', worktree: { branch: 'orch/t-1' }, artifacts: { files_changed: ['b.txt'] } }));
   const merged = () => spawnSync('git', ['merge-base', '--is-ancestor', 'orch/t-1', 'HEAD'], { cwd: repo }).status === 0;
 
   const asked = [];
@@ -94,4 +94,82 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
 
   const pr = await exec(repo, async () => false)('policy_promote', { role: 'coder', cli: 'codex' });
   assert.deepEqual(pr, { ok: false, content: 'user từ chối' });
+});
+
+// repo main + branch orchestra/task-<id> đổi feature.ts + record (+ patch file) + "worktree" có package.json tuỳ chọn
+function taskRepo(t, { id = 't-ab1', record = {}, testScript, patchFile = true } = {}) {
+  const repo = tmp(t);
+  const git = (...a) => {
+    const r = spawnSync('git', a, { cwd: repo, encoding: 'utf8' });
+    assert.equal(r.status, 0, a.join(' '));
+    return r.stdout;
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  writeFileSync(path.join(repo, 'a.txt'), 'a');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  const branch = `orchestra/task-${id}`;
+  git('checkout', '-qb', branch);
+  writeFileSync(path.join(repo, 'feature.ts'), 'export const x = 1;\n');
+  git('add', '-A');
+  const patch = git('diff', '--cached');
+  git('commit', '-qm', 'work');
+  git('checkout', '-q', 'main');
+  const tasks = path.join(repo, '.orchestra', 'tasks');
+  mkdirSync(tasks, { recursive: true });
+  const wt = tmp(t);
+  if (testScript) writeFileSync(path.join(wt, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: testScript } }));
+  const patchRef = path.join(tasks, `${id}.patch`);
+  if (patchFile) writeFileSync(patchRef, patch);
+  writeFileSync(path.join(tasks, `${id}.json`), JSON.stringify({
+    id, routing: { pick: 'codex' }, worktree: { path: wt, branch },
+    artifacts: { files_changed: ['feature.ts'], patch_ref: patchFile ? patchRef : null }, scope_check: { ok: true, violations: [] }, ...record,
+  }));
+  const merged = () => spawnSync('git', ['merge-base', '--is-ancestor', branch, 'HEAD'], { cwd: repo }).status === 0;
+  return { repo, id, merged };
+}
+
+test('task_diff: patch_ref → patch; không có patch file → git diff nhánh; git_diff ref=taskId delegate', async (t) => {
+  const { repo, id } = taskRepo(t);
+  const r = await exec(repo)('task_diff', { taskId: id });
+  assert.ok(r.ok, r.content);
+  assert.match(r.content, /worker=codex/);
+  assert.match(r.content, /files_changed: feature\.ts/);
+  assert.match(r.content, /\+export const x = 1;/);
+  assert.deepEqual(await exec(repo)('git_diff', { ref: id }), r);
+  assert.equal((await exec(repo)('task_diff', { taskId: '../x' })).ok, false);
+  assert.equal((await exec(repo)('task_diff', { taskId: 't-nope' })).ok, false);
+  const nf = taskRepo(t, { patchFile: false });
+  const r2 = await exec(nf.repo)('task_diff', { taskId: nf.id });
+  assert.match(r2.content, /\+export const x = 1;/);
+  assert.match(r2.content, /feature\.ts \| 1 \+/);
+});
+
+test('fleet_merge gate: no_change / không file / scope fail → từ chối, không hỏi', async (t) => {
+  for (const record of [{ outcome: 'no_change' }, { artifacts: { files_changed: [] } }, { scope_check: { ok: false, violations: [{ file: 'x' }] } }]) {
+    const { repo, id, merged } = taskRepo(t, { record });
+    const r = await exec(repo, async () => assert.fail('không được hỏi approve'))('fleet_merge', { taskId: id });
+    assert.equal(r.ok, false, JSON.stringify(record));
+    assert.match(r.content, /không merge/);
+    assert.equal(merged(), false);
+  }
+});
+
+test('fleet_merge: test fail → từ chối không hỏi; test pass → hỏi (file + test) rồi merge', async (t) => {
+  const red = taskRepo(t, { testScript: 'node -e "process.exit(1)"' });
+  const r = await exec(red.repo, async () => assert.fail('không được hỏi approve'))('fleet_merge', { taskId: red.id });
+  assert.equal(r.ok, false);
+  assert.match(r.content, /^test fail/);
+  assert.equal(red.merged(), false);
+
+  const green = taskRepo(t, { testScript: 'node -e "process.exit(0)"' });
+  const asked = [];
+  const ok = await exec(green.repo, async (q) => (asked.push(q), true))('fleet_merge', { taskId: green.id });
+  assert.ok(ok.ok, ok.content);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /feature\.ts/);
+  assert.match(asked[0], /test pass/);
+  assert.equal(green.merged(), true);
 });

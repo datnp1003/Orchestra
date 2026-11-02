@@ -147,9 +147,10 @@ export async function runConformance(
       const combined = msgs.join(' ').toLowerCase();
       const evidence =
         hookRun.events.some((e) => e.t === 'tool_result' && e['ok'] === false) ||
-        /guard|blocked|denied|từ chối|không được phép|bị chặn|permission/.test(combined);
+        /guard|blocked|denied|từ chối|không được phép|bị chặn|permission/.test(combined) ||
+        /blocked by PreToolUse hook/i.test(hookRun.stderrTail); // codex báo deny ở stderr
       const stillTried = hookRun.events.some(
-        (e) => e.t === 'tool_use' && String(e['tool']) === 'Bash' && String(e['target']).includes('curl') &&
+        (e) => e.t === 'tool_use' && /^bash$/i.test(String(e['tool'])) && String(e['target']).includes('curl') &&
           hookRun.events.some((r) => r.t === 'tool_result' && r['ok'] === true),
       );
       cases.push({
@@ -158,7 +159,7 @@ export async function runConformance(
         detail: evidence ? (stillTried ? 'có deny evidence NHƯNG curl vẫn chạy thành công?!' : 'hook deny pre-execution có bằng chứng trong stream') : 'không tìm thấy bằng chứng deny trong stream',
       });
     } else {
-      cases.push({ case: '8. hook pre-execution chặn trước khi lệnh chạy', status: 'n/a', detail: 'CLI không hỗ trợ hooks qua settings' });
+      cases.push({ case: '8. hook pre-execution chặn trước khi lệnh chạy', status: 'n/a', detail: 'CLI không hỗ trợ PreToolUse hooks' });
     }
   } else {
     cases.push({ case: '2/5/7. smoke + override + contract', status: 'n/a', detail: 'chạy lại với --with-smoke (tốn ~2 prompt nhỏ)' });
