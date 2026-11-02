@@ -36,6 +36,7 @@ for (const c of ['brain:models', 'chat:reset', 'chat:cancel', 'providers:list', 
   assert.ok(chans.includes(c), `có channel ${c}`);
 }
 for (const c of ['brain:config', 'vault:set', 'vault:delete']) assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: có oauth:start + oauth:finish');
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
 assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');

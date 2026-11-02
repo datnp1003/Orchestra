@@ -5,7 +5,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { authHeaders, type Format, type ProviderConfig } from './providers.js';
+import { OAuthLoginError, applyOAuth, completedFromSse, getAccessToken } from './oauth.js';
+import { authHeaders, isOAuth, type Format, type ProviderConfig } from './providers.js';
 import {
   ChatToMessagesStream,
   ChatToResponsesStream,
@@ -20,7 +21,7 @@ import {
 } from './translate.js';
 
 export interface RouterOptions {
-  store: { listProviders(): ProviderConfig[]; getKey(id: string): string | null };
+  store: { listProviders(): ProviderConfig[]; getKey(id: string): string | null; setKey(id: string, value: string): void };
   port?: number; // 0/undefined = random
   token?: string;
   defaultModel?: string | (() => string | undefined); // `<provider>/<model>` cho model không prefix (claude CLI gửi claude-haiku-… nền); hàm = đọc lại mỗi request
@@ -81,6 +82,13 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
   let port = 0;
 
   const enabled = () => opts.store.listProviders().filter((p) => p.enabled);
+  const warned = new Set<string>();
+  const warnOAuth = (p: ProviderConfig) => {
+    if (!isOAuth(p.kind) || warned.has(p.id)) return;
+    warned.add(p.id);
+    opts.onLog?.(`[router] CẢNH BÁO: ${p.id} dùng OAuth subscription — rủi ro điều khoản/khoá tài khoản`);
+  };
+  enabled().forEach(warnOAuth);
   const resolve = (model: unknown): { p: ProviderConfig; model: string } | null => {
     const s = typeof model === 'string' ? model : '';
     const i = s.indexOf('/'); // tách ở '/' ĐẦU — model upstream có thể chứa '/'
@@ -155,6 +163,16 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
 
     const headers: Record<string, string> = { ...authHeaders(p.kind, opts.store.getKey(p.id)), 'content-type': 'application/json' };
     if (native) for (const h of FORWARD) if (typeof req.headers[h] === 'string') headers[h] = req.headers[h] as string;
+    if (isOAuth(p.kind)) {
+      warnOAuth(p);
+      const creds = await getAccessToken(opts.store, p).catch((e) => {
+        throw e instanceof OAuthLoginError ? new HttpError(401, 'authentication_error', `${p.id}: ${e.message}`) : e;
+      });
+      headers.authorization = `Bearer ${creds.access}`;
+      applyOAuth(p.kind, headers, upstreamBody, creds);
+      // endpoint subscription: anthropic luôn ?beta=true; codex backend ở <base>/responses
+      target = p.kind === 'oauth-openai' ? '/responses' : `${target.split('?')[0]}?beta=true`;
+    }
     // client ngắt → huỷ upstream; ponytail: timeout tính cả thời gian stream, đổi sang idle-timeout nếu có turn > 10 phút
     const ac = new AbortController();
     res.on('close', () => ac.abort());
@@ -165,6 +183,14 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       signal: AbortSignal.any([ac.signal, AbortSignal.timeout(timeoutMs)]),
     });
     const ctype = up.headers.get('content-type') ?? 'application/json';
+
+    // codex backend bị ép stream — client không stream nhận JSON gom từ response.completed
+    if (p.kind === 'oauth-openai' && !body.stream && up.ok) {
+      const done = completedFromSse(await up.text());
+      if (!done) throw new HttpError(502, 'upstream_error', 'upstream không gửi response.completed');
+      sendJson(res, 200, { ...done, model: body.model });
+      return;
+    }
 
     // passthrough hoặc lỗi upstream: status + content-type + bytes nguyên vẹn (fetch đã giải nén → không chuyển content-encoding)
     if (mode === 'pass' || !up.ok) {

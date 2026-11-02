@@ -38,4 +38,12 @@ for (const c of ["'brain:config'", "'vault:set'", "'vault:delete'"]) assert.ok(!
 assert.ok(/id="prKey" type="password"/.test(js), 'key input type=password');
 assert.ok(/confirm\([^)]*claude\/settings\.json/.test(js), 'import có confirm()');
 console.log('✓ Providers tab: password key, import có confirm, không còn vault/brain:config');
+
+// R3: OAuth — cảnh báo đỏ + checkbox bắt buộc trước khi lưu/đăng nhập
+assert.ok(js.includes("'oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'") && js.includes("'oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)'"), 'kind OAuth có label');
+assert.ok(/id="prRisk" class="risk"/.test(js) && js.includes('KHOÁ TÀI KHOẢN') && js.includes('giả danh client'), 'warning box');
+assert.ok(/id="prRiskOk" \/> Tôi hiểu rủi ro/.test(js) && /!\$\('#prRiskOk'\)\.checked/.test(js), 'checkbox Tôi hiểu rủi ro chặn lưu');
+assert.ok(js.includes("'oauth:start'") && js.includes("'oauth:finish'") && js.includes('OAuth ⚠'), 'nút Đăng nhập + badge');
+assert.ok(!/\.(access|refresh)\b/.test(js), 'renderer không đụng token');
+console.log('✓ OAuth: warning + checkbox bắt buộc + login, không token');
 console.log('RENDERER TEST PASS ✓');

@@ -1,6 +1,6 @@
 // IPC wiring — bọc logic.ts (API duy nhất) vào ipcMain. Không viết logic mới ở đây.
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
-import { app } from 'electron';
+import { app, shell } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
 import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
@@ -15,7 +15,8 @@ import { runConformance } from '../../../prototype/src/conformance.js';
 import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/src/registry.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
 import { protoAsset } from '../../../prototype/src/paths.js';
-import { createProviderStore, authHeaders, type ProviderConfig } from '../../../prototype/src/router/providers.js';
+import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '../../../prototype/src/router/providers.js';
+import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
 import { fromClaudeSettings, fromCodexConfig } from './importCli.js';
@@ -38,10 +39,14 @@ export async function startOrchestraRouter(settingsFile: string): Promise<void> 
 }
 export const stopOrchestraRouter = (): Promise<void> => router?.close() ?? Promise.resolve();
 const routerCreds = (): BrainCreds | null => (router ? { baseUrl: `http://127.0.0.1:${router.port}`, apiKey: router.token } : null);
+const oauthOf = (p: ProviderConfig) => oauthStatus(store.getKey(p.id));
+/** provider + needsLogin (oauth chưa đăng nhập / refresh chết) cho routerModelOk */
+const providersWithLogin = () =>
+  store.listProviders().map((p) => (isOAuth(p.kind) && ['none', 'needsLogin'].includes(oauthOf(p).oauthStatus) ? { ...p, needsLogin: true } : p));
 /** chưa có provider bật nào → undefined: CLI dùng auth riêng như trước (không phá máy mới cài) */
 const routerInfo = (): RouterInfo | undefined => {
   const c = routerCreds();
-  const providers = store.listProviders();
+  const providers = providersWithLogin();
   return c && providers.some((p) => p.enabled) ? { baseUrl: c.baseUrl, token: c.apiKey, defaultModel: routerDefault(), providers } : undefined;
 };
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -90,12 +95,52 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   ipcMain.handle(IPC.MODELS_LIST, async () => {
     const c = routerCreds();
     const { models } = c ? await listBrainModels(c) : { models: [] as string[] };
-    return modelsList(models, store.listProviders());
+    return modelsList(models, providersWithLogin());
   });
 
   // ---- R2a Providers: key chỉ đi vào vault, KHÔNG bao giờ trả về renderer ----
   ipcMain.handle(IPC.PROVIDERS_LIST, () =>
-    store.listProviders().map((p) => ({ id: p.id, kind: p.kind, baseUrl: p.baseUrl, formats: p.formats, enabled: p.enabled, hasKey: !!store.getKey(p.id) })));
+    store.listProviders().map((p) => ({
+      id: p.id, kind: p.kind, baseUrl: p.baseUrl, formats: p.formats, enabled: p.enabled, hasKey: !!store.getKey(p.id),
+      models: p.models ?? [], riskAcknowledged: !!p.riskAcknowledged, ...(isOAuth(p.kind) ? oauthOf(p) : {}),
+    })));
+  // R3 OAuth: token chỉ vào vault; anthropic = user dán code#state, openai = callback 127.0.0.1:1455
+  const oauthProvider = (id: unknown) => {
+    const p = store.listProviders().find((x) => x.id === id);
+    if (!p || !isOAuth(p.kind)) throw new Error(`không có provider OAuth ${String(id)}`);
+    if (!p.riskAcknowledged) throw new Error(`${p.id}: chưa xác nhận rủi ro OAuth`);
+    return p;
+  };
+  ipcMain.handle(IPC.OAUTH_START, async (_e, a: { id: string }) => {
+    try {
+      const p = oauthProvider(a?.id);
+      if (p.kind === 'oauth-anthropic') {
+        const k = pkce();
+        oauthPending.set(p.id, k);
+        const authUrl = anthropicAuthUrl(k);
+        await shell.openExternal(authUrl);
+        return { ok: true, authUrl };
+      }
+      const c = await openaiLogin({ open: (url) => shell.openExternal(url) });
+      store.setKey(p.id, JSON.stringify(c));
+      return { ok: true, accountId: c.accountId };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  });
+  ipcMain.handle(IPC.OAUTH_FINISH, async (_e, a: { id: string; code: string }) => {
+    try {
+      const p = oauthProvider(a?.id);
+      const k = oauthPending.get(p.id);
+      if (!k) throw new Error('chưa bấm Đăng nhập');
+      const c = await exchangeAnthropic(String(a?.code ?? ''), k);
+      oauthPending.delete(p.id);
+      store.setKey(p.id, JSON.stringify(c));
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  });
   ipcMain.handle(IPC.PROVIDERS_SAVE, (_e, p: { cfg: Partial<ProviderConfig>; key?: string }) => {
     try {
       const key = typeof p?.key === 'string' && p.key.trim() ? p.key.trim() : undefined; // trống = giữ key cũ
@@ -314,6 +359,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     }
   });
 }
+
+// PKCE đang chờ user dán code (anthropic) — theo provider id, chỉ trong RAM
+const oauthPending = new Map<string, { verifier: string; state: string }>();
 
 // hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
 let chat: { history: Msg[]; startedAt: string } = { history: [], startedAt: '' };

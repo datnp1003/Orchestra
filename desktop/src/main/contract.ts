@@ -25,6 +25,8 @@ export const IPC = {
   PROVIDERS_TEST: 'providers:test',
   PROVIDERS_IMPORT: 'providers:import',
   ROUTER_STATUS: 'router:status',
+  OAUTH_START: 'oauth:start',
+  OAUTH_FINISH: 'oauth:finish',
   CONFORMANCE_RUN: 'conformance:run',
   SKILLS_SYNC: 'skills:sync',
   TERMINAL_CREATE: 'terminal:create',

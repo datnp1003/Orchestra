@@ -200,3 +200,8 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .wizard-step { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
 .wizard-step .num { font-family: var(--mono); color: var(--faint); font-size: 11px; }
 .click-row { cursor: pointer; }
+[hidden] { display: none !important; } /* .row{display:flex} không được thắng thuộc tính hidden */
+.risk { border: 1px solid var(--err); background: rgba(244, 112, 103, 0.08); color: var(--fg); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.risk b { color: var(--err); }
+.risk ul { margin: 6px 0; padding-left: 18px; }
+.badge-risk { color: var(--err); border: 1px solid var(--err); border-radius: 4px; padding: 0 4px; font-size: 10.5px; }

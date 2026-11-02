@@ -1,5 +1,6 @@
 // R2a: import provider từ config CLI của chính user (~/.claude/settings.json, ~/.codex/config.toml).
 // Thuần (nội dung file + env vào) — main process đọc file, lưu key vào vault; key KHÔNG bao giờ về renderer.
+// Cố ý KHÔNG import OAuth từ ~/.codex/auth.json / ~/.claude/.credentials.json: refresh token xoay vòng, dùng chung với CLI → 1 bên refresh làm bên kia (cả phiên) bị đăng xuất.
 import type { ProviderConfig } from '../../../prototype/src/router/providers.js';
 
 export interface Found {

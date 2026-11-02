@@ -313,7 +313,9 @@ async function renderSettings() {
   page.classList.remove('fill');
   const [s] = await Promise.all([loadSettings(), loadFleet()]);
   const TABS = [['chung', 'Chung'], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills']];
-  const KINDS = ['anthropic', 'openai', 'anthropic-compatible', 'openai-compatible'];
+  const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
+    ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
+  const isOAuth = (k) => k.startsWith('oauth-');
   const FORMATS = ['messages', 'chat', 'responses'];
   const pane = (id, html) => `<div class="tabpane" id="tab-${id}" ${settingsTab === id ? '' : 'hidden'}>${html}</div>`;
   page.innerHTML = `
@@ -354,17 +356,35 @@ async function renderSettings() {
           <button class="secondary" id="prImport">Import từ claude/codex config</button>
           <span id="prOut" class="dim"></span>
         </div>
+        <div class="row" id="prCodeRow" hidden>
+          <input id="prCode" placeholder="dán code#state từ trang Anthropic" autocomplete="off" />
+          <button id="prCodeOk">Xác nhận</button>
+        </div>
         <label>Model mặc định của router (CLI gửi model không prefix)</label>
         <select id="rDefault"></select>
       </div>
       <div class="card">
         <h3>Thêm / sửa provider</h3>
         <label>id</label><input id="prId" placeholder="my-gw" autocomplete="off" />
-        <label>kind</label><select id="prKind">${KINDS.map((k) => `<option>${k}</option>`).join('')}</select>
-        <label>Base URL</label><input id="prUrl" placeholder="https://gw.company.com" />
-        <label>Formats upstream nói native</label>
-        <div class="row">${FORMATS.map((f) => `<label><input type="checkbox" data-fmt="${f}" /> ${f}</label>`).join('')}</div>
-        <label>API key (để trống = giữ key cũ)</label><input id="prKey" type="password" autocomplete="off" />
+        <label>kind</label><select id="prKind">${KINDS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select>
+        <div id="prRisk" class="risk" hidden>
+          <b>⚠ OAuth subscription — rủi ro</b>
+          <ul>
+            <li>Dùng token subscription ngoài client chính chủ có thể vi phạm điều khoản Anthropic/OpenAI → có thể bị chặn hoặc KHOÁ TÀI KHOẢN.</li>
+            <li>Router phải tự nhận là Claude Code/Codex CLI (client id + header/system prompt) — đây là giả danh client.</li>
+            <li>Refresh token xoay vòng: KHÔNG dùng chung phiên đăng nhập với codex/claude CLI trên máy (đăng nhập riêng cho Orchestra); dùng lại token cũ có thể đăng xuất toàn bộ phiên.</li>
+            <li>Token OAuth có quyền cấp tài khoản; lưu trong vault DPAPI (chỉ chống user khác trên máy).</li>
+            <li>Hạn mức subscription (5h/tuần) cạn nhanh khi chạy nhiều worker; endpoint không công khai, có thể hỏng khi CLI cập nhật.</li>
+          </ul>
+          <label><input type="checkbox" id="prRiskOk" /> Tôi hiểu rủi ro</label>
+          <label>Models (phân cách bằng dấu phẩy; trống = mặc định)</label><input id="prModels" autocomplete="off" />
+        </div>
+        <div id="prKeyed">
+          <label>Base URL</label><input id="prUrl" placeholder="https://gw.company.com" />
+          <label>Formats upstream nói native</label>
+          <div class="row">${FORMATS.map((f) => `<label><input type="checkbox" data-fmt="${f}" /> ${f}</label>`).join('')}</div>
+          <label>API key (để trống = giữ key cũ)</label><input id="prKey" type="password" autocomplete="off" />
+        </div>
         <label><input type="checkbox" id="prOn" checked /> Bật</label>
         <button id="prSave">Lưu</button>
       </div>`)}
@@ -429,6 +449,14 @@ async function renderSettings() {
   });
   // tab providers — key không bao giờ về renderer (chỉ hasKey)
   let PROVS = [];
+  let oauthWaiting = ''; // provider anthropic đang chờ dán code#state
+  const syncKind = () => {
+    const o = isOAuth($('#prKind').value);
+    $('#prRisk').hidden = !o;
+    $('#prKeyed').hidden = o;
+  };
+  $('#prKind').onchange = syncKind;
+  const OAUTH_ST = { none: 'chưa đăng nhập', ok: 'đã đăng nhập', expired: 'hết hạn (tự refresh)', needsLogin: 'cần đăng nhập lại' };
   const refreshModels = async () => {
     await Promise.all([loadModels(), loadBrainModels()]);
     const cur = SETTINGS.routerDefaultModel;
@@ -440,9 +468,9 @@ async function renderSettings() {
     PROVS = list;
     $('#rStatus').textContent = st.running ? `✓ 127.0.0.1:${st.port} · ${st.providers} provider` : '✗ không chạy';
     $('#prRows').innerHTML = list.map((p) => `<tr>
-      <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
-      <td>${p.enabled ? '✓' : '—'}</td><td>${p.hasKey ? '✓' : '—'}</td>
-      <td><button class="secondary" data-pedit="${esc(p.id)}">Sửa</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">Xoá</button></td>
+      <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}${isOAuth(p.kind) ? ' <span class="badge-risk">OAuth ⚠</span>' : ''}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
+      <td>${p.enabled ? '✓' : '—'}</td><td>${isOAuth(p.kind) ? `<span class="${p.oauthStatus === 'ok' ? 'ok' : 'warn'}">${esc(OAUTH_ST[p.oauthStatus] ?? p.oauthStatus)}</span>` : p.hasKey ? '✓' : '—'}</td>
+      <td>${isOAuth(p.kind) ? `<button class="secondary" data-plogin="${esc(p.id)}">Đăng nhập</button> ` : ''}<button class="secondary" data-pedit="${esc(p.id)}">Sửa</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">Xoá</button></td>
     </tr>`).join('') || '<tr><td colspan="7" class="dim">chưa có provider — CLI dùng auth riêng</td></tr>';
     page.querySelectorAll('[data-pedit]').forEach((b) => {
       b.onclick = () => {
@@ -453,6 +481,27 @@ async function renderSettings() {
         page.querySelectorAll('[data-fmt]').forEach((c) => { c.checked = p.formats.includes(c.dataset.fmt); });
         $('#prOn').checked = p.enabled;
         $('#prKey').value = '';
+        $('#prRiskOk').checked = !!p.riskAcknowledged;
+        $('#prModels').value = (p.models ?? []).join(', ');
+        syncKind();
+      };
+    });
+    page.querySelectorAll('[data-plogin]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.dataset.plogin;
+        const p = PROVS.find((x) => x.id === id);
+        $('#prOut').textContent = p.kind === 'oauth-openai' ? `đang chờ đăng nhập OpenAI trong trình duyệt (${id}, tối đa 5 phút)…` : `mở trình duyệt đăng nhập Claude (${id})…`;
+        const r = await api.invoke('oauth:start', { id });
+        if (!r.ok) { $('#prOut').textContent = `✗ ${r.error}`; return; }
+        if (p.kind === 'oauth-anthropic') {
+          oauthWaiting = id;
+          $('#prCodeRow').hidden = false;
+          $('#prCode').focus();
+          $('#prOut').textContent = `dán code#state hiện ở trang Anthropic vào ô bên dưới (${id})`;
+        } else {
+          $('#prOut').textContent = `✓ ${id} đã đăng nhập`;
+          await renderProviders();
+        }
       };
     });
     page.querySelectorAll('[data-ptest]').forEach((b) => {
@@ -472,15 +521,26 @@ async function renderSettings() {
     await refreshModels();
   };
   renderProviders();
+  $('#prCodeOk').onclick = async () => {
+    const r = await api.invoke('oauth:finish', { id: oauthWaiting, code: $('#prCode').value.trim() });
+    $('#prCode').value = '';
+    $('#prOut').textContent = r.ok ? `✓ ${oauthWaiting} đã đăng nhập` : `✗ ${r.error}`;
+    if (r.ok) { $('#prCodeRow').hidden = true; await renderProviders(); }
+  };
   $('#prSave').onclick = async () => {
-    const cfg = {
-      id: $('#prId').value.trim(),
-      kind: $('#prKind').value,
-      baseUrl: $('#prUrl').value.trim(),
-      formats: [...page.querySelectorAll('[data-fmt]')].filter((c) => c.checked).map((c) => c.dataset.fmt),
-      enabled: $('#prOn').checked,
-    };
-    const key = $('#prKey').value;
+    const kind = $('#prKind').value;
+    if (isOAuth(kind) && !$('#prRiskOk').checked) { $('#prOut').textContent = '✗ phải tick "Tôi hiểu rủi ro" trước khi lưu provider OAuth'; return; }
+    const cfg = isOAuth(kind)
+      ? { id: $('#prId').value.trim(), kind, enabled: $('#prOn').checked, riskAcknowledged: true,
+          models: $('#prModels').value.split(',').map((x) => x.trim()).filter(Boolean) }
+      : {
+          id: $('#prId').value.trim(),
+          kind,
+          baseUrl: $('#prUrl').value.trim(),
+          formats: [...page.querySelectorAll('[data-fmt]')].filter((c) => c.checked).map((c) => c.dataset.fmt),
+          enabled: $('#prOn').checked,
+        };
+    const key = isOAuth(kind) ? '' : $('#prKey').value;
     const r = await api.invoke('providers:save', { cfg, key: key || undefined });
     $('#prKey').value = '';
     $('#prOut').textContent = r.ok ? `✓ đã lưu ${r.id}` : `✗ ${r.error}`;
@@ -604,7 +664,8 @@ function devStub() {
     if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw nói messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router dịch Responses→Chat/Messages)' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
     if (ch === 'brain:models') return { models: ['gw/claude-opus'] };
-    if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true }];
+    if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true },
+      { id: 'cc', kind: 'oauth-anthropic', baseUrl: 'https://api.anthropic.com', formats: ['messages'], enabled: true, hasKey: false, riskAcknowledged: true, models: ['claude-sonnet-5-5'], oauthStatus: 'none', expiresAt: null }];
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
     if (ch === 'providers:import') return { imported: [], skipped: ['(stub)'] };
     if (ch === 'matrix:html') return '<h3 style="font-family:monospace">Policy Matrix (preview)</h3>';
