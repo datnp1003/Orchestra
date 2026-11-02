@@ -8,18 +8,67 @@
 </head>
 <body>
   <div id="app">
-    <nav id="nav">
-      <div class="brand">ORCHESTRA</div>
-      <a href="#/dashboard" data-page="dashboard">Dashboard</a>
-      <a href="#/chat" data-page="chat">Chat</a>
-      <a href="#/terminal" data-page="terminal">Terminal</a>
-      <a href="#/transcript" data-page="transcript">Transcript</a>
-      <a href="#/matrix" data-page="matrix">Policy Matrix</a>
-      <a href="#/wizard" data-page="wizard">Setup Wizard</a>
-      <a href="#/settings" data-page="settings">Settings</a>
-      <div class="brand small" id="repoLabel"></div>
-    </nav>
-    <main id="page"></main>
+    <aside id="sidebar">
+      <div class="brand"><span class="brand-mark">◆</span>ORCHESTRA</div>
+      <button id="newTask" class="btn-primary btn-new" title="Mở chat và dispatch task mới">＋ Task mới</button>
+
+      <div class="side-section">
+        <div class="side-title">Tasks gần đây</div>
+        <div id="sideTaskList"></div>
+      </div>
+
+      <nav id="nav">
+        <div class="side-title">Điều hướng</div>
+        <a href="#/chat" data-page="chat">Chat</a>
+        <a href="#/dashboard" data-page="dashboard">Dashboard</a>
+        <a href="#/terminal" data-page="terminal">Terminal</a>
+        <a href="#/transcript" data-page="transcript">Transcript</a>
+        <a href="#/matrix" data-page="matrix">Policy Matrix</a>
+      </nav>
+
+      <div id="sideFooter">
+        <div id="repoLabel" class="repo-label" title="Repo active"></div>
+        <button id="btnSettings" title="Cài đặt — chung, workers, vault, conformance, skills">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Cài đặt</span>
+        </button>
+      </div>
+    </aside>
+
+    <div id="main">
+      <header id="topbar">
+        <div id="pageTitle">Chat</div>
+        <div class="topbar-right">
+          <div id="fleetPill" title="Fleet worker đã cài — click để mở Dashboard"></div>
+          <select id="repoSel" title="Repo active"></select>
+        </div>
+      </header>
+
+      <main id="page"></main>
+
+      <div id="composerWrap" hidden>
+        <div id="composer">
+          <span class="composer-caret">›</span>
+          <textarea id="chatInput" rows="1" placeholder="Nhắn cho orchestrator — mô tả task cần làm…"></textarea>
+          <button id="chatSend" title="Gửi (Enter)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+          </button>
+        </div>
+        <div class="composer-hints">
+          <span><b>Enter</b> gửi</span>
+          <span><b>Shift+Enter</b> dòng mới</span>
+          <span id="composerBrain"></span>
+        </div>
+      </div>
+
+      <footer id="statusbar">
+        <span id="stWorker"></span>
+        <span class="sep">·</span>
+        <span id="stRepo"></span>
+        <span class="spacer"></span>
+        <span id="stFleet"></span>
+      </footer>
+    </div>
   </div>
   <script src="app.js"></script>
 </body>
