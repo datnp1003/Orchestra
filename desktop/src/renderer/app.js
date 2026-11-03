@@ -63,6 +63,8 @@ function modelOptions(worker, cur, defLabel) {
 let CHAT = { projectId: null, projectName: '' };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
+// 1 nguồn màu cho mọi chỗ hiện fleet: đủ = xanh, thiếu một phần = vàng, không có = đỏ
+const fleetDot = (n) => (n === FLEET.length ? 'ok' : n ? 'warn' : 'err');
 
 // project/repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
 function renderRepo() {
@@ -80,14 +82,14 @@ function renderChrome() {
   const pill = $('#fleetPill');
   if (pill && FLEET.length) {
     const n = fleetInstalled();
-    pill.innerHTML = `<span class="dot ${n === FLEET.length ? 'ok' : 'err'}"></span>${n}/${FLEET.length} workers`;
+    pill.innerHTML = `<span class="dot ${fleetDot(n)}"></span>${n}/${FLEET.length} workers`;
   }
   // statusbar
   $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
   const stFleet = $('#stFleet');
   if (FLEET.length) {
     const n = fleetInstalled();
-    stFleet.innerHTML = `<span class="dot ${n ? 'ok' : 'err'}"></span> ${n}/${FLEET.length} workers`;
+    stFleet.innerHTML = `<span class="dot ${fleetDot(n)}"></span> ${n}/${FLEET.length} workers`;
   }
   // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
   if (SETTINGS) {

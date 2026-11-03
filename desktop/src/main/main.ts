@@ -36,6 +36,10 @@ if (!gotLock) {
       height: 860,
       title: 'Orchestra Desktop',
       icon: ICON,
+      // title bar + menu cùng nền tối của app (không dùng thanh tiêu đề/menu trắng mặc định của Windows)
+      backgroundColor: '#0e0e11',
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { color: '#0e0e11', symbolColor: '#8f8f9a', height: 46 },
       webPreferences: {
         preload: path.join(appRoot, 'src', 'preload.cjs'),
         contextIsolation: true,
@@ -45,6 +49,7 @@ if (!gotLock) {
     // E2E: --page=chat mở thẳng page (router hash) — dùng cho screenshot gate
     const pageArg = process.argv.find((a) => a.startsWith('--page='));
     const hash = pageArg ? pageArg.split('=')[1] ?? '' : '';
+    win.removeMenu(); // menu File/Edit/View mặc định không dùng tới
     win.loadFile(path.join(appRoot, 'src', 'renderer', 'index.html'), { hash: hash ? `/${hash}` : undefined });
     win.on('closed', () => {
       win = null;
