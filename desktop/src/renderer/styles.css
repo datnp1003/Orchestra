@@ -217,6 +217,8 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .composer-hints b { color: var(--dim); font-weight: 600; }
 #composerBrain { display: flex; gap: 6px; margin-left: auto; }
 #composerBrain select, #composerBrain button { width: auto; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
+.model-search { margin-bottom: 4px; }
+#composerBrain .model-search { width: 150px; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
 
 /* ---------- log / terminal ---------- */
 #log, #term {

@@ -50,6 +50,8 @@ export const en = {
   'desktop.composer.newChat': 'New chat',
   'desktop.composer.modelTitle': 'Orchestra model (brain)',
   'desktop.composer.pickModel': '(select model)',
+  'desktop.model.search': 'Search models…',
+  'desktop.model.matches': '{n} matches',
   'desktop.common.notSelected': 'not selected',
   'desktop.common.none': 'none yet',
   'desktop.common.save': 'Save',

@@ -51,6 +51,8 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.composer.newChat': 'Chat mới',
   'desktop.composer.modelTitle': 'Model Orchestra (brain)',
   'desktop.composer.pickModel': '(chọn model)',
+  'desktop.model.search': 'Tìm model…',
+  'desktop.model.matches': '{n} kết quả',
   'desktop.common.notSelected': 'chưa chọn',
   'desktop.common.none': 'chưa có',
   'desktop.common.save': 'Lưu',

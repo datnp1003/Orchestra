@@ -59,6 +59,39 @@ function modelOptions(worker, cur, defLabel) {
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
+// ô search lọc <option> của 1 select model (hàng trăm model từ router): gõ chuỗi con, không phân biệt hoa thường;
+// option đang chọn luôn hiện; Enter = chọn kết quả đầu tiên. Select bị render lại (innerHTML) → observer lọc lại.
+function modelSearch(sel) {
+  if (!sel || sel.dataset.search) return;
+  sel.dataset.search = '1';
+  const box = document.createElement('input');
+  box.type = 'search';
+  box.className = 'model-search';
+  box.placeholder = t('desktop.model.search');
+  box.setAttribute('aria-label', t('desktop.model.search'));
+  sel.before(box);
+  const apply = () => {
+    const q = box.value.trim().toLowerCase();
+    let n = 0;
+    for (const o of sel.options) {
+      const hit = !q || !o.value || o.selected || o.value.toLowerCase().includes(q);
+      o.hidden = !hit;
+      if (hit && o.value) n++;
+    }
+    box.title = q ? t('desktop.model.matches', { n }) : '';
+  };
+  box.addEventListener('input', apply);
+  box.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const first = [...sel.options].find((o) => o.value && !o.hidden && !o.disabled && !o.selected);
+    if (!first) return;
+    sel.value = first.value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  new MutationObserver(apply).observe(sel, { childList: true });
+}
+
 // session đang mở: projectId null = chat ngoài project (chỉ global memory)
 let CHAT = { projectId: null, projectName: '' };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
@@ -314,6 +347,8 @@ async function renderDashboard() {
     <div class="card" id="transcript"></div>`;
   renderTranscript($('#transcript'), tasks);
   if (openTranscript) { openTranscript = false; $('#transcript').scrollIntoView(); }
+  modelSearch($('#dModel'));
+  modelSearch($('#pModel'));
   $('#dWorker').onchange = () => { $('#dModel').innerHTML = modelOptions($('#dWorker').value, '', t('desktop.dash.byPolicy')); };
   $('#btnToWizard').onclick = () => { settingsTab = 'workers'; location.hash = '#/settings'; };
   $('#dGo').onclick = async () => {
@@ -564,6 +599,7 @@ async function renderSettings() {
     });
   };
   const OAUTH_ST = ['none', 'ok', 'expired', 'needsLogin'];
+  modelSearch($('#rDefault'));
   const refreshModels = async () => {
     await Promise.all([loadModels(), loadBrainModels()]);
     const cur = SETTINGS.routerDefaultModel;
@@ -925,6 +961,7 @@ window.addEventListener('hashchange', route);
   await loadI18n(); // trước render đầu tiên
   await loadSettings();
   await Promise.all([loadFleet(), loadSessions(), loadModels(), loadBrainModels()]);
+  modelSearch($('#cbModel'));
   route();
 })();
 
