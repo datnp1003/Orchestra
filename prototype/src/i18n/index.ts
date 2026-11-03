@@ -14,8 +14,9 @@
 // keys that fell through to the key itself are recorded in `missing` (tests assert it stays empty).
 // Renderer (no TS import): main sends messages('desktop.') over IPC i18n:get; app.js has its own t() with the same semantics.
 // Scope: only text a HUMAN reads goes through t(). Text sent to LLMs/workers (briefs, prompts, retro proposals, brain
-// system prompt, tool descriptions) is English-only (models handle English best); the brain prompt tells it to reply in
-// the user's language (default: UI locale). Tool RESULT strings the brain reads stay English. Machine ids/enums/JSON keys/
+// system prompt, tool descriptions) is NOT localized via t(): fixed scaffolding is English, the user's own text is
+// passed verbatim, and models answer in the language of the user's message/goal — never the UI locale.
+// Tool RESULT strings the brain reads stay English. Machine ids/enums/JSON keys/
 // log prefixes ([router]) never translate. test/i18n.test.mjs scans src for Vietnamese literals outside vi.ts.
 import { en } from './en.js';
 import { vi } from './vi.js';

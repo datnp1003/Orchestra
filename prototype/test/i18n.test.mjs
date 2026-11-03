@@ -82,3 +82,13 @@ test('detectLocale', () => {
   for (const v of ['vi', 'vi-VN', 'VI_vn.UTF-8']) assert.equal(detectLocale(v), 'vi', v);
   for (const v of [undefined, '', 'en-US', 'fr', 'xvi']) assert.equal(detectLocale(v), 'en', String(v));
 });
+
+test('prompt gửi LLM không phụ thuộc locale UI — theo ngôn ngữ của user', async () => {
+  const { setLocale } = await import('../dist/i18n/index.js');
+  const { buildPrompt } = await import('../dist/dispatch.js');
+  const b = { goal: 'thêm hàm isPositive vào stripe.ts', files_in_scope: ['src/**'], constraints: [], forbidden_actions: [], acceptance_criteria: [] };
+  setLocale('vi'); const vi = buildPrompt(b);
+  setLocale('en'); const en = buildPrompt(b);
+  assert.equal(vi, en, 'buildPrompt đổi theo locale UI');
+  assert.ok(en.includes('GOAL: thêm hàm isPositive vào stripe.ts'), 'goal của user phải giữ nguyên văn');
+});

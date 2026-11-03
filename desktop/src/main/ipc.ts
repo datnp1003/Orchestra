@@ -276,7 +276,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         history: conv.history,
         userText: p.text,
         model: s.brainModel,
-        system: brainSystemPrompt(repo, s.language),
+        system: brainSystemPrompt(repo),
         tools: BRAIN_TOOLS,
         signal: ac.signal,
         execTool: brainToolExecutor(repo, {

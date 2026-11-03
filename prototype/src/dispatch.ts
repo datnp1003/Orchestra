@@ -181,6 +181,8 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   // 4. Permission theo node (Lớp 1) + chạy
   const perm = permissionFor(o.node);
   let prompt = o.promptOverride ?? (o.node === 'plan' ? buildPlanPrompt(brief) : buildPrompt(brief));
+  // ngôn ngữ theo chính task của user, không theo locale UI (giữ nguyên token cố định như VERDICT)
+  prompt += '\n\nLANGUAGE: write your answer in the same language as the task/goal text above; keep required fixed tokens (e.g. "VERDICT: ...") verbatim.';
   if (kb.injected && ['plan', 'implement'].includes(o.node)) {
     prompt += `\n\nPROJECT KNOWLEDGE (repo memory — follow the conventions below):\n${kb.injected}`;
   }

@@ -386,10 +386,11 @@ Rules:
 5. Before fleet_merge you must call task_diff and read the diff; state what you checked.
 6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.`;
 
-export function brainSystemPrompt(repo: string, uiLocale: 'en' | 'vi' = 'vi'): string {
-  const lang = `\nLANGUAGE: reply in the language the user writes in; if unclear, use ${uiLocale === 'vi' ? 'Vietnamese' : 'English'} (the UI language).`;
+// ngôn ngữ do chính user quyết (theo tin nhắn), KHÔNG theo locale UI/i18n
+const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
+export function brainSystemPrompt(repo: string): string {
   const kb = recallKB(repo, ['**'], 1500);
-  return BRAIN_SYSTEM_PROMPT + lang + (kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '');
+  return BRAIN_SYSTEM_PROMPT + BRAIN_LANGUAGE + (kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '');
 }
 
 const strArr = { type: 'array', items: { type: 'string' } };
