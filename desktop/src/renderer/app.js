@@ -63,8 +63,8 @@ function modelOptions(worker, cur, defLabel) {
 let CHAT = { projectId: null, projectName: '' };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
-// 1 nguồn màu cho mọi chỗ hiện fleet: đủ = xanh, thiếu một phần = vàng, không có = đỏ
-const fleetDot = (n) => (n === FLEET.length ? 'ok' : n ? 'warn' : 'err');
+// 1 nguồn màu cho mọi chỗ hiện fleet: có worker = xanh, không có = xám
+const fleetDot = (n) => (n ? 'ok' : '');
 
 // project/repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
 function renderRepo() {
@@ -181,6 +181,7 @@ $('#newProjectName').addEventListener('keydown', async (e) => {
 
 // ---------- chrome clicks ----------
 document.getElementById('newChat').onclick = () => startChat(null);
+document.getElementById('newChatPlus').onclick = () => startChat(null);
 document.getElementById('btnSettings').onclick = () => {
   settingsTab = 'chung';
   if (!location.hash.includes('#/settings')) location.hash = '#/settings';
@@ -717,14 +718,13 @@ async function renderProject(id) {
     ? `<table><thead><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th></th></tr></thead><tbody>${kb.map((e) => `<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.title)}</td><td class="mono">${esc(e.scope.join(', '))}</td><td>${esc(e.source)}</td><td>${e.pinned ? '📌' : ''}</td></tr>`).join('')}</tbody></table>`
     : `<div class="dim">${esc(t('desktop.mx.noKb'))}</div>`);
   page.innerHTML = `
-    <h2>${esc(p.name)}</h2>
     <div class="card">
       <label>${esc(t('desktop.project.name'))}</label>
       <div class="row"><input id="pjName" value="${esc(p.name)}" maxlength="80" /><button class="secondary" id="pjRename">${esc(t('desktop.project.rename'))}</button></div>
     </div>
     <div class="card"><h3>${esc(t('desktop.project.repos'))}</h3>
-      ${d.repos.length ? `<table><tbody>${d.repos.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.path)}${r.exists ? '' : ` <span class="err">${esc(t('desktop.project.missing'))}</span>`}</td>
-        <td><button class="secondary" data-rm-repo="${esc(r.repo)}" title="${esc(t('desktop.project.removeRepoTitle'))}">${esc(t('desktop.project.removeRepo'))}</button></td></tr>`).join('')}</tbody></table>`
+      ${d.repos.length ? `<table class="pj-repos"><tbody>${d.repos.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="mono pj-path" title="${esc(r.path)}">${esc(r.path)}${r.exists ? '' : ` <span class="err">${esc(t('desktop.project.missing'))}</span>`}</td>
+        <td class="pj-act"><button class="secondary" data-rm-repo="${esc(r.repo)}" title="${esc(t('desktop.project.removeRepoTitle'))}">${esc(t('desktop.project.removeRepo'))}</button></td></tr>`).join('')}</tbody></table>`
         : `<div class="dim">${esc(t('desktop.project.noRepos'))}</div>`}
       <div class="row"><button class="secondary" id="pjAddRepo">${esc(t('desktop.repo.add'))}</button><button class="secondary" id="pjNewChat">${esc(t('desktop.projects.newChatIn', { name: p.name }))}</button></div>
     </div>
