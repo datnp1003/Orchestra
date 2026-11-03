@@ -397,7 +397,7 @@ async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const [s] = await Promise.all([loadSettings(), loadFleet()]);
-  const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], ['conformance', 'Conformance'], ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
+  const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], /* conformance: tạm ẩn theo yêu cầu (pane + IPC giữ nguyên, badge vẫn ở Dashboard) */ ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
   const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
     ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
   const isOAuth = (k) => k.startsWith('oauth-');
