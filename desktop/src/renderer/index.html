@@ -11,6 +11,7 @@
     <aside id="sidebar">
       <div class="brand"><img class="brand-mark" src="../../assets/icon.png" alt="" />ORCHESTRA</div>
       <button id="newChat" class="btn-primary btn-new" data-i18n="desktop.newChat.label" data-i18n-title="desktop.newChat.title"></button>
+      <button id="approvalBadge" class="approval-badge" hidden></button>
 
       <div id="sideLists">
         <div class="side-section">
@@ -48,6 +49,11 @@
       <main id="page"></main>
 
       <div id="composerWrap" hidden>
+        <div id="emptyHero" class="empty-only">
+          <img class="empty-icon" src="../../assets/icon.png" alt="" />
+          <div class="empty-title" data-i18n="desktop.empty.title"></div>
+          <div id="emptyCtx" class="empty-ctx"></div>
+        </div>
         <div id="composer">
           <span class="composer-caret">›</span>
           <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>
@@ -62,7 +68,17 @@
           <span id="composerBrain">
             <button id="cbNew" class="secondary" data-i18n="desktop.composer.newChat" data-i18n-title="desktop.newChat.title"></button>
             <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
+            <span class="mode-wrap">
+              <button id="cbMode" class="secondary" data-i18n-title="desktop.mode.title" aria-haspopup="true"></button>
+              <div id="modeMenu" class="mode-menu" role="menu" hidden></div>
+            </span>
           </span>
+        </div>
+        <div id="emptyChips" class="empty-only">
+          <button class="secondary chip" data-i18n="desktop.empty.chip1"></button>
+          <button class="secondary chip" data-i18n="desktop.empty.chip2"></button>
+          <button class="secondary chip" data-i18n="desktop.empty.chip3"></button>
+          <button class="secondary chip" data-i18n="desktop.empty.chip4"></button>
         </div>
       </div>
 
@@ -70,6 +86,8 @@
         <span id="stWorker"></span>
         <span class="sep">·</span>
         <span id="stRepo"></span>
+        <span class="sep">·</span>
+        <span id="stMode"></span>
         <span class="spacer"></span>
       </footer>
     </div>

@@ -2,8 +2,9 @@
 import { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals, startOrchestraRouter, stopOrchestraRouter } from './ipc.js';
-import { IPC } from './contract.js';
+import { wireIpc, wireTerminals, setupAutoUpdater, killAllTerminals, startOrchestraRouter, stopOrchestraRouter, respondApproval, cancelApprovals } from './ipc.js';
+import { IPC, EVENTS } from './contract.js';
+import { parseApprovalUrl, approvalToastXml, type ApprovalRequest } from './approvals.js';
 import { initLanguage } from './settingsStore.js';
 import { t, setLocale, detectLocale } from '../../../prototype/src/i18n/index.js';
 
@@ -25,12 +26,49 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
+  // toast action Approve/Reject → orchestra://approval/<id>/<action> (Windows: instance mới → second-instance; macOS: open-url)
+  if (process.defaultApp) app.setAsDefaultProtocolClient('orchestra', process.execPath, [path.resolve(process.argv[1] ?? '.')]);
+  else app.setAsDefaultProtocolClient('orchestra');
+  const showWin = (): void => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  };
+  const handleUrl = (url: string): void => {
+    const a = parseApprovalUrl(url);
+    if (a) respondApproval(a.id, a.approve); // id lạ / đã trả lời → bỏ qua
+  };
+  app.on('second-instance', (_e, argv) => {
+    const url = argv.find((x) => x.startsWith('orchestra://'));
+    if (url) handleUrl(url);
+    else showWin();
   });
+  app.on('open-url', (e, url) => {
+    e.preventDefault();
+    handleUrl(url);
+  });
+  const toasts = new Set<Notification>();
+  // cửa sổ không focus → notification; click = mở Chat + focus card; Windows thử toast có nút Approve/Reject
+  const notifyApproval = (r: ApprovalRequest): void => {
+    if (!Notification.isSupported() || win?.isFocused()) return;
+    const title = t('desktop.approval.title');
+    let n: Notification;
+    try {
+      n = process.platform === 'win32' ? new Notification({ toastXml: approvalToastXml(r, title) }) : new Notification({ title, body: r.question.split('\n')[0] });
+    } catch {
+      n = new Notification({ title, body: r.question.split('\n')[0] });
+    }
+    toasts.add(n); // giữ tham chiếu — Notification bị GC thì mất handler click
+    n.on('close', () => toasts.delete(n));
+    n.on('click', () => {
+      toasts.delete(n);
+      if (!win) createWindow();
+      showWin();
+      win?.webContents.send(EVENTS.APPROVAL_FOCUS, r.id);
+    });
+    n.show();
+  };
 
   const createWindow = (): void => {
     win = new BrowserWindow({
@@ -55,6 +93,7 @@ if (!gotLock) {
     win.loadFile(path.join(appRoot, 'src', 'renderer', 'index.html'), { hash: hash ? `/${hash}` : undefined });
     win.on('closed', () => {
       win = null;
+      cancelApprovals(); // không còn chỗ trả lời → từ chối
     });
   };
 
@@ -102,6 +141,7 @@ if (!gotLock) {
       },
       protoDir,
       onLocaleChange: buildTrayMenu,
+      notifyApproval,
     });
     wireTerminals(ipcMain, {
       win: () => win,

@@ -3,6 +3,7 @@
 import { existsSync } from 'node:fs';
 import { t, type Locale } from '../../../prototype/src/i18n/index.js';
 import { PROJECT_ID_RE } from '../../../prototype/src/home.js';
+import { isPermissionMode, type PermissionMode } from '../../../prototype/src/permissions.js';
 
 export const IPC = {
   APP_INFO: 'app:info',
@@ -18,6 +19,7 @@ export const IPC = {
   MEMORY_GET: 'memory:get',
   MEMORY_SET: 'memory:set',
   FLEET_LIST: 'fleet:list',
+  FLEET_REFRESH: 'fleet:refresh',
   TASKS_LIST: 'tasks:list',
   DISPATCH: 'dispatch',
   PIPELINE_RUN: 'pipeline:run',
@@ -57,6 +59,8 @@ export const IPC = {
   CHAT_SESSIONS: 'chat:sessions',
   CHAT_OPEN: 'chat:open',
   I18N_GET: 'i18n:get',
+  APPROVAL_RESPOND: 'approval:respond',
+  APPROVAL_PENDING: 'approval:pending',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -71,6 +75,13 @@ export const EVENTS = {
   TERMINAL_EXIT: 'terminal:exit',
   UPDATE_STATUS: 'update:status',
   CHAT_STEP: 'chat:step',
+  /** approval card inline trong chat (thay modal native) */
+  APPROVAL_REQUEST: 'approval:request',
+  APPROVAL_RESOLVED: 'approval:resolved',
+  /** click notification → Chat + focus card */
+  APPROVAL_FOCUS: 'approval:focus',
+  /** fleet probe nền xong (startup / refresh / sau install) → snapshot mới */
+  FLEET_CHANGED: 'fleet:changed',
 } as const;
 
 export const PAGES = ['dashboard', 'chat', 'transcript', 'settings', 'wizard'] as const;
@@ -98,6 +109,8 @@ export interface AppSettings {
   templatesDir: string;
   /** ngôn ngữ UI; thiếu (settings cũ / lần đầu) → fallbackLang (main: detectLocale(app.getLocale())) */
   language: Locale;
+  /** chat: plan | ask | auto | full — enforce ở tool layer (needsApproval) */
+  permissionMode: PermissionMode;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -110,6 +123,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hooksEnabled: true,
   templatesDir: '',
   language: 'en',
+  permissionMode: 'ask',
 };
 
 export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SETTINGS.language): AppSettings {
@@ -130,6 +144,7 @@ export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SE
     hooksEnabled: r.hooksEnabled !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
     language: r.language === 'en' || r.language === 'vi' ? r.language : fallbackLang,
+    permissionMode: isPermissionMode(r.permissionMode) ? r.permissionMode : DEFAULT_SETTINGS.permissionMode,
   };
 }
 

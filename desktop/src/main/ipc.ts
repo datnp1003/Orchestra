@@ -5,7 +5,7 @@ import { spawn as ptySpawn } from '@lydell/node-pty';
 import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
-  fleetSnapshot, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
+  fleetSnapshotAsync, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
   dispatchTracked, conformanceBadge, modelsList, brainTools, brainSystemPrompt, projectToolExecutor, repoRefs, findRepos,
 } from '../../../extension/src/logic.js';
 import { runBrainTurn, listBrainModels, callBrainText, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
@@ -17,7 +17,8 @@ import {
   listSkills, availableSkills, saveSkill, removeSkill, previewGithub, previewLocal, installSkills, checkUpdate, updateSkill, cancelPreview, type SkillScope,
 } from '../../../prototype/src/skills.js';
 import { runConformance } from '../../../prototype/src/conformance.js';
-import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/src/registry.js';
+import { installWorker, uninstallWorker } from '../../../prototype/src/registry.js';
+import { createFleetCache } from './fleetCache.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
 import { protoAsset } from '../../../prototype/src/paths.js';
 import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '../../../prototype/src/router/providers.js';
@@ -26,6 +27,8 @@ import { startRouter, type RouterHandle } from '../../../prototype/src/router/se
 import type { RouterInfo } from '../../../prototype/src/types.js';
 import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
+import { needsApproval, type ApprovalKind } from '../../../prototype/src/permissions.js';
+import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -42,6 +45,8 @@ export async function startOrchestraRouter(settingsFile: string): Promise<void> 
   routerSettingsFile = settingsFile;
   router = await startRouter({ store, defaultModel: routerDefault, onLog: (l) => console.log('[router]', l) });
   console.log(`[router] 127.0.0.1:${router.port}`);
+  // làm ấm cache /v1/models của router (upstream ~3s) — models:list/brain:models đầu tiên không phải chờ
+  void listBrainModels(routerCreds()!);
 }
 export const stopOrchestraRouter = (): Promise<void> => router?.close() ?? Promise.resolve();
 const routerCreds = (): BrainCreds | null => (router ? { baseUrl: `http://127.0.0.1:${router.port}`, apiKey: router.token } : null);
@@ -64,7 +69,15 @@ export interface IpcContext {
   protoDir: string;
   /** settings đổi language → main dựng lại phần tĩnh (tray menu) */
   onLocaleChange?: () => void;
+  /** có approval mới — main hiện notification khi cửa sổ không focus */
+  notifyApproval?: (r: ApprovalRequest) => void;
 }
+
+let broker: ApprovalBroker | null = null;
+/** toast action orchestra://approval/<id>/… (main.ts) — id phải đang chờ */
+export const respondApproval = (id: string, approve: boolean): boolean => broker?.respond(id, approve) ?? false;
+/** cửa sổ đóng → không ai trả lời được: từ chối mọi approval đang chờ */
+export const cancelApprovals = (): void => broker?.cancelAll();
 
 export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const settings = () => loadSettings(ctx.settingsFile);
@@ -81,14 +94,21 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
   reflectSettingsFile = ctx.settingsFile;
   reflectStep = (text) => send(EVENTS.CHAT_STEP, { kind: 'memory', text });
-  // hỏi user qua modal Electron — pipeline plan approval + tool T2 của brain
-  const ask = async (q: string, buttons: [string, string]): Promise<boolean> => {
-    ctx.notify(t('desktop.approval.title'), q);
-    const { dialog } = await import('electron');
-    const r = await dialog.showMessageBox(ctx.win()!, { type: 'question', title: t('desktop.approval.title'), message: q, buttons, defaultId: 0, cancelId: 1 });
-    return r.response === 0;
-  };
-  const askContinue = async (q: string) => ((await ask(q, [t('desktop.approval.continue'), t('desktop.approval.stop')])) ? 'y' : 'n');
+  // hỏi user bằng approval card trong chat (không modal) — pipeline plan approval + tool T2 của brain + repo_attach
+  broker = createApprovalBroker({
+    onRequest: (r) => {
+      send(EVENTS.APPROVAL_REQUEST, r);
+      ctx.notifyApproval?.(r);
+    },
+    onResolved: (id, approve) => send(EVENTS.APPROVAL_RESOLVED, { id, approve }),
+  });
+  const approvals = broker;
+  const ask = (question: string, kind: ApprovalKind = 'risk', signal?: AbortSignal) =>
+    approvals.request({ question, kind, approveLabel: t('desktop.approval.approve'), rejectLabel: t('desktop.approval.reject'), signal });
+  const askContinue = async (q: string, signal?: AbortSignal) =>
+    ((await approvals.request({ question: q, kind: 'plan', approveLabel: t('desktop.approval.continue'), rejectLabel: t('desktop.approval.stop'), signal })) ? 'y' : 'n');
+  ipcMain.handle(IPC.APPROVAL_RESPOND, (_e, p: { id: string; approve: boolean }) => ({ ok: approvals.respond(p?.id, p?.approve) }));
+  ipcMain.handle(IPC.APPROVAL_PENDING, () => approvals.pending());
 
   ipcMain.handle(IPC.APP_INFO, () => ({
     version: app.getVersion(),
@@ -260,7 +280,15 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { text: r.text, used: r.used, budget: r.budget };
   }));
 
-  ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
+  // fleet: probe CLI (where/--version/login status) async + cache — fleet:list không spawn gì khi đã có cache
+  const fleet = createFleetCache(fleetSnapshotAsync, {
+    onChange: (v) => send(EVENTS.FLEET_CHANGED, v),
+    onError: (err) => console.log('[fleet] probe failed:', errMsg(err)),
+  });
+  fleet.refresh().catch((err) => console.log('[fleet] startup probe failed:', errMsg(err)));
+  const refreshFleet = () => void fleet.refresh().catch((err) => console.log('[fleet] probe failed:', errMsg(err)));
+  ipcMain.handle(IPC.FLEET_LIST, () => fleet.get());
+  ipcMain.handle(IPC.FLEET_REFRESH, () => fleet.refresh());
   ipcMain.handle(IPC.TASKS_LIST, (_e, p?: { limit?: number }) => withRepo((repo) => tasksSnapshot(repo, p?.limit), () => []));
   ipcMain.handle(IPC.MATRIX_DATA, () => withRepo((repo) => policyMatrixData(repo), () => null));
   ipcMain.handle(IPC.PROMOTE, (_e, p: { role: string; cli: string }) =>
@@ -299,7 +327,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       goal: p.goal,
       scope: p.scope ?? [],
       acceptance: p.acceptance ?? [],
-      autoYes: s.autoApprovePlan,
+      autoYes: s.autoApprovePlan || needsApproval(s.permissionMode, 'plan_approval') === 'allow',
       model: p.model || undefined,
       router: routerInfo(),
       onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
@@ -358,8 +386,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         if (!found.length) return { ok: false, content: `no git repo found in ${dir} (searched 3 levels)` };
         const fresh = found.filter((f) => !conv.attached.includes(f));
         if (fresh.length) {
-          const ok = await ask(t('desktop.chat.attachAsk', { path: dir, n: fresh.length, list: fresh.slice(0, 12).map((f) => path.relative(dir, f) || '.').join(', ') + (fresh.length > 12 ? ', …' : '') }), [t('desktop.approval.approve'), t('desktop.approval.reject')]);
-          if (!ok) return { ok: false, content: 'user declined' };
+          const q = t('desktop.chat.attachAsk', { path: dir, n: fresh.length, list: fresh.slice(0, 12).map((f) => path.relative(dir, f) || '.').join(', ') + (fresh.length > 12 ? ', …' : '') });
+          if (needsApproval(s.permissionMode, 'repo_attach') !== 'allow' && !(await ask(q, 'repo', ac.signal))) return { ok: false, content: 'user declined' };
           conv.attached.push(...fresh);
           try {
             conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
@@ -384,6 +412,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           globalMemory: loadMemory(null),
           projectMemory: project ? loadMemory(project.id) : undefined,
           skills: availableSkills(project?.id ?? null),
+          mode: s.permissionMode,
         }),
         tools: brainTools(toolRefs, { attach: !project && !!ws }),
         signal: ac.signal,
@@ -391,8 +420,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           projectId: project?.id ?? null,
           callModel,
           attach: !project && ws ? attach : undefined,
-          approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),
-          askUser: askContinue,
+          approve: (q, kind) => ask(q, kind, ac.signal),
+          askUser: (q) => askContinue(q, ac.signal),
+          mode: s.permissionMode,
           hooksEnabled: s.hooksEnabled,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,
@@ -462,11 +492,15 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!m) return { ok: false, detail: `unknown worker ${id}` };
     const r = await installWorker(m, (line) => send(EVENTS.INSTALL_LOG, line));
     ctx.notify('Orchestra Install', r.detail);
+    refreshFleet();
     return r;
   });
   ipcMain.handle(IPC.UNINSTALL_WORKER, (_e, id: string) => {
     const m = getManifest(id);
-    return m ? uninstallWorker(m) : { ok: false, detail: 'unknown' };
+    if (!m) return { ok: false, detail: 'unknown' };
+    const r = uninstallWorker(m);
+    refreshFleet();
+    return r;
   });
 
   ipcMain.handle(IPC.CONFORMANCE_RUN, async (_e, id: string) => {
@@ -597,7 +631,6 @@ function persistChat(conv: Conv, msgs: Msg[]): void {
 
 // giữ import MANIFESTS cho wizard (đếm worker chưa cài)
 void MANIFESTS;
-void checkStatus;
 
 // ---------- P-D3: Terminal nhúng (@lydell/node-pty prebuilt N-API — không cần electron-rebuild) ----------
 type PtyProc = {

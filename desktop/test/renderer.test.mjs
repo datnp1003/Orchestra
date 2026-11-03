@@ -125,4 +125,38 @@ console.log(`✓ i18n: không còn chuỗi tiếng Việt hardcode (app.js, inde
   console.log('✓ không shadow t()');
 }
 
+// approval inline (không modal), permission mode, màn chat trống
+{
+  const ipc = readFileSync(new URL('ipc.ts', mainDir), 'utf8');
+  assert.ok(!ipc.includes('showMessageBox'), 'ipc.ts không còn dialog.showMessageBox cho approval');
+  assert.ok(js.includes("api.invoke('approval:respond'") && js.includes("api.invoke('approval:pending')") && js.includes("on('approval:request'") && js.includes("on('approval:focus'"), 'approval card + pending redraw + focus');
+  assert.ok(/e\.key === 'Enter'[^\n]*answerApproval\(r\.id, true\)/.test(js) && /e\.key === 'Escape'\) answerApproval\(r\.id, false\)/.test(js), 'Enter/Esc trên card');
+  assert.ok(html.includes('id="approvalBadge"') && html.includes('id="cbMode"') && html.includes('id="modeMenu"') && html.includes('id="stMode"'), 'badge + mode selector + statusbar mode');
+  assert.ok(['emptyHero', 'emptyCtx', 'emptyChips'].every((x) => html.includes(`id="${x}"`)) && html.includes('assets/icon.png" alt="" />') && js.includes("classList.toggle('chat-empty'"), 'empty state');
+  assert.equal((html.match(/id="chatInput"/g) || []).length, 1, 'chỉ 1 #chatInput (không copy)');
+  for (const m of ['plan', 'ask', 'auto', 'full']) for (const k of [`desktop.mode.${m}`, `desktop.mode.${m}Desc`]) assert.ok(k in en, `key ${k}`);
+  for (const k of ['merge', 'policy', 'repo', 'plan', 'risk']) assert.ok(`desktop.approval.kind.${k}` in en, `key kind.${k}`);
+  console.log('✓ approval card inline (không showMessageBox), mode selector, empty state, i18n key đủ');
+}
+
+// fleet: Settings/Dashboard vẽ ngay, không await fleet probe; fleet:changed vá; nút Refresh → fleet:refresh
+{
+  const fn = (name) => js.slice(js.indexOf(`async function ${name}`), js.indexOf('\n}\n', js.indexOf(`async function ${name}`)));
+  for (const name of ['renderSettings', 'renderDashboard']) assert.ok(!/await[^;\n]*loadFleet\(\)/.test(fn(name)), `${name} không await loadFleet`);
+  assert.ok(js.includes("on('fleet:changed'") && js.includes("'fleet:changed'") && js.includes("api.invoke('fleet:refresh')") && js.includes('id="wRefresh"'), 'fleet:changed + Refresh');
+  console.log('✓ fleet: vẽ không chờ probe, fleet:changed, nút Refresh');
+}
+
+// spacing nút: nút không tự có margin, .row (gap + --space-3) quyết định; không còn inline margin
+{
+  const css = readFileSync(new URL('styles.css', dir), 'utf8');
+  const btn = css.match(/\nbutton \{([^}]*)\}/)[1];
+  assert.ok(/margin: 0;/.test(btn) && !/margin-top/.test(btn), 'button base: margin 0, không margin-top');
+  assert.ok(/border: 1px solid transparent/.test(btn), 'primary có border trong suốt = cao bằng .secondary');
+  assert.ok(/\.row \{[^}]*gap: var\(--space-2\)/.test(css) && /\* \+ \.row \{ margin-top: var\(--space-3\); \}/.test(css), '.row dùng gap + margin-top chung');
+  assert.ok(!/margin-top: 10px/.test(css.slice(css.indexOf('/* ---------- forms'), css.indexOf('/* ---------- chat'))),'không còn margin-top: 10px lẻ cho nút');
+  assert.ok(!/style="[^"]*margin/.test(js) && !js.includes('chatbar'), 'app.js không còn inline style margin');
+  console.log('✓ spacing nút: margin 0, .row gap/margin-top theo thang --space, không inline margin');
+}
+
 console.log('RENDERER TEST PASS ✓');

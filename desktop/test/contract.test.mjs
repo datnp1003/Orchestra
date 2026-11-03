@@ -62,6 +62,8 @@ assert.equal(validateSettings({ language: 'fr' }, 'vi').language, 'vi', 'giá tr
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
 assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');
+assert.equal(IPC.FLEET_REFRESH, 'fleet:refresh', 'IPC fleet:refresh');
+assert.equal(EVENTS.FLEET_CHANGED, 'fleet:changed', 'event fleet:changed');
 console.log('✓ validateSettings: filter + defaults đúng');
 
 // 2b. policy mặc định tìm được từ out/ (desktop + extension); modelsList theo router
@@ -129,6 +131,45 @@ assert.equal(requireRepo({ activeRepo: rdir, repos: [] }), rdir);
 assert.equal(requireRepo({ activeRepo: '', repos: [rdir] }), rdir, 'fallback repos[0]');
 rmSync(rdir, { recursive: true, force: true });
 console.log('✓ requireRepo: rỗng/không tồn tại → throw, dir thật → path');
+
+// 4b. approval inline + permission mode
+for (const c of ['approval:respond', 'approval:pending']) assert.ok(chans.includes(c), `có channel ${c}`);
+for (const e of ['approval:request', 'approval:resolved', 'approval:focus']) assert.ok(evs.includes(e), `có event ${e}`);
+assert.equal(DEFAULT_SETTINGS.permissionMode, 'ask');
+assert.equal(old.permissionMode, 'ask', 'settings cũ thiếu permissionMode → ask');
+for (const m of ['plan', 'ask', 'auto', 'full']) assert.equal(validateSettings({ permissionMode: m }).permissionMode, m);
+for (const junk of ['yolo', 1, null, 'FULL']) assert.equal(validateSettings({ permissionMode: junk }).permissionMode, 'ask', `permissionMode ${JSON.stringify(junk)} → ask`);
+const { createApprovalBroker, parseApprovalUrl, approvalToastXml } = await import('../out/desktop/src/main/approvals.js');
+const sent = [];
+const resolved = [];
+const br = createApprovalBroker({ onRequest: (r) => sent.push(r), onResolved: (id, a) => resolved.push([id, a]) });
+const req = (o = {}) => br.request({ question: 'merge t-1?\nFile: a.ts', kind: 'merge', approveLabel: 'Approve', rejectLabel: 'Reject', ...o });
+const p1 = req();
+assert.equal(sent.length, 1);
+assert.match(sent[0].id, /^[0-9a-f-]{36}$/);
+assert.deepEqual(br.pending().map((r) => r.id), [sent[0].id]);
+assert.equal(br.respond('nope', true), false, 'id lạ → bỏ qua');
+assert.equal(br.respond(sent[0].id, 'yes'), false, 'approve không phải boolean → bỏ qua');
+assert.equal(br.respond(sent[0].id, true), true);
+assert.equal(await p1, true);
+assert.equal(br.respond(sent[0].id, false), false, 'trả lời lần 2 → bỏ qua');
+assert.deepEqual(resolved, [[sent[0].id, true]]);
+const ac = new AbortController();
+const p2 = req({ signal: ac.signal });
+ac.abort();
+assert.equal(await p2, false, 'Dừng (abort) → false');
+assert.equal(await req({ signal: ac.signal }), false, 'signal đã abort → false ngay');
+const p3 = req();
+br.cancelAll();
+assert.equal(await p3, false, 'đóng cửa sổ → false');
+assert.deepEqual(br.pending(), []);
+const id = sent[0].id;
+assert.deepEqual(parseApprovalUrl(`orchestra://approval/${id}/approve`), { id, approve: true });
+assert.deepEqual(parseApprovalUrl(`orchestra://approval/${id}/reject/`), { id, approve: false });
+for (const u of [`orchestra://approval/${id}/merge`, 'orchestra://approval/../x/approve', `https://approval/${id}/approve`, `orchestra://approval/${id}/approve?x=1`, null]) assert.equal(parseApprovalUrl(u), null, String(u));
+const xml = approvalToastXml({ ...sent[0], question: 'a <b> & "c"\nline2' }, 'T');
+assert.ok(xml.includes('a &lt;b&gt; &amp; &quot;c&quot;') && !xml.includes('line2') && xml.includes(`arguments="orchestra://approval/${id}/approve"`) && xml.includes('activationType="protocol"'));
+console.log('✓ approval: channel/event, broker request/respond/abort/cancelAll, URL parse strict, toast xml escape; permissionMode validate + default');
 
 // 5. pages
 assert.ok(PAGES.includes('chat') && PAGES.includes('wizard'), 'pages đủ');

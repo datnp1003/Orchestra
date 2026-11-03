@@ -1,6 +1,6 @@
 // Logic thuần — KHÔNG import vscode (test được bằng node thường, P5 gate)
 import { MANIFESTS } from '../../prototype/src/manifests.js';
-import { checkStatus } from '../../prototype/src/registry.js';
+import { checkStatus, checkStatusAsync, type WorkerStatus } from '../../prototype/src/registry.js';
 import { loadPolicy, resolveWorker, DEFAULT_BINDINGS, type PolicyFile } from '../../prototype/src/policy.js';
 import { buildFleetStats, loadKB, addFeedback, recallKB } from '../../prototype/src/memory.js';
 import { routerModelOk, type ProviderConfig } from '../../prototype/src/router/providers.js';
@@ -11,6 +11,7 @@ import { globToRegex } from '../../prototype/src/dispatch.js';
 import { t } from '../../prototype/src/i18n/index.js';
 import { renderMemoryBlock, writeMemoryOps, type CallModel, type ScopedOp } from '../../prototype/src/agentMemory.js';
 import { availableSkills } from '../../prototype/src/skills.js';
+import { needsApproval, MODE_PROMPT, PLAN_BLOCKED, isPermissionMode, type ApprovalAction, type ApprovalKind, type PermissionMode } from '../../prototype/src/permissions.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
@@ -19,12 +20,14 @@ import path from 'node:path';
 export const FALLBACK_REPO = 'C:/Users/Nitro V 15/Desktop/Source/Orchestra/prototype/demo-repo';
 
 /** router = CLI có routerArgs (auth đi qua Orchestra router) */
-export function fleetSnapshot(): { id: string; display: string; installed: boolean; version?: string; auth: string; router: boolean }[] {
-  return MANIFESTS.map((m) => {
-    const s = checkStatus(m);
-    return { id: m.id, display: m.display, installed: s.installed, version: s.version, auth: s.auth, router: !!m.routerArgs };
-  });
+export function fleetSnapshot(): FleetRow[] {
+  return MANIFESTS.map((m) => fleetRow(m, checkStatus(m)));
 }
+/** Desktop main: probe mọi CLI song song, không spawnSync (không chặn IPC/UI) */
+export const fleetSnapshotAsync = (): Promise<FleetRow[]> => Promise.all(MANIFESTS.map(async (m) => fleetRow(m, await checkStatusAsync(m))));
+type FleetRow = { id: string; display: string; installed: boolean; version?: string; auth: string; router: boolean };
+const fleetRow = (m: (typeof MANIFESTS)[number], s: WorkerStatus): FleetRow =>
+  ({ id: m.id, display: m.display, installed: s.installed, version: s.version, auth: s.auth, router: !!m.routerArgs });
 
 /** R2a: model của router (/v1/models) + worker nào chạy được model nào (routerModelOk) */
 export function modelsList(ids: string[], providers: ProviderConfig[]): {
@@ -377,7 +380,7 @@ Rules:
 1. Reply BRIEFLY.
 2. You do NOT edit code yourself. For repo work: survey first (repo_glob/repo_grep/repo_read/git_diff), then fleet_dispatch or fleet_pipeline with an explicit glob scope.
 3. Scope unclear → ASK the user, do not guess.
-4. Merging / changing policy needs user approval — the system asks automatically when you call the tool.
+4. Approvals follow PERMISSION MODE below — the system asks the user (or refuses) automatically when you call the tool.
 5. Before fleet_merge you must call task_diff and read the diff; state what you checked.
 6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.
 7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.`;
@@ -418,18 +421,20 @@ function skillsBlock(skills: { name: string; description: string }[] | undefined
 }
 
 /** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
-export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; attached?: RepoRef[]; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
+export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; attached?: RepoRef[]; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[]; mode?: PermissionMode }): string {
   const p = o.project;
+  const m = isPermissionMode(o.mode) ? o.mode : 'ask';
+  const mode = `\nPERMISSION MODE: ${m} — ${MODE_PROMPT[m]}`;
   // chat ngoài project: vẫn gọi worker được — repo user nhắc tới (repo_attach) hoặc repo scratch ~/.orchestra/workspace
   const att = o.attached?.length ? `\nATTACHED REPOS:\n${o.attached.map((r) => `- ${r.name}: ${r.path}`).join('\n')}` : '';
-  if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + att + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
+  if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + mode + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + att + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + skillsBlock(o.skills, false) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   const budget = Math.floor(1500 / Math.max(p.repos.length, 1));
   const kb = p.repos.flatMap((r) => {
     const k = recallKB(r.path, ['**'], budget);
     return k.injected ? [`[${r.name}]\n${k.injected}`] : [];
   });
-  return BRAIN_SYSTEM_PROMPT + PROJECT_RULES + MEMORY_RULE + BRAIN_LANGUAGE
+  return BRAIN_SYSTEM_PROMPT + PROJECT_RULES + mode + MEMORY_RULE + BRAIN_LANGUAGE
     + `\nPROJECT: ${p.name}\nREPOS:\n${p.repos.map((r) => `- ${r.name}: ${r.path}`).join('\n') || '(none yet — ask the user to add repos on the Project page)'}`
     + (kb.length ? `\n\nPROJECT KNOWLEDGE (repo KB — use it to determine scope):\n${kb.join('\n\n')}` : '')
     + skillsBlock(o.skills, true)
@@ -485,8 +490,10 @@ export function findRepos(dir: string, maxDepth = 3, max = 40): string[] {
 }
 
 export interface BrainToolDeps {
-  /** T2: hỏi user — false = từ chối */
-  approve: (question: string) => Promise<boolean>;
+  /** T2: hỏi user — false = từ chối; kind = badge của approval card */
+  approve: (question: string, kind?: ApprovalKind) => Promise<boolean>;
+  /** permission mode của chat — thiếu = 'ask' */
+  mode?: PermissionMode;
   /** pipeline plan approval */
   askUser?: (q: string) => Promise<string>;
   hooksEnabled?: boolean;
@@ -503,6 +510,14 @@ export interface BrainToolDeps {
   dispatch?: typeof dispatchTracked;
 }
 type ToolOut = { ok: boolean; content: string };
+
+/** permission mode gate: null = được chạy; ToolOut = bị chặn (plan mode) hoặc user từ chối */
+async function gate(deps: BrainToolDeps, action: ApprovalAction, kind: ApprovalKind, question: () => string): Promise<ToolOut | null> {
+  const need = needsApproval(deps.mode, action);
+  if (need === 'block') return bad(PLAN_BLOCKED);
+  if (need === 'ask' && !(await deps.approve(question(), kind))) return bad('user declined');
+  return null;
+}
 
 const TASK_ID = /^t-[a-z0-9-]+$/;
 const cap = (s: string, n = 15_000) => (s.length > n ? `${s.slice(0, n)}\n…(truncated)` : s);
@@ -688,6 +703,9 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         if (typeof skills === 'string') return bad(skills);
         const ro = i.readonly === true;
         const acceptance = (i.acceptance as string[] | undefined) ?? [];
+        const scope = i.scope;
+        const g = ro ? null : await gate(deps, 'dispatch_write', 'risk', () => t('ext.dispatch.ask', { goal: i.goal as string, scope: scope.join(', '), worker: isStr(i.worker) ? i.worker : 'auto' }));
+        if (g) return g;
         // read-only: node plan (sandbox read-only, không tính no_change, không vào EMA coder) — prompt trả lời thẳng, không bắt viết plan
         const r = await (deps.dispatch ?? dispatchTracked)(repo, {
           node: ro ? 'plan' : 'implement', role: ro ? 'planner' : 'coder', goal: i.goal, scope: i.scope, acceptance,
@@ -719,17 +737,21 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const dir = deps.templatesDir || protoAsset('templates');
         const tpl = dir && path.join(dir, `${i.template}.yml`);
         if (!tpl || !existsSync(tpl)) return bad(`no template ${i.template}`);
+        const scope = i.scope;
+        const g = await gate(deps, 'pipeline', 'risk', () => t('ext.pipeline.ask', { template: i.template as string, goal: i.goal as string, scope: scope.join(', ') }));
+        if (g) return g;
         const { runPipeline } = await import('../../prototype/src/orchestrator.js');
         const r = await runPipeline({
           repo, templatePath: tpl, goal: i.goal, scope: i.scope, acceptance: [],
           model: isStr(i.model) ? i.model : undefined, signal: deps.signal, router: deps.router, skills, projectId: deps.projectId,
-          autoYes: deps.autoApprovePlan ?? false, askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
+          autoYes: (deps.autoApprovePlan ?? false) || needsApproval(deps.mode, 'plan_approval') === 'allow', askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
         });
         const nodes = Object.entries(r.nodes).map(([k, n]) => `${k}:${n.status}${n.worker ? `/${n.worker}` : ''}`).join(' ');
         return { ok: r.ok, content: `pipeline ${r.runId} ${r.ok ? 'OK' : 'FAILED'} merged=${r.merged}${r.mergeConflict ? ' (conflict)' : ''} ${nodes}` };
       }
       case 'fleet_merge': {
         if (!isStr(i.taskId)) return bad('taskId must be a string');
+        if (needsApproval(deps.mode, 'merge') === 'block') return bad(PLAN_BLOCKED); // trước khi chạy test
         // gate trong code — brain không merge được task rỗng / ngoài scope / test đỏ
         const rec = loadTask(repo, i.taskId);
         if (typeof rec === 'string') return bad(rec);
@@ -746,13 +768,16 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
           tests?.line ?? t('ext.merge.noTest'),
           t('ext.merge.confirm'),
         ].join('\n');
-        if (!(await deps.approve(q))) return bad('user declined');
+        const g = await gate(deps, 'merge', 'merge', () => q);
+        if (g) return g;
         const r = reviewMerge(repo, i.taskId, 'merge');
         return { ok: r.ok, content: r.detail };
       }
       case 'policy_promote': {
         if (!isStr(i.role) || !isStr(i.cli)) return bad('role and cli must be strings');
-        if (!(await deps.approve(t('ext.promote.ask', { cli: i.cli, role: i.role })))) return bad('user declined');
+        const role = i.role, cli = i.cli;
+        const g = await gate(deps, 'policy', 'policy', () => t('ext.promote.ask', { cli, role }));
+        if (g) return g;
         const r = promoteWorker(repo, i.role, i.cli);
         return { ok: r.ok, content: r.detail };
       }

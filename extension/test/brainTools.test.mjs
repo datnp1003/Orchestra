@@ -112,6 +112,30 @@ test('fleet_dispatch readonly → node plan/planner, kèm câu trả lời worke
   assert.match(sys, /readonly:true for tasks that only read/);
 });
 
+test('permission mode: plan chặn dispatch ghi/pipeline/merge/promote (không hỏi), readonly vẫn chạy; ask hỏi; auto không hỏi dispatch; prompt có PERMISSION MODE', async (t) => {
+  const repo = tmp(t);
+  const calls = [];
+  const asked = [];
+  const dispatch = async (_repo, o) => (calls.push(o), { result: { ok: true, taskId: 't-x', stage: 'done', record: { routing: { pick: 'claude' }, artifacts: { files_changed: [] }, last_message: 'ok' } } });
+  const mk = (mode, ans = true) => brainToolExecutor(repo, { approve: async (q, kind) => (asked.push([mode, kind]), ans), dispatch, mode });
+  const plan = mk('plan');
+  for (const [name, input] of [['fleet_dispatch', { goal: 'fix', scope: ['a'] }], ['fleet_merge', { taskId: 't-1' }], ['policy_promote', { role: 'coder', cli: 'codex' }]]) {
+    const r = await plan(name, input);
+    assert.deepEqual([r.ok, r.content], [false, 'plan mode: describe the plan and ask the user to switch mode'], name);
+  }
+  assert.equal(calls.length, 0);
+  assert.ok((await plan('fleet_dispatch', { goal: 'list', scope: ['a'], readonly: true })).ok, 'readonly ok trong plan mode');
+  assert.equal(calls.length, 1);
+  assert.equal((await mk('ask', false)('fleet_dispatch', { goal: 'fix', scope: ['a'] })).content, 'user declined');
+  assert.equal(calls.length, 1, 'từ chối → không dispatch');
+  assert.ok((await mk('auto')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
+  assert.ok((await mk('full')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
+  assert.deepEqual(asked, [['ask', 'risk']], 'chỉ ask hỏi (kind risk); plan/auto/full không hỏi');
+  assert.equal(calls.length, 3);
+  assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', mode: 'plan' }), /\nPERMISSION MODE: plan — plan before editing/);
+  assert.match(brainSystemPrompt({ workspace: { name: 'workspace', path: repo }, globalMemory: '' }), /\nPERMISSION MODE: ask — /, 'thiếu mode → ask');
+});
+
 test('repoRefs: basename, trùng tên → -2', () => {
   assert.deepEqual(repoRefs(['/a/api', '/b/api', '/c/web']).map((r) => r.name), ['api', 'api-2', 'web']);
 });

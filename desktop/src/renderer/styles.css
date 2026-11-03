@@ -17,6 +17,11 @@
   --warn: #d29922;
   --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* thang khoảng cách chung — nút không tự mang margin, container (.row) quyết định */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -76,10 +81,10 @@ body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--
 .pj-repos { table-layout: fixed; }
 .pj-repos td:first-child { width: 140px; }
 .pj-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pj-repos td.pj-act { width: 1%; white-space: nowrap; text-align: right; padding-right: 0; }
+td.pj-act { white-space: nowrap; text-align: right; }
+.pj-repos td.pj-act { width: 1%; padding-right: 0; }
 .pj-repos td:last-child { width: 96px; }
-.pj-repos td { vertical-align: middle; }
-.pj-repos td.pj-act button { margin: 0; }
+.acts { display: inline-flex; gap: var(--space-1); }
 .quick-add { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
 .quick-add button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 0; }
 .quick-add .dim { font-size: 10.5px; }
@@ -144,13 +149,14 @@ body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--
 /* ---------- cards / sections ---------- */
 h2 { margin: 2px 0 14px; font-size: 15px; font-weight: 650; color: var(--fg); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; margin-bottom: 14px; }
+.card > :last-child { margin-bottom: 0; }
 .card h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 1.2px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 @media (max-width: 1080px) { .grid2 { grid-template-columns: 1fr; } }
 
 /* ---------- tables ---------- */
 table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line-soft); }
+th, td { padding: 6px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line-soft); }
 th { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
 tbody tr:hover td { background: var(--raised); }
 tr:last-child td { border-bottom: none; }
@@ -168,19 +174,26 @@ input, select, textarea {
   font-family: var(--sans); outline: none; transition: border-color 0.12s;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
-textarea { resize: vertical; font-family: var(--sans); line-height: 1.45; }
+textarea { resize: vertical; font-family: var(--sans); line-height: 1.45; display: block; } /* block: bỏ khe baseline 3px → .row sau textarea đúng 12px */
 label { font-size: 11px; color: var(--dim); display: block; margin: 10px 0 4px; }
 label label, label > input[type="checkbox"] { width: auto; display: inline; margin: 0 6px 0 0; vertical-align: middle; }
+/* border trong suốt → primary cao bằng .secondary (cùng 1px border) */
 button {
-  background: #0e639c; color: #ffffff; border: none; border-radius: 8px;
-  padding: 7px 16px; cursor: pointer; font-size: 12.5px; font-weight: 600; margin-top: 10px;
+  background: #0e639c; color: #ffffff; border: 1px solid transparent; border-radius: 8px;
+  padding: 7px 16px; cursor: pointer; font-size: 12.5px; font-weight: 600; margin: 0;
   transition: background 0.12s; font-family: var(--sans);
 }
 button:hover { background: #1177bb; }
 button.secondary { background: var(--raised); color: var(--fg); border: 1px solid var(--line); font-weight: 500; }
 button.secondary:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-hi); }
-.row { display: flex; gap: 8px; align-items: center; }
-.row > * { margin-top: 0; }
+/* hàng nút/control: khoảng cách trên do .row quyết định — trừ khi ngay sau h3 hoặc label tiêu đề field (label tự có margin-bottom) */
+.row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.row > * { margin: 0; }
+.row > input { flex: 1 1 200px; min-width: 0; }
+* + .row { margin-top: var(--space-3); }
+h3 + .row, label:not(:has(input)) + .row { margin-top: 0; }
+.mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
 
 /* ---------- chat ---------- */
 .chat-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px 4px 12px; }
@@ -234,6 +247,50 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .model-search { margin-bottom: 4px; }
 #composerBrain .model-search { width: 150px; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
 
+/* ---------- permission mode popover ---------- */
+.mode-wrap { position: relative; display: flex; }
+.mode-menu {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 20; width: 300px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); display: flex; flex-direction: column;
+}
+#composerBrain .mode-menu .mode-item {
+  all: unset; box-sizing: border-box; display: flex; gap: 8px; padding: 7px 8px; border-radius: 7px; cursor: pointer; font-size: 12px; color: var(--fg);
+}
+.mode-item:hover, .mode-item:focus-visible { background: var(--raised); }
+.mode-item b { display: block; font-weight: 600; }
+.mode-item .dim { font-size: 11px; }
+.mode-check { width: 12px; flex: none; color: var(--accent); }
+
+/* ---------- approval card (inline trong chat) ---------- */
+.m.approval { align-self: stretch; max-width: 100%; background: var(--panel); border: 1px solid var(--warn); white-space: normal; }
+.m.approval:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); border-color: var(--accent); }
+.ap-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
+.ap-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; border: 1px solid var(--warn); color: var(--warn); border-radius: 4px; padding: 0 5px; }
+.ap-kind.ap-merge, .ap-kind.ap-policy { border-color: var(--err); color: var(--err); }
+.ap-hint { margin-left: auto; font-weight: 400; font-size: 10.5px; color: var(--faint); }
+.ap-q { white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; color: var(--fg); max-height: 260px; overflow: auto; }
+.m.step.ok { color: var(--ok); }
+.m.step.warn { color: var(--warn); }
+.approval-badge { margin: 0 4px; padding: 5px 10px; font-size: 12px; text-align: left; background: rgba(210, 153, 34, 0.15); color: var(--warn); border: 1px solid var(--warn); }
+.approval-badge:hover { background: rgba(210, 153, 34, 0.25); }
+
+/* ---------- chat trống: bố cục gọn ở giữa (kiểu ZCode new task) — chỉ 1 class trên #main ---------- */
+.empty-only { display: none; }
+#main.chat-empty #page { display: none; }
+#main.chat-empty #composerWrap { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; padding-bottom: 12vh; }
+#main.chat-empty #composer, #main.chat-empty .composer-hints { width: 100%; max-width: 720px; }
+#main.chat-empty #composer { padding: 14px 16px; }
+#main.chat-empty #chatInput { min-height: 48px; }
+#main.chat-empty .empty-only { display: flex; }
+#emptyHero { flex-direction: column; align-items: center; gap: 8px; }
+.empty-icon { width: 56px; height: 56px; }
+.empty-title { font-size: 20px; font-weight: 650; }
+.empty-ctx { font-size: 12px; color: var(--faint); }
+.empty-ctx.warn { color: var(--warn); }
+#emptyChips { flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 720px; }
+#emptyChips .chip { margin: 0; padding: 5px 12px; border-radius: 999px; font-size: 12px; }
+
 /* ---------- log / terminal ---------- */
 #log, #term {
   font-family: var(--mono); font-size: 11px; background: #0a0a0d;
@@ -242,9 +299,6 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 }
 #log { height: 200px; color: #a8a8b4; }
 #term { height: calc(100vh - 236px); color: #d4d4d8; margin: 0; }
-.chatbar { display: flex; gap: 8px; }
-.chatbar textarea { flex: 1; }
-.chatbar input { flex: 1; }
 
 /* ---------- matrix / misc ---------- */
 .mx { table-layout: fixed; }

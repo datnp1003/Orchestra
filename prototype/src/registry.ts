@@ -1,4 +1,4 @@
-import { spawnSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawnSync, spawn, execFile, type ChildProcess } from 'node:child_process';
 import { t } from './i18n/index.js';
 
 // ---------- P6.3: installer — Worker Protocol §3/§4 ----------
@@ -88,6 +88,31 @@ function tryRun(spec: { cmd: string; args: string[] }, timeoutMs = 15000): { ok:
 
 export function checkStatus(m: import('./types.js').Manifest): WorkerStatus {
   const binPath = lookupBin(m.bin);
+  return statusOf(m, binPath, binPath ? tryRun(m.versionCmd) : undefined, binPath && m.authCmd ? tryRun(m.authCmd) : undefined);
+}
+
+/** như tryRun nhưng không chặn event loop — cùng timeout + windowsHide; lỗi/ENOENT/timeout → ok:false */
+function tryRunAsync(spec: { cmd: string; args: string[] }, timeoutMs = 15000): Promise<{ ok: boolean; out: string }> {
+  return new Promise((resolve) => {
+    try {
+      execFile(spec.cmd, spec.args, { encoding: 'utf8', windowsHide: true, timeout: timeoutMs }, (err, stdout, stderr) =>
+        resolve({ ok: !err, out: `${stdout ?? ''}${stderr ?? ''}`.trim() }));
+    } catch {
+      resolve({ ok: false, out: '' });
+    }
+  });
+}
+
+/** checkStatus không chặn event loop (Desktop main) — where/which rồi version + auth song song */
+export async function checkStatusAsync(m: import('./types.js').Manifest): Promise<WorkerStatus> {
+  const w = await tryRunAsync({ cmd: process.platform === 'win32' ? 'where' : 'which', args: [m.bin] });
+  const binPath = w.ok ? w.out.split(/\r?\n/).map((s) => s.trim()).find(Boolean) : undefined;
+  if (!binPath) return statusOf(m, undefined);
+  const [v, a] = await Promise.all([tryRunAsync(m.versionCmd), m.authCmd ? tryRunAsync(m.authCmd) : undefined]);
+  return statusOf(m, binPath, v, a);
+}
+
+function statusOf(m: import('./types.js').Manifest, binPath: string | undefined, v?: { ok: boolean; out: string }, a?: { ok: boolean; out: string }): WorkerStatus {
   const base: WorkerStatus = {
     id: m.id,
     display: m.display,
@@ -97,15 +122,11 @@ export function checkStatus(m: import('./types.js').Manifest): WorkerStatus {
     experimental: m.experimental === true,
     notes: m.notes,
   };
-  if (!binPath) return base;
-
-  const v = tryRun(m.versionCmd);
-  if (v.ok) {
+  if (v?.ok) {
     const match = m.versionRegex.exec(v.out.split(/\r?\n/)[0] ?? '');
     base.version = match ? (match[1] ?? v.out.split(/\r?\n/)[0]) : v.out.split(/\r?\n/)[0];
   }
-  if (m.authCmd) {
-    const a = tryRun(m.authCmd);
+  if (a) {
     // codex login status exit 0 = logged in; nhưng một số version in trạng thái mà exit 0
     // kể cả khi chưa login → coi text là tín hiệu phụ
     const text = a.out.toLowerCase();

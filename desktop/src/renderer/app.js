@@ -28,10 +28,11 @@ let BRAIN_MODELS = []; // model của Orchestra brain (router /v1/models)
 
 // ---------- event bus: đăng ký listener đúng 1 lần, route mới chỉ gắn handler ----------
 const handlers = {};
-for (const ch of ['dispatch:event', 'pipeline:log', 'install:log', 'chat:message', 'chat:step', 'terminal:data', 'terminal:exit', 'update:status', 'nav']) {
+for (const ch of ['dispatch:event', 'pipeline:log', 'install:log', 'chat:message', 'chat:step', 'terminal:data', 'terminal:exit', 'update:status', 'nav', 'approval:request', 'approval:resolved', 'approval:focus', 'fleet:changed']) {
   api.on(ch, (d) => handlers[ch]?.(d));
 }
 const on = (ch, fn) => { handlers[ch] = fn; };
+on('fleet:changed', (list) => setFleet(list)); // probe nền của main xong → pill + bảng fleet đang hiện
 
 // ---------- dữ liệu chung ----------
 async function loadSettings() {
@@ -39,14 +40,24 @@ async function loadSettings() {
   renderChrome();
   return SETTINGS;
 }
+// main trả cache ngay (probe CLI chạy nền) — page không await cái này trước khi vẽ
 async function loadFleet() {
-  FLEET = await api.invoke('fleet:list');
-  renderChrome();
+  setFleet(await api.invoke('fleet:list'));
   return FLEET;
+}
+function setFleet(list) {
+  FLEET = list;
+  renderChrome();
+  paintFleet();
 }
 async function loadModels() {
   MODELS = await api.invoke('models:list');
   renderChrome();
+  // Dashboard vẽ trước khi models về (upstream lạnh ~3s) → vá 2 dropdown, giữ lựa chọn
+  for (const [id, worker] of [['#dModel', $('#dWorker')?.value || ''], ['#pModel', '']]) {
+    const sel = $(id);
+    if (sel) sel.innerHTML = modelOptions(worker, sel.value, t('desktop.dash.byPolicy'));
+  }
   return MODELS;
 }
 async function loadBrainModels() {
@@ -92,8 +103,8 @@ function modelSearch(sel) {
   new MutationObserver(apply).observe(sel, { childList: true });
 }
 
-// session đang mở: projectId null = chat ngoài project (chỉ global memory)
-let CHAT = { projectId: null, projectName: '' };
+// session đang mở: projectId null = chat ngoài project (chỉ global memory); started = đã có tin nhắn (không còn màn trống)
+let CHAT = { projectId: null, projectName: '', started: false };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
 // 1 nguồn màu cho mọi chỗ hiện fleet: có worker = xanh, không có = xám
@@ -104,13 +115,144 @@ function renderRepo() {
   const r = CHAT.projectId ? SETTINGS?.activeRepo || '' : '';
   $('#stRepo').textContent = CHAT.projectId ? `${CHAT.projectName} · repo: ${baseName(r) || '—'}` : t('desktop.chat.global');
   $('#stRepo').title = r;
-  const onChat = !location.hash || location.hash.startsWith('#/chat');
+  const onChat = onChatPage();
   $('#pageRepo').textContent = onChat ? CHAT.projectName || t('desktop.chat.global') : '';
   $('#pageRepo').title = onChat ? r : '';
 }
+const onChatPage = () => !location.hash || location.hash.startsWith('#/chat');
+
+// ---------- Permission mode (plan / ask / auto / full) — main enforce ở tool layer; đây chỉ chọn + hiển thị ----------
+const MODES = ['plan', 'ask', 'auto', 'full'];
+function renderMode() {
+  const m = SETTINGS?.permissionMode || 'ask';
+  $('#cbMode').textContent = `${t('desktop.mode.' + m)} ▾`;
+  $('#stMode').textContent = t('desktop.mode.status', { mode: t('desktop.mode.' + m) });
+  $('#modeMenu').innerHTML = MODES.map((x) => `
+    <button class="mode-item" role="menuitemradio" aria-checked="${x === m}" data-mode="${x}">
+      <span class="mode-check">${x === m ? '✓' : ''}</span>
+      <span><b>${esc(t('desktop.mode.' + x))}</b><span class="dim">${esc(t('desktop.mode.' + x + 'Desc'))}</span></span>
+    </button>`).join('');
+}
+$('#cbMode').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#modeMenu').hidden = !$('#modeMenu').hidden;
+  if (!$('#modeMenu').hidden) $('#modeMenu [aria-checked="true"]')?.focus();
+});
+document.addEventListener('click', () => { $('#modeMenu').hidden = true; });
+$('#modeMenu').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('#modeMenu').hidden = true; $('#cbMode').focus(); }
+});
+$('#modeMenu').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const b = e.target.closest('[data-mode]');
+  if (!b) return;
+  $('#modeMenu').hidden = true;
+  const prev = SETTINGS.permissionMode;
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: b.dataset.mode });
+  renderChrome();
+  if (SETTINGS.permissionMode !== 'full' || prev === 'full') return;
+  // cảnh báo 1 dòng khi chuyển sang full; màn trống → hiện ở dòng ngữ cảnh
+  if (document.getElementById('main').classList.contains('chat-empty')) {
+    $('#emptyCtx').textContent = t('desktop.mode.fullWarn');
+    $('#emptyCtx').classList.add('warn');
+  } else if ($('#chatMsgs')) {
+    const d = document.createElement('div');
+    d.className = 'm step warn';
+    d.textContent = t('desktop.mode.fullWarn');
+    $('#chatMsgs').insertBefore(d, $('#chatMsgs .pending'));
+    $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
+  }
+});
+
+// ---------- Approval card trong chat (thay modal native): main gửi approval:request, user trả lời approval:respond ----------
+const APPROVALS = new Map(); // id → request đang chờ
+let focusApprovalId = null; // click notification / badge → focus card này sau khi Chat vẽ xong
+const approvalEl = (id) => $('#chatMsgs')?.querySelector(`[data-approval="${CSS.escape(id)}"]`);
+function renderApprovalBadge() {
+  const b = $('#approvalBadge');
+  b.hidden = !APPROVALS.size || onChatPage();
+  b.textContent = t('desktop.approval.badge', { n: APPROVALS.size });
+}
+$('#approvalBadge').onclick = () => {
+  focusApprovalId = [...APPROVALS.keys()][0] ?? null;
+  location.hash = '#/chat';
+};
+const answerApproval = (id, approve) => api.invoke('approval:respond', { id, approve });
+function approvalCard(r) {
+  const box = $('#chatMsgs');
+  if (!box || approvalEl(r.id)) return;
+  document.getElementById('main').classList.remove('chat-empty');
+  const d = document.createElement('div');
+  d.className = 'm approval';
+  d.dataset.approval = r.id;
+  d.tabIndex = 0;
+  const head = document.createElement('div');
+  head.className = 'ap-head';
+  const kind = document.createElement('span');
+  kind.className = 'ap-kind ap-' + r.kind;
+  kind.textContent = t('desktop.approval.kind.' + r.kind);
+  const title = document.createElement('span');
+  title.textContent = t('desktop.approval.title');
+  const hint = document.createElement('span');
+  hint.className = 'ap-hint';
+  hint.textContent = t('desktop.approval.keys');
+  head.append(kind, title, hint);
+  const q = document.createElement('div');
+  q.className = 'ap-q';
+  q.textContent = r.question;
+  const row = document.createElement('div');
+  row.className = 'row';
+  const yes = document.createElement('button');
+  yes.textContent = r.approveLabel;
+  yes.onclick = () => answerApproval(r.id, true);
+  const no = document.createElement('button');
+  no.className = 'secondary';
+  no.textContent = r.rejectLabel;
+  no.onclick = () => answerApproval(r.id, false);
+  row.append(yes, no);
+  d.append(head, q, row);
+  // Enter/Esc khi chính card được focus (trên nút thì Enter = click nút đó)
+  d.onkeydown = (e) => {
+    if (e.target !== d) return;
+    if (e.key === 'Enter') { e.preventDefault(); answerApproval(r.id, true); }
+    else if (e.key === 'Escape') answerApproval(r.id, false);
+  };
+  box.insertBefore(d, box.querySelector('.pending')); // trên bubble '…đang xử lý'
+  box.scrollTop = box.scrollHeight;
+}
+function focusApprovalCard() {
+  const d = focusApprovalId && approvalEl(focusApprovalId);
+  if (!d) return;
+  focusApprovalId = null;
+  d.scrollIntoView({ block: 'center' });
+  d.focus();
+}
+on('approval:request', (r) => {
+  APPROVALS.set(r.id, r);
+  renderApprovalBadge();
+  approvalCard(r);
+});
+on('approval:resolved', ({ id, approve }) => {
+  APPROVALS.delete(id);
+  renderApprovalBadge();
+  const d = approvalEl(id);
+  if (!d) return;
+  const q = d.querySelector('.ap-q')?.textContent.split('\n')[0] ?? '';
+  d.className = 'm step ' + (approve ? 'ok' : 'err');
+  d.removeAttribute('tabindex');
+  d.onkeydown = null;
+  d.title = q;
+  d.replaceChildren(t(approve ? 'desktop.approval.approved' : 'desktop.approval.rejected', { q }));
+});
+on('approval:focus', (id) => {
+  focusApprovalId = id;
+  if (onChatPage() && $('#chatMsgs')) focusApprovalCard();
+  else location.hash = '#/chat';
+});
 
 function renderChrome() {
   renderRepo();
+  renderMode();
   // fleet pill
   const pill = $('#fleetPill');
   if (pill && FLEET.length) {
@@ -177,7 +319,7 @@ async function openSession(projectId, id) {
   const r = await api.invoke('chat:open', { projectId, id });
   if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = r.messages;
-  CHAT = { projectId: r.projectId, projectName: r.projectName || '' };
+  CHAT = { projectId: r.projectId, projectName: r.projectName || '', started: !!r.messages?.length };
   await loadSettings(); // activeRepo theo project của session
   showChat();
 }
@@ -218,6 +360,7 @@ $('#fleetPill').onclick = () => { location.hash = '#/dashboard'; route(); };
 // đổi model Orchestra → lưu ngay (main reset hội thoại)
 $('#cbModel').addEventListener('change', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
+  CHAT.started = false; // main reset hội thoại khi đổi model
   renderChrome();
   if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
   loadSessions();
@@ -246,13 +389,26 @@ async function renderChat() {
   };
   add('greet', t('desktop.chat.greet'));
   for (const m of openedMsgs ?? []) add(m.role, m.text);
+  // chat chưa có tin nhắn → bố cục gọn ở giữa (1 class trên #main, cùng DOM composer)
+  const main = document.getElementById('main');
+  main.classList.toggle('chat-empty', !CHAT.started);
   openedMsgs = null;
+  $('#emptyCtx').classList.remove('warn');
+  $('#emptyCtx').textContent = CHAT.projectId
+    ? t('desktop.empty.ctxProject', { name: CHAT.projectName, n: SETTINGS?.projects?.find((p) => p.id === CHAT.projectId)?.repos.length ?? 0 })
+    : t('desktop.empty.ctxGlobal');
+  // approval còn chờ (đổi trang / vẽ lại) → vẽ lại card
+  for (const r of await api.invoke('approval:pending')) { APPROVALS.set(r.id, r); approvalCard(r); }
+  renderApprovalBadge();
+  focusApprovalCard();
   const input = $('#chatInput');
   const send = async () => {
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
     input.style.height = 'auto';
+    main.classList.remove('chat-empty');
+    CHAT.started = true;
     add('user', text);
     add('orch pending', t('desktop.chat.pending'));
     const stop = $('#chatStop');
@@ -264,6 +420,9 @@ async function renderChat() {
       loadSessions();
     }
   };
+  document.querySelectorAll('#emptyChips [data-i18n]').forEach((b) => {
+    b.onclick = () => { input.value = t(b.dataset.i18n); input.oninput(); input.focus(); };
+  });
   $('#chatSend').onclick = send;
   $('#chatStop').onclick = () => api.invoke('chat:cancel');
   // gán property (không addEventListener): #chatInput sống qua các lần render → tránh gửi trùng
@@ -365,33 +524,59 @@ async function renderChat() {
   input.focus();
 }
 
+// ---------- Fleet HTML: vẽ lần đầu bằng FLEET hiện có, fleet:changed → paintFleet vá phần đang hiện ----------
+const fleetRows = () => FLEET.map((f) => `<tr><td><span class="dot ${f.installed ? 'ok' : 'err'}"></span></td><td>${esc(f.id)}</td><td class="mono">${esc(f.version ?? '-')}</td><td>${esc(f.auth)}</td><td>${esc(f.conformance ?? '-')}</td></tr>`).join('');
+const dWorkerOptions = () => `<option value="">auto (Role Policy)</option>${FLEET.filter((f) => f.installed).map((f) => `<option>${esc(f.id)}</option>`).join('')}`;
+const cWorkerOptions = () => FLEET.map((f) => `<option>${esc(f.id)}</option>`).join('');
+const workerCards = () => FLEET.map((f) => `<div class="wizard-step">
+          <span class="dot ${f.installed ? 'ok' : 'err'}"></span>
+          <div><b>${esc(f.display || f.id)}</b> <span class="mono dim">${esc(f.id)}</span> <span class="dim">· ${esc(f.installed ? f.version ?? t('desktop.w.installed') : t('desktop.w.notInstalled'))}</span>
+            <div class="dim">${esc(t(f.router ? 'desktop.w.authRouter' : 'desktop.w.noRouter'))}</div></div>
+          <button class="secondary" data-install="${esc(f.id)}">${esc(t(f.installed ? 'desktop.w.reinstall' : 'desktop.w.install'))}</button>
+        </div>`).join('');
+function paintFleet() {
+  const patch = (sel, html, keep) => {
+    const el = $(sel);
+    if (!el) return;
+    const v = el.value;
+    el.innerHTML = html;
+    if (keep) el.value = [...el.options].some((o) => o.value === v) ? v : '';
+  };
+  patch('#dashFleet tbody', fleetRows());
+  patch('#dWorker', dWorkerOptions(), true);
+  patch('#wFleet', workerCards());
+  patch('#cWorker', cWorkerOptions(), true);
+}
+
 // ---------- Dashboard ----------
 async function renderDashboard() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
-  const [, tasks] = await Promise.all([loadFleet(), api.invoke('tasks:list', { limit: TOP_N }), loadSettings()]);
+  // fleet không await: vẽ bằng FLEET hiện có, loadFleet về → paintFleet
+  const [tasks] = await Promise.all([api.invoke('tasks:list', { limit: TOP_N }), loadSettings()]);
+  loadFleet();
   page.innerHTML = `
     <h2>Dashboard</h2>
-    <div class="card"><h3>Fleet</h3>
+    <div class="card" id="dashFleet"><h3>Fleet</h3>
       <table><thead><tr><th></th><th>worker</th><th>version</th><th>auth</th><th>conformance</th></tr></thead>
-      <tbody>${FLEET.map((f) => `<tr><td><span class="dot ${f.installed ? 'ok' : 'err'}"></span></td><td>${esc(f.id)}</td><td class="mono">${esc(f.version ?? '-')}</td><td>${esc(f.auth)}</td><td>${esc(f.conformance ?? '-')}</td></tr>`).join('')}</tbody>
+      <tbody>${fleetRows()}</tbody>
       </table>
-      <button class="secondary" id="btnToWizard">${esc(t('desktop.dash.toWizard'))}</button>
+      <div class="row"><button class="secondary" id="btnToWizard">${esc(t('desktop.dash.toWizard'))}</button></div>
     </div>
     <div class="grid2">
       <div class="card"><h3>Dispatch task</h3>
         <label>Goal</label><textarea id="dGoal" rows="2" placeholder="${esc(t('desktop.dash.goalPlaceholder'))}"></textarea>
         <label>${esc(t('desktop.dash.scopeGlob'))}</label><input id="dScope" value="src/payment/**" />
-        <label>Worker</label><select id="dWorker"><option value="">auto (Role Policy)</option>${FLEET.filter((f) => f.installed).map((f) => `<option>${esc(f.id)}</option>`).join('')}</select>
+        <label>Worker</label><select id="dWorker">${dWorkerOptions()}</select>
         <label>Model</label><select id="dModel">${modelOptions('', '', t('desktop.dash.byPolicy'))}</select>
-        <button id="dGo">Dispatch</button>
+        <div class="row"><button id="dGo">Dispatch</button></div>
       </div>
       <div class="card"><h3>Run pipeline</h3>
         <label>Template</label><select id="pTpl"><option>feature-dev</option><option>hotfix</option></select>
         <label>Goal</label><textarea id="pGoal" rows="2"></textarea>
         <label>Scope</label><input id="pScope" value="src/payment/**" />
         <label>Model (implement + fixer)</label><select id="pModel">${modelOptions('', '', t('desktop.dash.byPolicy'))}</select>
-        <button id="pGo">${esc(t('desktop.dash.runPipeline'))}</button>
+        <div class="row"><button id="pGo">${esc(t('desktop.dash.runPipeline'))}</button></div>
       </div>
     </div>
     <div class="card"><h3>${esc(t('desktop.dash.tasksTitle', { n: TOP_N }))}</h3>
@@ -481,7 +666,8 @@ let settingsTab = 'chung';
 async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
-  const [s] = await Promise.all([loadSettings(), loadFleet()]);
+  const s = await loadSettings();
+  loadFleet(); // không chặn vẽ — về thì paintFleet
   const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], /* conformance: tạm ẩn theo yêu cầu (pane + IPC giữ nguyên, badge vẫn ở Dashboard) */ ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
   const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
     ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
@@ -508,13 +694,9 @@ async function renderSettings() {
     ${pane('workers', `
       <div class="card">
         <h3>Worker CLI (npm)</h3>
-        ${FLEET.map((f) => `<div class="wizard-step">
-          <span class="dot ${f.installed ? 'ok' : 'err'}"></span>
-          <div><b>${esc(f.display || f.id)}</b> <span class="mono dim">${esc(f.id)}</span> <span class="dim">· ${esc(f.installed ? f.version ?? t('desktop.w.installed') : t('desktop.w.notInstalled'))}</span>
-            <div class="dim">${esc(t(f.router ? 'desktop.w.authRouter' : 'desktop.w.noRouter'))}</div></div>
-          <button class="secondary" data-install="${esc(f.id)}">${esc(t(f.installed ? 'desktop.w.reinstall' : 'desktop.w.install'))}</button>
-        </div>`).join('')}
-        <div id="log" style="margin-top:10px"></div>
+        <div id="wFleet">${workerCards()}</div>
+        <div class="row"><button class="secondary" id="wRefresh">${esc(t('desktop.w.recheck'))}</button></div>
+        <div id="log" class="mt-3"></div>
       </div>`)}
     ${pane('providers', `
       <div class="card">
@@ -550,14 +732,14 @@ async function renderSettings() {
           <label>${esc(t('desktop.pr.apiKey'))}</label><input id="prKey" type="password" autocomplete="off" />
         </div>
         <label><input type="checkbox" id="prOn" checked /> ${esc(t('desktop.pr.enabled'))}</label>
-        <button id="prSave">${esc(t('desktop.common.save'))}</button>
+        <div class="row"><button id="prSave">${esc(t('desktop.common.save'))}</button></div>
       </div>`)}
     ${pane('conformance', `
       <div class="card">
         <h3>Conformance (Worker Protocol §10)</h3>
-        <label>Worker</label><select id="cWorker">${FLEET.map((f) => `<option>${esc(f.id)}</option>`).join('')}</select>
-        <button id="cRun">${esc(t('desktop.cf.run'))}</button>
-        <div id="cOut" class="dim" style="margin-top:8px"></div>
+        <label>Worker</label><select id="cWorker">${cWorkerOptions()}</select>
+        <div class="row"><button id="cRun">${esc(t('desktop.cf.run'))}</button></div>
+        <div id="cOut" class="dim mt-2"></div>
       </div>`)}
     ${pane('skills', '<div class="card" id="skillsBox"></div>')}
     ${pane('matrix', '<div id="matrixBox"></div>')}`;
@@ -601,16 +783,26 @@ async function renderSettings() {
     await api.invoke('update:check');
     setTimeout(() => { if ($('#sUpdateOut')) $('#sUpdateOut').textContent += t('desktop.set.updateNote'); }, 4000);
   };
-  // tab workers
-  page.querySelectorAll('[data-install]').forEach((b) => {
-    b.onclick = async () => {
-      logLine('▶ install ' + b.dataset.install);
-      const r = await api.invoke('install:worker', b.dataset.install);
-      logLine((r.ok ? '✓ ' : '✗ ') + r.detail);
-      await loadFleet();
-      route();
-    };
+  // tab workers — delegate trên #wFleet (paintFleet thay nội dung, listener vẫn còn)
+  $('#wFleet').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-install]');
+    if (!b) return;
+    logLine('▶ install ' + b.dataset.install);
+    const r = await api.invoke('install:worker', b.dataset.install);
+    logLine((r.ok ? '✓ ' : '✗ ') + r.detail);
+    setFleet(await api.invoke('fleet:refresh')); // main đã kích refresh sau install — de-dup, chờ đúng probe đó
   });
+  $('#wRefresh').onclick = async () => {
+    const b = $('#wRefresh');
+    b.disabled = true;
+    b.textContent = t('desktop.w.rechecking');
+    try {
+      setFleet(await api.invoke('fleet:refresh'));
+    } finally {
+      b.disabled = false;
+      b.textContent = t('desktop.w.recheck');
+    }
+  };
   // tab providers — key không bao giờ về renderer (chỉ hasKey)
   let PROVS = [];
   let oauthWaiting = ''; // provider anthropic đang chờ dán code#state
@@ -669,7 +861,7 @@ async function renderSettings() {
     $('#prRows').innerHTML = list.map((p) => `<tr>
       <td class="mono">${esc(p.id)}</td><td>${esc(p.kind)}${isOAuth(p.kind) ? ' <span class="badge-risk">OAuth ⚠</span>' : ''}</td><td class="mono">${esc(p.baseUrl)}</td><td>${esc(p.formats.join(', '))}</td>
       <td>${p.enabled ? '✓' : '—'}</td><td>${isOAuth(p.kind) ? `<span class="${p.oauthStatus === 'ok' ? 'ok' : 'warn'}">${esc(OAUTH_ST.includes(p.oauthStatus) ? t('desktop.oauth.' + p.oauthStatus) : p.oauthStatus)}</span>` : p.hasKey ? '✓' : '—'}</td>
-      <td>${isOAuth(p.kind) ? `<button class="secondary" data-plogin="${esc(p.id)}">${esc(t('desktop.pr.login'))}</button> ` : ''}<button class="secondary" data-pedit="${esc(p.id)}">${esc(t('desktop.pr.edit'))}</button> <button class="secondary" data-ptest="${esc(p.id)}">Test</button> <button class="secondary" data-pdel="${esc(p.id)}">${esc(t('desktop.pr.delete'))}</button></td>
+      <td class="pj-act"><span class="acts">${isOAuth(p.kind) ? `<button class="secondary" data-plogin="${esc(p.id)}">${esc(t('desktop.pr.login'))}</button>` : ''}<button class="secondary" data-pedit="${esc(p.id)}">${esc(t('desktop.pr.edit'))}</button><button class="secondary" data-ptest="${esc(p.id)}">Test</button><button class="secondary" data-pdel="${esc(p.id)}">${esc(t('desktop.pr.delete'))}</button></span></td>
     </tr>`).join('') || `<tr><td colspan="7" class="dim">${esc(t('desktop.pr.empty'))}</td></tr>`;
     page.querySelectorAll('[data-pedit]').forEach((b) => {
       b.onclick = () => {
@@ -778,8 +970,8 @@ async function renderSkills(box, projectId) {
       <td><span class="badge-risk">${esc(t('desktop.skills.scope.' + s.scope))}</span></td>
       <td class="mono">${esc(srcLabel(s))}</td>
       <td class="mono">${esc(s.workers.join(', '))}</td>
-      <td class="pj-act">${s.scope !== scope ? '' : `${s.source?.type === 'github' ? `<button class="secondary" data-sk-check="${i}">${esc(t('desktop.skills.checkUpdate'))}</button>` : `<button class="secondary" data-sk-edit="${i}">${esc(t('desktop.skills.edit'))}</button>`}
-        <button class="secondary" data-sk-rm="${i}">${esc(t('desktop.skills.remove'))}</button>`}</td></tr>`).join('')}</tbody></table>`
+      <td class="pj-act">${s.scope !== scope ? '' : `<span class="acts">${s.source?.type === 'github' ? `<button class="secondary" data-sk-check="${i}">${esc(t('desktop.skills.checkUpdate'))}</button>` : `<button class="secondary" data-sk-edit="${i}">${esc(t('desktop.skills.edit'))}</button>`}
+        <button class="secondary" data-sk-rm="${i}">${esc(t('desktop.skills.remove'))}</button></span>`}</td></tr>`).join('')}</tbody></table>`
       : `<div class="dim">${esc(t('desktop.skills.none'))}</div>`}
     <div data-sk-out class="dim"></div>
     <div data-sk-upd></div>
@@ -913,7 +1105,7 @@ async function renderProject(id) {
     <div class="card" id="pjMemory"></div>
     <div class="card" id="pjSkills"></div>
     ${d.repos.filter((r) => r.exists).map((r) => `<div class="card"><h3>${esc(t('desktop.project.kbTitle', { name: r.name }))}</h3>${kbTable(r.kb)}</div>`).join('')}
-    <div class="card"><button class="secondary" id="pjDelete">${esc(t('desktop.project.delete'))}</button></div>`;
+    <div class="card"><div class="row"><button class="secondary" id="pjDelete">${esc(t('desktop.project.delete'))}</button></div></div>`;
   renderMemoryEditor($('#pjMemory'), id);
   renderSkills($('#pjSkills'), id);
   const after = async (r) => {
@@ -949,11 +1141,11 @@ async function renderTerminal() {
     <h2>Terminal — ${esc(baseName(s.activeRepo) || t('desktop.term.activeRepo'))}</h2>
     <div class="card" style="padding:8px">
       <pre id="term"></pre>
-      <div class="chatbar" style="margin-top:8px">
+      <div class="row">
         <input id="termIn" placeholder="${esc(t('desktop.term.placeholder'))}" autocomplete="off" />
-        <button class="secondary" id="termNew" style="margin-top:0">${esc(t('desktop.term.newSession'))}</button>
+        <button class="secondary" id="termNew">${esc(t('desktop.term.newSession'))}</button>
       </div>
-      <div class="dim" style="font-size:10.5px;margin-top:6px">${esc(t('desktop.term.hint'))}</div>
+      <div class="dim mt-2" style="font-size:10.5px">${esc(t('desktop.term.hint'))}</div>
     </div>`;
   const TERM_ID = 'main';
   const termEl = $('#term');
@@ -1002,6 +1194,8 @@ function route() {
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
   $('#pageTitle').textContent = TITLES[hash]?.() || 'Orchestra';
   renderRepo();
+  document.getElementById('main').classList.remove('chat-empty'); // renderChat bật lại nếu chat còn trống
+  renderApprovalBadge();
   if (hash.startsWith('project/')) {
     loadSessions(); // highlight project trong sidebar
     return renderProject(decodeURIComponent(hash.slice('project/'.length)));
@@ -1015,7 +1209,11 @@ window.addEventListener('hashchange', route);
 (async () => {
   await loadI18n(); // trước render đầu tiên
   await loadSettings();
-  await Promise.all([loadFleet(), loadSessions(), loadModels(), loadBrainModels()]);
+  // fleet (probe CLI) + models (upstream lạnh ~3s) không chặn vẽ đầu — về thì renderChrome/paintFleet vá
+  loadFleet();
+  loadSessions();
+  loadModels();
+  loadBrainModels();
   modelSearch($('#cbModel'));
   route();
 })();
@@ -1024,7 +1222,7 @@ window.addEventListener('hashchange', route);
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const project = { id: 'payments-a1b2', name: 'Payments', repos };
-  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en' };
+  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en', permissionMode: 'ask' };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },
@@ -1039,7 +1237,8 @@ function devStub() {
   const bus = { on: (ch, cb) => { (listeners[ch] ||= []).push(cb); } };
   const reply = async (ch, p) => {
     if (ch === 'settings:get') return settings;
-    if (ch === 'fleet:list') return fleet;
+    if (ch === 'approval:pending') return [];
+    if (ch === 'fleet:list' || ch === 'fleet:refresh') return fleet;
     if (ch === 'tasks:list') return tasks;
     if (ch === 'i18n:get') return { locale: 'en', dict: {} }; // preview: hiện key
     if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw speaks messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router translates Responses→Chat/Messages)' }] } };
