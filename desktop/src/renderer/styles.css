@@ -287,7 +287,7 @@ h3 + .row, label:not(:has(input)) + .row { margin-top: 0; }
 /* large transparent hero, fades toward the composer (ZCode-style); negative margin tucks the faded tail behind the title */
 .empty-icon {
   width: min(440px, 50vh); height: auto; margin-bottom: calc(min(440px, 50vh) * -0.38);
-  opacity: 0.22; pointer-events: none; user-select: none;
+  opacity: 0.6; pointer-events: none; user-select: none;
   -webkit-mask-image: linear-gradient(to bottom, #000 10%, transparent 78%);
   mask-image: linear-gradient(to bottom, #000 10%, transparent 78%);
 }
