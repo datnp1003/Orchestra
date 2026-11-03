@@ -6,14 +6,12 @@
   "config.defaultRepo": "Repo mặc định khi workspace không có .orchestra/ (để trống = dùng demo-repo của prototype)",
   "config.autoApprovePlan": "Run Pipeline: tự duyệt plan node, không dừng hỏi (không khuyến nghị cho repo thật)",
   "config.hooksEnabled": "Guard hook pre-execution — chặn git push, network pattern, path escape TRƯỚC khi lệnh chạy",
-  "config.skillSync": "Tự sync .orchestra/kb → AGENTS.md + CLAUDE.md trước mỗi dispatch để worker đọc project memory",
   "config.templatesDir": "Thư mục pipeline templates (để trống = templates đi kèm extension)",
   "config.orchestratorWorker": "CLI làm brain cho Orchestrator trong Chat (chạy read-only, session resume để nhớ hội thoại)",
   "cmd.dispatch": "Orchestra: Giao task",
   "cmd.runPipeline": "Orchestra: Chạy pipeline",
   "cmd.showMatrix": "Orchestra: Xem Policy Matrix",
   "cmd.reviewMerge": "Orchestra: Review && Merge",
-  "cmd.syncSkills": "Orchestra: Sync Skills (KB → AGENTS.md/CLAUDE.md)",
   "cmd.installWorker": "Orchestra: Cài worker (npm)",
   "cmd.refreshViews": "Orchestra: Làm mới"
 }

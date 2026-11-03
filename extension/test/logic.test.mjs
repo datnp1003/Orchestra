@@ -88,25 +88,9 @@ const badge = conformanceBadge(repo, 'claude', '2.1.310');
 assert.equal(badge, 'pass', `badge: ${badge}`);
 console.log(`✓ conformanceBadge: claude@2.1.310 = ${badge}`);
 
-// 8. Skill-sync v0 — KB → AGENTS.md + CLAUDE.md (ý tưởng gốc #3)
-const { syncSkills } = await import('../out/prototype/src/skillsync.js');
-const tmpRepo2 = mkdtempSync(path.join(os.tmpdir(), 'orch-skill-'));
-mkdirSync(path.join(tmpRepo2, '.orchestra', 'kb'), { recursive: true });
-writeFileSync(
-  path.join(tmpRepo2, '.orchestra', 'kb', 'test-conv.md'),
-  `---\nid: kb-test-conv\ntitle: "Convention test"\nscope: []\ntags: []\nsource: manual\nconfidence: high\npinned: true\n---\nLuôn dùng tiếng Việt trong comment.`,
-  'utf8',
-);
-const sync = syncSkills(tmpRepo2);
-assert.ok(sync.files.includes('AGENTS.md') && sync.files.includes('CLAUDE.md'), `sync files: ${sync.files}`);
-const agents = readFileSync(path.join(tmpRepo2, 'AGENTS.md'), 'utf8');
-const claudeMd = readFileSync(path.join(tmpRepo2, 'CLAUDE.md'), 'utf8');
-assert.ok(agents.includes('kb-test-conv') && agents.includes('AUTO-GENERATED'), 'AGENTS.md chứa KB + header');
-assert.ok(claudeMd.includes('Luôn dùng tiếng Việt'), 'CLAUDE.md chứa nội dung KB');
-rmSync(tmpRepo2, { recursive: true, force: true });
-console.log('✓ syncSkills: KB → AGENTS.md + CLAUDE.md (worker đọc được ngay khi checkout)');
+// 8. (skill-sync AGENTS.md/CLAUDE.md đã bỏ — skill thật: prototype/test/skills.test.mjs)
 
-console.log('LOGIC TEST PASS ✓ (8 nhóm — fleet/tasks/matrix/mergeable/promote/override/badge/skillsync)');
+console.log('LOGIC TEST PASS ✓ (7 nhóm — fleet/tasks/matrix/mergeable/promote/override/badge)');
 
 // 9. Chat orchestrator — parser + real turn
 const { parseOrchestraActions, orchestratorTurn } = await import('../out/extension/src/logic.js');

@@ -236,6 +236,7 @@ const claude: Manifest = {
         'Read',
         'Grep',
         'Glob',
+        'Skill', // skill Orchestra copy vào .claude/skills/ của worktree
         ...opts.scope.flatMap((p) => [`Edit(${p})`, `Write(${p})`]),
         'Bash',
       );

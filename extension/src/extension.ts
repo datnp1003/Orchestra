@@ -8,7 +8,6 @@ import { runPipeline } from '../../prototype/src/orchestrator.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { FALLBACK_REPO, fleetSnapshot, tasksSnapshot, policyMatrixHtml, mergeableTasks, reviewMerge, promoteWorker, dispatchTracked, conformanceBadge, orchestratorTurn, executeAction, parseOrchestraActions } from './logic.js';
-import { syncSkills } from '../../prototype/src/skillsync.js';
 import type { Manifest } from '../../prototype/src/types.js';
 import { t, setLocale, detectLocale } from '../../prototype/src/i18n/index.js';
 
@@ -265,7 +264,6 @@ export function activate(context: vscode.ExtensionContext): void {
           model: model || undefined,
           onEvent,
           hooksEnabled: cfg<boolean>('hooksEnabled', true),
-          skillSync: cfg<boolean>('skillSync', true),
         });
         onEvent({ t: 'done', summary: r.result.ok ? 'OK' : `FAILED: ${r.result.reason ?? ''}`, taskId: r.result.taskId, recordPath: r.result.recordPath ?? '' });
         const overrideMsg = r.override.startsWith('override') ? ` (${r.override})` : '';
@@ -408,15 +406,6 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       );
       vscode.commands.executeCommand('orchestra.refreshViews');
-    }),
-  );
-
-  // Sync Skills (P5.4): KB → AGENTS.md + CLAUDE.md — "skill pack" của Orchestra
-  context.subscriptions.push(
-    vscode.commands.registerCommand('orchestra.syncSkills', () => {
-      const repo = repoRoot();
-      const r = syncSkills(repo);
-      vscode.window.showInformationMessage(`Orchestra: synced ${r.entries} KB entries (${r.pinned} pinned) → ${r.files.join(' + ')}`);
     }),
   );
 

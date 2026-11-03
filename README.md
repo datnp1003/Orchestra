@@ -36,7 +36,7 @@ brain and every worker CLI talk to the LLM through it.
 
 The brain (`prototype/src/brain.ts`) is Orchestra's own agent loop (Messages API + tool calling).
 Tools are tiered: T0 survey (`repo_glob`, `repo_grep`, `repo_read`, `git_diff`, `task_diff`,
-`fleet_status`), T1 guarded actions (`fleet_dispatch`, `fleet_pipeline`, `skills_sync`), T2 needs
+`fleet_status`), T1 guarded actions (`fleet_dispatch`, `fleet_pipeline`, both take `skills`), T2 needs
 user approval (`fleet_merge`, `policy_promote`). `fleet_merge` is gated in code: diff review +
 `npm test` before the approval modal.
 
@@ -60,7 +60,7 @@ cd desktop && npm install && npm run build && npm start
 ## VS Code extension (`extension/`)
 
 Activity-bar views Chat / Fleet / Tasks and commands Dispatch Task, Run Pipeline, Show Policy
-Matrix, Review & Merge, Sync Skills, Install Worker. Settings under `orchestra.*`.
+Matrix, Review & Merge, Install Worker. Settings under `orchestra.*`.
 
 ## CLI (`prototype/`)
 
@@ -86,7 +86,6 @@ node dist/cli.js <command>
 | `conformance <repo> <id> [--with-smoke] [--model m]` | Worker Protocol §10 suite |
 | `vault <list\|set\|get\|delete\|auth>` | DPAPI credential vault |
 | `install <id>` / `uninstall <id>` | install/remove a worker via `npm -g` |
-| `sync-skills <repo>` | render KB → `AGENTS.md` + `CLAUDE.md` |
 | `router [--port n] [--default-model p/m]` | run the router standalone |
 
 Language: `--lang en|vi` or `ORCHESTRA_LANG=vi` (default `en`).

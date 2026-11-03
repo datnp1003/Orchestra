@@ -13,7 +13,9 @@ import { loadMemory, setMemoryText, reflectMemory, writeMemoryOps, transcriptOf,
 import { chatDir } from '../../../prototype/src/home.js';
 import { loadKB } from '../../../prototype/src/memory.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
-import { syncSkills } from '../../../prototype/src/skillsync.js';
+import {
+  listSkills, availableSkills, saveSkill, removeSkill, previewGithub, previewLocal, installSkills, checkUpdate, updateSkill, cancelPreview, type SkillScope,
+} from '../../../prototype/src/skills.js';
 import { runConformance } from '../../../prototype/src/conformance.js';
 import { installWorker, uninstallWorker, checkStatus } from '../../../prototype/src/registry.js';
 import { getManifest, MANIFESTS } from '../../../prototype/src/manifests.js';
@@ -281,7 +283,6 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       pin: p.worker && p.worker !== 'auto' ? p.worker : undefined,
       model: p.model || undefined,
       hooksEnabled: s.hooksEnabled,
-      skillSync: s.skillSync,
       router: routerInfo(),
       onEvent: (e) => send(EVENTS.DISPATCH_EVENT, { t: e.t, payload: e }),
     });
@@ -353,6 +354,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           project: project && refs ? { name: project.name, repos: refs } : undefined,
           globalMemory: loadMemory(null),
           projectMemory: project ? loadMemory(project.id) : undefined,
+          skills: availableSkills(project?.id ?? null),
         }),
         tools: brainTools(refs),
         signal: ac.signal,
@@ -362,7 +364,6 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),
           askUser: askContinue,
           hooksEnabled: s.hooksEnabled,
-          skillSync: s.skillSync,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,
           onLog: progress,
@@ -442,7 +443,45 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!m) return { badge: 'fail', cases: [], detail: `unknown worker ${id}` };
     return withRepo((repo) => runConformance(m, { repo, withSmoke: true }), (detail) => ({ badge: 'fail', cases: [], detail }));
   });
-  ipcMain.handle(IPC.SKILLS_SYNC, () => withRepo(syncSkills, (error) => ({ error })));
+  // Skills — renderer chỉ gửi tên/scope/projectId/previewId; path luôn do main tính (skills.ts validate tên)
+  const skillScope = (p: { scope?: unknown; projectId?: unknown } | undefined): [SkillScope, string | null] => {
+    if (p?.scope === 'global') return ['global', null];
+    if (p?.scope === 'project') return ['project', projectOf(p.projectId).id];
+    throw new Error(t('core.skills.needProject'));
+  };
+  const strOf = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const strsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  ipcMain.handle(IPC.SKILLS_LIST, (_e, p?: { projectId?: string | null }) => guard(() =>
+    ({ skills: listSkills(p?.projectId ? projectOf(p.projectId).id : null) })));
+  ipcMain.handle(IPC.SKILLS_SAVE, (_e, p: { scope: string; projectId?: string; skill: Record<string, unknown> }) => guard(() => {
+    const [scope, id] = skillScope(p);
+    const k = p?.skill ?? {};
+    return { skill: saveSkill(scope, id, { name: strOf(k.name), description: strOf(k.description), workers: strsOf(k.workers), tags: strsOf(k.tags), body: strOf(k.body) }) };
+  }));
+  ipcMain.handle(IPC.SKILLS_REMOVE, (_e, p: { scope: string; projectId?: string; name: string }) => guard(() => {
+    const [scope, id] = skillScope(p);
+    removeSkill(scope, id, strOf(p?.name));
+    return {};
+  }));
+  // ponytail: clone đồng bộ (spawnSync, timeout 60s) chặn main trong lúc clone — chuyển sang spawn async nếu UI đơ khó chịu
+  ipcMain.handle(IPC.SKILLS_PREVIEW_GITHUB, (_e, p: { url: string }) => guard(() => previewGithub(strOf(p?.url))));
+  ipcMain.handle(IPC.SKILLS_PREVIEW_LOCAL, () => guard(() => previewLocal()));
+  ipcMain.handle(IPC.SKILLS_INSTALL, (_e, p: { previewId: string; names: string[]; scope: string; projectId?: string }) => guard(() => {
+    const [scope, id] = skillScope(p);
+    return { installed: installSkills({ previewId: strOf(p?.previewId), names: strsOf(p?.names), scope, projectId: id }) };
+  }));
+  ipcMain.handle(IPC.SKILLS_CHECK_UPDATE, (_e, p: { scope: string; projectId?: string; name: string }) => guard(() => {
+    const [scope, id] = skillScope(p);
+    return checkUpdate(scope, id, strOf(p?.name));
+  }));
+  ipcMain.handle(IPC.SKILLS_UPDATE, (_e, p: { previewId: string; scope: string; projectId?: string; name: string }) => guard(() => {
+    const [scope, id] = skillScope(p);
+    return { installed: updateSkill({ previewId: strOf(p?.previewId), name: strOf(p?.name), scope, projectId: id }) };
+  }));
+  ipcMain.handle(IPC.SKILLS_CANCEL_PREVIEW, (_e, p: { previewId: string }) => guard(() => {
+    cancelPreview(strOf(p?.previewId));
+    return {};
+  }));
   // P-D3: update check — autoUpdater đã wired ở setupAutoUpdater; channel này trigger lại
   ipcMain.handle(IPC.UPDATE_CHECK, async () => {
     if (!app.isPackaged) return { status: 'skipped-dev' };

@@ -408,7 +408,6 @@ async function renderSettings() {
         <label>${esc(t('desktop.set.templatesDir'))}</label><input id="sTpl" value="${esc(s.templatesDir)}" />
         <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> ${esc(t('desktop.set.autoApprove'))}</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
-        <label><input type="checkbox" id="sSync" ${s.skillSync ? 'checked' : ''}/> ${esc(t('desktop.set.skillSync'))}</label>
         <div class="row">
           <button id="sSave">${esc(t('desktop.common.save'))}</button>
           <button class="secondary" id="sUpdate">${esc(t('desktop.set.checkUpdate'))}</button>
@@ -470,14 +469,10 @@ async function renderSettings() {
         <button id="cRun">${esc(t('desktop.cf.run'))}</button>
         <div id="cOut" class="dim" style="margin-top:8px"></div>
       </div>`)}
-    ${pane('skills', `
-      <div class="card">
-        <h3>Skills</h3>
-        <button id="skSync">Sync KB → AGENTS.md + CLAUDE.md</button>
-        <span id="skOut" class="dim" style="margin-left:8px"></span>
-      </div>`)}
+    ${pane('skills', '<div class="card" id="skillsBox"></div>')}
     ${pane('matrix', '<div id="matrixBox"></div>')}`;
   renderMatrix($('#matrixBox'));
+  renderSkills($('#skillsBox'), null);
   renderMemoryEditor($('#globalMemory'), null);
   // chuyển tab
   page.querySelectorAll('.tab').forEach((tb) => {
@@ -494,7 +489,6 @@ async function renderSettings() {
       templatesDir: $('#sTpl').value.trim(),
       autoApprovePlan: $('#sAuto').checked,
       hooksEnabled: $('#sHooks').checked,
-      skillSync: $('#sSync').checked,
     };
     await api.invoke('settings:set', next);
     await loadSettings();
@@ -670,12 +664,114 @@ async function renderSettings() {
     $('#cOut').innerHTML = (r.cases || []).map((c) => `<span class="${c.status === 'ok' ? 'ok' : 'err'}">[${c.status}]</span> ${esc(c.case)} — ${esc(c.detail)}`).join('<br>') + (r.detail ? `<br>${esc(r.detail)}` : '') + `<br><b>badge: ${esc(r.badge ?? '?')}</b>`;
     loadFleet();
   };
-  // tab skills
-  $('#skSync').onclick = async () => {
-    const r = await api.invoke('skills:sync');
-    $('#skOut').textContent = r.error ? '✗ ' + r.error : `✓ ${r.entries} KB → ${r.files.join(' + ')}`;
-  };
   on('install:log', (line) => logLine(line));
+}
+
+// ---------- Skills (Settings › Skills = global, Project page = project + global kế thừa) ----------
+// Chỉ gửi tên/scope/projectId/URL — path luôn do main tính; text skill luôn qua esc()
+async function renderSkills(box, projectId) {
+  const scope = projectId ? 'project' : 'global';
+  const r = await api.invoke('skills:list', { projectId });
+  const all = r.skills || [];
+  // project ghi đè global cùng tên → ẩn bản global bị che
+  const shown = all.filter((s) => s.scope === scope || !all.some((o) => o.name === s.name && o.scope !== s.scope));
+  const srcLabel = (s) => (s.source?.type === 'github'
+    ? `github ${(s.source.url || '').replace('https://github.com/', '')}@${(s.source.commit || '').slice(0, 7)}`
+    : t('desktop.skills.local'));
+  const warnHtml = (it) => (it.error ? `<div class="err">${esc(t('desktop.skills.err.' + it.error))}${it.errorDetail ? ` — ${esc(it.errorDetail)}` : ''}</div>` : '')
+    + it.warnings.map((w) => `<div class="${w.level === 'red' ? 'err' : 'warn'}">${esc(t('desktop.skills.warn.' + w.code, { file: w.file }))}</div>`).join('');
+  box.innerHTML = `<h3>${esc(t('desktop.skills.title'))}</h3>
+    <div class="dim">${esc(t(projectId ? 'desktop.skills.hintProject' : 'desktop.skills.hintGlobal'))}</div>
+    ${!r.ok ? `<div class="err">✗ ${esc(r.error)}</div>` : shown.length ? `<table><tbody>${shown.map((s, i) => `<tr>
+      <td><b class="mono">${esc(s.name)}</b><div class="dim">${esc(s.description)}</div></td>
+      <td><span class="badge-risk">${esc(t('desktop.skills.scope.' + s.scope))}</span></td>
+      <td class="mono">${esc(srcLabel(s))}</td>
+      <td class="mono">${esc(s.workers.join(', '))}</td>
+      <td class="pj-act">${s.scope !== scope ? '' : `${s.source?.type === 'github' ? `<button class="secondary" data-sk-check="${i}">${esc(t('desktop.skills.checkUpdate'))}</button>` : `<button class="secondary" data-sk-edit="${i}">${esc(t('desktop.skills.edit'))}</button>`}
+        <button class="secondary" data-sk-rm="${i}">${esc(t('desktop.skills.remove'))}</button>`}</td></tr>`).join('')}</tbody></table>`
+      : `<div class="dim">${esc(t('desktop.skills.none'))}</div>`}
+    <div data-sk-out class="dim"></div>
+    <div data-sk-upd></div>
+    <h3>${esc(t('desktop.skills.new'))}</h3>
+    <label>${esc(t('desktop.skills.name'))}</label><input data-sk-name maxlength="64" autocomplete="off" />
+    <label>${esc(t('desktop.skills.description'))}</label><input data-sk-desc maxlength="300" autocomplete="off" />
+    <label>${esc(t('desktop.skills.workers'))}</label>
+    <div class="row">${['claude', 'codex'].map((w) => `<label><input type="checkbox" data-sk-w="${w}" checked /> ${w}</label>`).join('')}</div>
+    <label>${esc(t('desktop.skills.body'))}</label><textarea data-sk-body rows="8"></textarea>
+    <div class="row"><button data-sk-save>${esc(t('desktop.common.save'))}</button></div>
+    <h3>${esc(t('desktop.skills.fromGithub'))}</h3>
+    <div class="row"><input data-sk-url placeholder="https://github.com/owner/repo/tree/main/skills" autocomplete="off" />
+      <button data-sk-preview>${esc(t('desktop.skills.preview'))}</button>
+      <button class="secondary" data-sk-import>${esc(t('desktop.skills.import'))}</button></div>
+    <div data-sk-pv></div>`;
+  const q = (sel) => box.querySelector(sel);
+  const out = q('[data-sk-out]');
+  const fail = (x) => { out.textContent = '✗ ' + x.error; out.className = 'err'; };
+  const reload = () => renderSkills(box, projectId);
+  const target = (s) => ({ scope, projectId, name: s.name }); // chỉ skill đúng scope mới có nút
+  box.querySelectorAll('[data-sk-edit]').forEach((b) => { b.onclick = () => {
+    const s = shown[b.dataset.skEdit];
+    q('[data-sk-name]').value = s.name;
+    q('[data-sk-desc]').value = s.description;
+    q('[data-sk-body]').value = s.body;
+    box.querySelectorAll('[data-sk-w]').forEach((c) => { c.checked = s.workers.includes(c.dataset.skW); });
+    q('[data-sk-name]').focus();
+  }; });
+  box.querySelectorAll('[data-sk-rm]').forEach((b) => { b.onclick = async () => {
+    const s = shown[b.dataset.skRm];
+    if (!confirm(t('desktop.skills.confirmRemove', { name: s.name }))) return;
+    const x = await api.invoke('skills:remove', target(s));
+    x.ok ? reload() : fail(x);
+  }; });
+  box.querySelectorAll('[data-sk-check]').forEach((b) => { b.onclick = async () => {
+    const s = shown[b.dataset.skCheck];
+    const upd = q('[data-sk-upd]');
+    out.textContent = t('desktop.skills.loading');
+    const x = await api.invoke('skills:checkUpdate', target(s));
+    out.textContent = '';
+    if (!x.ok) return fail(x);
+    if (x.upToDate) { upd.innerHTML = `<div class="ok">${esc(t('desktop.skills.upToDate', { commit: (x.commit || '').slice(0, 7) }))}</div>`; return; }
+    upd.innerHTML = `<div class="risk"><b class="mono">${esc(s.name)}</b> ${esc(t('desktop.skills.updateAvail', { commit: x.newCommit.slice(0, 7), files: x.changed.map((c) => `${c.status} ${c.path}`).join(', ') }))}
+      ${warnHtml(x.item)}
+      <div class="row"><button data-sk-apply ${x.item.error ? 'disabled' : ''}>${esc(t('desktop.skills.apply'))}</button><button class="secondary" data-sk-upd-cancel>${esc(t('desktop.skills.cancel'))}</button></div></div>`;
+    q('[data-sk-upd-cancel]').onclick = () => { api.invoke('skills:cancelPreview', { previewId: x.previewId }); upd.innerHTML = ''; };
+    q('[data-sk-apply]').onclick = async () => {
+      const y = await api.invoke('skills:update', { ...target(s), previewId: x.previewId });
+      y.ok ? reload() : fail(y);
+    };
+  }; });
+  q('[data-sk-save]').onclick = async () => {
+    const skill = {
+      name: q('[data-sk-name]').value.trim(), description: q('[data-sk-desc]').value.trim(), body: q('[data-sk-body]').value,
+      workers: [...box.querySelectorAll('[data-sk-w]:checked')].map((c) => c.dataset.skW),
+    };
+    const x = await api.invoke('skills:save', { scope, projectId, skill });
+    x.ok ? reload() : fail(x);
+  };
+  const preview = async (ch, payload) => {
+    const pv = q('[data-sk-pv]');
+    pv.textContent = t('desktop.skills.loading');
+    const x = await api.invoke(ch, payload);
+    if (!x.ok) { pv.textContent = ''; return fail(x); }
+    if (!x.skills.length) { api.invoke('skills:cancelPreview', { previewId: x.previewId }); pv.textContent = t('desktop.skills.noneFound'); return; }
+    pv.innerHTML = `<table><tbody>${x.skills.map((it, i) => `<tr>
+      <td><input type="checkbox" data-sk-pick="${i}" ${it.error ? 'disabled' : it.warnings.some((w) => w.level === 'red') ? '' : 'checked'} /></td>
+      <td><b class="mono">${esc(it.name)}</b><div class="dim">${esc(it.description)}</div><div class="dim mono">${esc(it.origin)}</div></td>
+      <td class="dim">${esc(t('desktop.skills.size', { n: it.files.length, kb: Math.ceil(it.bytes / 1024) }))}</td>
+      <td>${warnHtml(it)}</td></tr>`).join('')}</tbody></table>
+      <div class="row"><button data-sk-install>${esc(t('desktop.skills.install'))}</button><button class="secondary" data-sk-pv-cancel>${esc(t('desktop.skills.cancel'))}</button></div>`;
+    q('[data-sk-pv-cancel]').onclick = () => { api.invoke('skills:cancelPreview', { previewId: x.previewId }); pv.innerHTML = ''; };
+    q('[data-sk-install]').onclick = async () => {
+      const names = [...pv.querySelectorAll('[data-sk-pick]:checked')].map((c) => x.skills[c.dataset.skPick].name);
+      if (!names.length) return;
+      const y = await api.invoke('skills:install', { previewId: x.previewId, names, scope, projectId });
+      if (!y.ok) return fail(y);
+      await reload();
+      box.querySelector('[data-sk-out]').textContent = t('desktop.skills.installed', { names: y.installed.join(', ') });
+    };
+  };
+  q('[data-sk-preview]').onclick = () => preview('skills:previewGithub', { url: q('[data-sk-url]').value.trim() });
+  q('[data-sk-import]').onclick = () => preview('skills:previewLocal');
 }
 
 // ---------- Memory editor (Project page + Settings › General) ----------
@@ -724,9 +820,11 @@ async function renderProject(id) {
       <div class="row"><button class="secondary" id="pjAddRepo">${esc(t('desktop.repo.add'))}</button><button class="secondary" id="pjNewChat">${esc(t('desktop.projects.newChatIn', { name: p.name }))}</button></div>
     </div>
     <div class="card" id="pjMemory"></div>
+    <div class="card" id="pjSkills"></div>
     ${d.repos.filter((r) => r.exists).map((r) => `<div class="card"><h3>${esc(t('desktop.project.kbTitle', { name: r.name }))}</h3>${kbTable(r.kb)}</div>`).join('')}
     <div class="card"><button class="secondary" id="pjDelete">${esc(t('desktop.project.delete'))}</button></div>`;
   renderMemoryEditor($('#pjMemory'), id);
+  renderSkills($('#pjSkills'), id);
   const after = async (r) => {
     if (!r.ok) return alert('✗ ' + r.error);
     if (r.canceled) return;
@@ -834,7 +932,7 @@ window.addEventListener('hashchange', route);
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const project = { id: 'payments-a1b2', name: 'Payments', repos };
-  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true, language: 'en' };
+  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en' };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },
@@ -864,6 +962,12 @@ function devStub() {
     if (ch === 'project:get') return { ok: true, project, repos: [{ name: 'payment-svc', path: repos[0], repo: repos[0], exists: true, kb: [] }] };
     if (ch === 'memory:get') return { ok: true, text: '- prefers short answers', used: 22, budget: p.projectId ? 5000 : 3000 };
     if (ch === 'matrix:data') return { source: 'preview', errors: [], minSample: 10, workers: [{ id: 'claude', display: 'Claude Code' }], rows: [{ role: 'coder', cells: [{ cli: 'claude', rank: 1, model: null, n: 0, ema: null }] }], kb: [] };
+    if (ch === 'skills:list') return { ok: true, skills: [{ name: 'lint', description: 'run the linter', workers: ['claude', 'codex'], tags: [], scope: 'global', body: 'x', source: { type: 'github', url: 'https://github.com/acme/skills', commit: 'abc1234def' } }] };
+    if (ch === 'skills:previewGithub' || ch === 'skills:previewLocal') return { ok: true, previewId: 'pv-1', source: { type: 'local' }, skills: [
+      { name: 'deploy', description: 'deploy steps', origin: 'acme/skills', files: [{ path: 'SKILL.md', size: 900 }], bytes: 900, warnings: [{ level: 'yellow', code: 'script', file: 'scripts/run.sh' }] },
+      { name: 'evil', description: 'x', origin: 'acme/skills', files: [], bytes: 0, warnings: [], error: 'symlink', errorDetail: 'a -> /etc' }] };
+    if (ch === 'skills:checkUpdate') return { ok: true, upToDate: true, commit: 'abc1234def', newCommit: 'abc1234def', changed: [] };
+    if (ch === 'skills:install' || ch === 'skills:update') return { ok: true, installed: p.names ?? [p.name] };
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) received — running preview outside Electron.' })), 400);
     return { ok: true };
   };

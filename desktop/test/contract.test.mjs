@@ -39,7 +39,10 @@ for (const c of ['brain:models', 'chat:new', 'chat:cancel', 'providers:list', 'p
   'projects:list', 'project:create', 'project:addRepo', 'project:removeRepo', 'project:rename', 'project:delete', 'memory:get', 'memory:set']) {
   assert.ok(chans.includes(c), `có channel ${c}`);
 }
-for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import', 'repo:add', 'repo:set-active'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import', 'repo:add', 'repo:set-active', 'skills:sync'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+for (const c of ['list', 'save', 'remove', 'previewGithub', 'previewLocal', 'install', 'checkUpdate', 'update', 'cancelPreview']) assert.ok(chans.includes(`skills:${c}`), `có channel skills:${c}`);
+assert.ok(!('skillSync' in DEFAULT_SETTINGS) && !('skillSync' in validateSettings({ skillSync: true })), 'bỏ setting skillSync (settings cũ vẫn load)');
+console.log('✓ skills: 9 channel mới, skills:sync + skillSync đã bỏ');
 // projects: id hợp lệ + unique, repos = hợp repo project, activeRepo kéo về repo còn tồn tại
 const vp = validateSettings({
   projects: [{ id: 'a-1', name: ' A ', repos: ['C:/a', 'C:/b', 'C:/a'] }, { id: 'a-1', name: 'dup', repos: [] }, { id: '../x', name: 'bad', repos: [] }, { id: 'b-2', name: 'B', repos: ['C:/b', 'C:/c'] }],

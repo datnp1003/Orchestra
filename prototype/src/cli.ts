@@ -11,7 +11,6 @@ import { buildFleetStats, syncTasksToSqlite, addFeedback, type FeedbackType } fr
 import { retrospective } from './retro.js';
 import { runConformance } from './conformance.js';
 import { vaultSet, vaultGet, vaultList, vaultDelete } from './vault.js';
-import { syncSkills } from './skillsync.js';
 import { createProviderStore } from './router/providers.js';
 import { startRouter } from './router/server.js';
 import type { FleetEvent, MapResult } from './types.js';
@@ -413,12 +412,6 @@ async function main(): Promise<number> {
       const r = uninstallWorker(m);
       console.log(`${r.ok ? '✓' : '✗'} ${r.detail}`);
       return r.ok ? 0 : 1;
-    }
-    case 'sync-skills': {
-      const repo = path.resolve(args[0] ?? '.');
-      const r = syncSkills(repo);
-      console.log(`✓ ${t('cli.sync.done', { entries: r.entries, pinned: r.pinned, files: r.files.join(' + '), repo })}`);
-      return 0;
     }
     case 'simulate': {
       const repo = path.resolve(args[0] ?? '.');

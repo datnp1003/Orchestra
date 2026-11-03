@@ -86,6 +86,19 @@ assert.ok(js.includes("'oauth:start'") && js.includes("'oauth:finish'") && js.in
 assert.ok(!/\.(access|refresh)\b/.test(js), 'renderer không đụng token');
 console.log('✓ OAuth: warning + checkbox bắt buộc + login, không token');
 
+// Skills: tab Settings (global) + card Project; skill-sync cũ đã bỏ; xoá phải confirm; renderer không gửi path
+for (const c of ['list', 'save', 'remove', 'previewGithub', 'previewLocal', 'install', 'checkUpdate', 'update', 'cancelPreview']) assert.ok(js.includes(`'skills:${c}'`), `renderer gọi skills:${c}`);
+assert.ok(!js.includes("'skills:sync'") && !js.includes('sSync') && !js.includes('skillSync'), 'bỏ skill-sync cũ');
+assert.ok(js.includes("renderSkills($('#skillsBox'), null)") && js.includes("renderSkills($('#pjSkills'), id)"), 'Skills: Settings global + Project card');
+assert.ok(/if \(!confirm\(t\('desktop\.skills\.confirmRemove'/.test(js), 'xoá skill phải confirm');
+const sk = js.slice(js.indexOf('async function renderSkills'), js.indexOf('// ---------- Memory editor'));
+assert.ok(!/\bpath\s*:/.test(sk) && !/dir\s*:/.test(sk), 'renderer Skills không gửi filesystem path');
+assert.ok(sk.includes("t('desktop.skills.warn.' + w.code") && sk.includes("t('desktop.skills.err.' + it.error)"), 'preview hiện warning/error');
+const { en: enDict } = await import('../out/prototype/src/i18n/en.js');
+for (const k of ['script', 'large', 'suspicious']) assert.ok(`desktop.skills.warn.${k}` in enDict, `key warn.${k}`);
+for (const k of ['symlink', 'tooBig', 'invalid', 'duplicate']) assert.ok(`desktop.skills.err.${k}` in enDict, `key err.${k}`);
+console.log('✓ Skills: 9 channel, Settings + Project, confirm remove, warning/error có key, không gửi path');
+
 // i18n: chuỗi UI chỉ nằm trong dictionary — không còn ký tự tiếng Việt ngoài comment
 const VI = /[ăâđêôơưàáạảãầấậẩẫằắặẳẵèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i;
 // ponytail: strip comment bằng regex — không hiểu '//' trong string (vd 'https://…'); chuỗi đó chỉ làm scan bỏ sót phần sau, không báo sai

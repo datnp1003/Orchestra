@@ -60,11 +60,6 @@
           "default": true,
           "description": "%config.hooksEnabled%"
         },
-        "orchestra.skillSync": {
-          "type": "boolean",
-          "default": true,
-          "description": "%config.skillSync%"
-        },
         "orchestra.templatesDir": {
           "type": "string",
           "default": "",
@@ -97,10 +92,6 @@
       {
         "command": "orchestra.reviewMerge",
         "title": "%cmd.reviewMerge%"
-      },
-      {
-        "command": "orchestra.syncSkills",
-        "title": "%cmd.syncSkills%"
       },
       {
         "command": "orchestra.installWorker",

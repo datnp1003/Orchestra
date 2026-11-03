@@ -8,18 +8,45 @@ import path from 'node:path';
 import { brainToolExecutor, brainSystemPrompt, BRAIN_TOOLS, brainTools, projectToolExecutor, repoRefs } from '../out/extension/src/logic.js';
 import { setOrchestraHome } from '../out/prototype/src/home.js';
 import { loadMemory } from '../out/prototype/src/agentMemory.js';
+import { saveSkill } from '../out/prototype/src/skills.js';
 
 const tmp = (t) => {
   const d = mkdtempSync(path.join(os.tmpdir(), 'orch brain-'));
   t.after(() => rmSync(d, { recursive: true, force: true }));
   return d;
 };
-const exec = (repo, approve = async () => true) => brainToolExecutor(repo, { approve, hooksEnabled: false, skillSync: false });
+const exec = (repo, approve = async () => true) => brainToolExecutor(repo, { approve, hooksEnabled: false });
 
-test('tool defs: tên unique, có schema', () => {
+test('tool defs: tên unique, có schema; sync_skills/skills_sync đã bỏ', () => {
   const names = BRAIN_TOOLS.map((t) => t.name);
   assert.equal(new Set(names).size, names.length);
   assert.ok(BRAIN_TOOLS.every((t) => t.input_schema.type === 'object'));
+  assert.ok(!names.includes('skills_sync') && !names.includes('sync_skills'));
+  for (const n of ['fleet_dispatch', 'fleet_pipeline']) assert.equal(BRAIN_TOOLS.find((d) => d.name === n).input_schema.properties.skills.type, 'array');
+});
+
+test('skills: fleet_dispatch truyền skills + projectId; tên lạ → lỗi kèm danh sách hợp lệ; system prompt liệt kê skill', async (t) => {
+  setOrchestraHome(tmp(t));
+  saveSkill('global', null, { name: 'lint', description: 'run the linter', body: 'x' });
+  saveSkill('project', 'p-1', { name: 'deploy', description: 'deploy steps', body: 'y' });
+  const calls = [];
+  const dispatch = async (_repo, o) => (calls.push(o), { result: { ok: true, taskId: 't-x', stage: 'done', record: { routing: { pick: 'claude' }, artifacts: { files_changed: [] } } } });
+  const x = brainToolExecutor(tmp(t), { approve: async () => true, dispatch, projectId: 'p-1' });
+  assert.ok((await x('fleet_dispatch', { goal: 'g', scope: ['a'], skills: ['lint', 'deploy'] })).ok);
+  assert.deepEqual([calls[0].skills, calls[0].projectId], [['lint', 'deploy'], 'p-1']);
+  const bad = await x('fleet_dispatch', { goal: 'g', scope: ['a'], skills: ['nope'] });
+  assert.equal(bad.ok, false);
+  assert.match(bad.content, /unknown skill\(s\): nope — available: deploy, lint/);
+  assert.equal((await x('fleet_pipeline', { template: 'feature-dev', goal: 'g', scope: ['a'], skills: ['nope'] })).ok, false);
+  assert.equal(calls.length, 1, 'skill lạ → không dispatch');
+  const noProj = brainToolExecutor(tmp(t), { approve: async () => true, dispatch });
+  assert.match((await noProj('fleet_dispatch', { goal: 'g', scope: ['a'], skills: ['deploy'] })).content, /available: lint/, 'không project → chỉ global');
+  const skills = [{ name: 'lint', description: 'run the linter' }];
+  assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', skills }), /SKILLS \(attach[^\n]*relevant[^\n]*\n- lint — run the linter/);
+  assert.match(brainSystemPrompt({ globalMemory: '', skills }), /SKILLS installed \(informational[^\n]*\n- lint — run the linter/);
+  const many = Array.from({ length: 45 }, (_, n) => ({ name: `s${n}`, description: 'd' }));
+  const sys = brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', skills: many });
+  assert.ok(sys.includes('- s39 — d') && !sys.includes('- s40 — d') && sys.includes('+5 more'));
 });
 
 test('repo_read chặn thoát repo', async (t) => {

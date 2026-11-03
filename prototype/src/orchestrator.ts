@@ -29,6 +29,9 @@ export interface RunPipelineOptions {
   signal?: AbortSignal;
   /** R2a: Orchestra router cho mọi node */
   router?: import('./types.js').RouterInfo;
+  /** skill giao cho mọi node (dispatch lọc theo worker) */
+  skills?: string[];
+  projectId?: string | null;
 }
 
 export interface NodeState {
@@ -141,7 +144,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
     switch (node.type) {
       case 'plan': {
         d = await dispatch({
-          repo: o.repo, signal: o.signal, router: o.router, node:'plan', role: node.role ?? 'planner',
+          repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'plan', role: node.role ?? 'planner',
           goal: `Write a plan (max 8 steps, files_touched, risks) for the task: ${o.goal}`,
           scope: [], constraints: [], acceptance: [],
           excludeWorkers: exclude, wallMs: 180_000,
@@ -161,7 +164,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
 
       case 'implement': {
         d = await dispatch({
-          repo: o.repo, signal: o.signal, router: o.router, node:'implement', role: node.role ?? 'coder',
+          repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'implement', role: node.role ?? 'coder',
           goal: o.goal, scope,
           constraints: [], acceptance: o.acceptance ?? [],
           excludeWorkers: exclude, model: o.model,
@@ -182,7 +185,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       case 'verify': {
         if (!implWt) return { ok: false, reason: t('core.orchestrator.verifyBeforeImpl') };
         d = await dispatch({
-          repo: o.repo, signal: o.signal, router: o.router, node:'verify', role: node.role ?? 'verifier',
+          repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'verify', role: node.role ?? 'verifier',
           goal: `Verify the changes for the task: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
@@ -202,7 +205,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       case 'review': {
         if (!implWt) return { ok: false, reason: t('core.orchestrator.reviewBeforeImpl') };
         d = await dispatch({
-          repo: o.repo, signal: o.signal, router: o.router, node:'review', role: node.role ?? 'reviewer',
+          repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'review', role: node.role ?? 'reviewer',
           goal: `Review the changes for the task: ${o.goal}`,
           scope, constraints: [], acceptance: [],
           reuseWorktree: implWt, excludeWorkers: exclude, wallMs: 240_000,
@@ -333,7 +336,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
         fixAttempts++;
         log(`spawn fix #${fixAttempts} cho ${nodeId}`);
         const fix = await dispatch({
-          repo: o.repo, signal: o.signal, router: o.router, node:'implement', role: 'fixer',
+          repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'implement', role: 'fixer',
           goal: `Fix according to feedback: ${res.reason ?? ''}`,
           scope: o.scope ?? [], constraints: [], acceptance: [],
           reuseWorktree: implWt, wallMs: 240_000, model: o.model,

@@ -10,6 +10,7 @@ import { mergeBranch } from '../../prototype/src/worktree.js';
 import { globToRegex } from '../../prototype/src/dispatch.js';
 import { t } from '../../prototype/src/i18n/index.js';
 import { renderMemoryBlock, writeMemoryOps, type CallModel, type ScopedOp } from '../../prototype/src/agentMemory.js';
+import { availableSkills } from '../../prototype/src/skills.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
@@ -177,7 +178,7 @@ export function trackOverride(
 
 export async function dispatchTracked(
   repo: string,
-  o: { node: 'implement' | 'plan'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal; router?: RouterInfo; promptOverride?: string },
+  o: { node: 'implement' | 'plan'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skills?: string[]; projectId?: string | null; signal?: AbortSignal; router?: RouterInfo; promptOverride?: string },
 ): Promise<{ autoPick?: string; result: Awaited<ReturnType<typeof import('../../prototype/src/dispatch.js').dispatch>>; override: string }> {
   const pol = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
@@ -186,7 +187,7 @@ export async function dispatchTracked(
   const result = await dispatch({
     repo, node: o.node, role: o.role, goal: o.goal, scope: o.scope,
     constraints: [], acceptance: o.acceptance, workerPin: o.pin, model: o.model,
-    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal, router: o.router, promptOverride: o.promptOverride,
+    hooksEnabled: o.hooksEnabled, skills: o.skills, projectId: o.projectId, signal: o.signal, router: o.router, promptOverride: o.promptOverride,
     onEvent: o.onEvent as ((e: { t: string; [k: string]: unknown }) => void) | undefined,
   });
   const tr = trackOverride(repo, { autoPick: auto.pick, pin: o.pin, taskId: result.taskId, ok: result.ok });
@@ -219,14 +220,13 @@ export const ORCHESTRATOR_SYSTEM_PROMPT = `You are Orchestra Orchestrator — an
 You are chatting with the user in VS Code. Mandatory rules:
 1. Reply BRIEFLY, in the language the user writes in.
 2. You are in read-only (plan) mode — do NOT edit files, do NOT write code yourself. You MAY use Glob/Grep/Read to survey the repo before answering.
-3. When the user asks for work in the repo (add a feature, fix a bug, run a pipeline, sync skills, check status...), issue an action in a fenced block with exactly this syntax:
+3. When the user asks for work in the repo (add a feature, fix a bug, run a pipeline, check status...), issue an action in a fenced block with exactly this syntax:
 \`\`\`orchestra
 {"action":"dispatch","goal":"<goal>","scope":["src/**"],"worker":"codex|claude|auto","model":"optional"}
 \`\`\`
 or:
 - {"action":"pipeline","template":"feature-dev|hotfix","goal":"...","scope":["..."]}
 - {"action":"status"}  — show fleet + recent tasks
-- {"action":"sync_skills"} — sync KB to AGENTS.md/CLAUDE.md
 4. EVERY dispatch/pipeline action MUST have a scope (list of globs). Determine scope in this order:
    a. the PROJECT KNOWLEDGE provided below (project memory) — if a module matches, use its scope;
    b. none → survey the repo with Glob/Grep/Read to find the relevant module (e.g. grep the feature name);
@@ -235,7 +235,7 @@ or:
 6. For advisory/conceptual questions answer directly, no action needed.`;
 
 export interface OrchestraAction {
-  action: 'dispatch' | 'pipeline' | 'status' | 'sync_skills';
+  action: 'dispatch' | 'pipeline' | 'status';
   goal?: string;
   scope?: string[];
   worker?: string;
@@ -284,17 +284,12 @@ export async function orchestratorTurn(
   return { text: texts.join('\n\n') || r.stderrTail || t('ext.chat.noReply'), session: r.session, rawLines: r.rawLines };
 }
 
-export async function executeAction(repo: string, a: OrchestraAction, opts: { hooksEnabled?: boolean; skillSync?: boolean } = {}): Promise<string> {
+export async function executeAction(repo: string, a: OrchestraAction, opts: { hooksEnabled?: boolean } = {}): Promise<string> {
   switch (a.action) {
     case 'status': {
       const fleet = fleetSnapshot().map((f) => `${f.id}@${f.version ?? '?'}${f.installed ? '' : ' (not installed)'}`).join(', ');
       const tasks = tasksSnapshot(repo).slice(0, 5).map((t) => `${t.id} ${t.node}/${t.worker} exit=${t.exit}`);
       return `Fleet: ${fleet}\nRecent tasks:\n${tasks.map((t) => `- ${t}`).join('\n') || '(none)'}`;
-    }
-    case 'sync_skills': {
-      const { syncSkills } = await import('../../prototype/src/skillsync.js');
-      const r = syncSkills(repo);
-      return `synced ${r.entries} KB (${r.pinned} pinned) → ${r.files.join(' + ')}`;
     }
     case 'dispatch': {
       if (!a.goal) return 'dispatch is missing goal';
@@ -307,7 +302,6 @@ export async function executeAction(repo: string, a: OrchestraAction, opts: { ho
         pin: a.worker && a.worker !== 'auto' ? a.worker : undefined,
         model: a.model,
         hooksEnabled: opts.hooksEnabled ?? true,
-        skillSync: opts.skillSync ?? true,
       });
       const files = r.result.record ? (r.result.record as Record<string, any>).artifacts?.files_changed ?? [] : [];
       return `dispatch ${r.result.ok ? 'OK' : 'FAILED'} ${r.result.taskId} worker=${r.result.record ? pickOf(r.result.record) : '?'} files=[${files.join(', ')}] record=${r.result.recordPath ?? ''}`;
@@ -351,7 +345,7 @@ export async function chatExchange(
   repo: string,
   userText: string,
   sessionId: string | undefined,
-  opts: { workerId?: string; model?: string; notify?: (m: ChatMessage) => void; hooksEnabled?: boolean; skillSync?: boolean },
+  opts: { workerId?: string; model?: string; notify?: (m: ChatMessage) => void; hooksEnabled?: boolean },
 ): Promise<{ session?: string }> {
   const emit = (m: ChatMessage) => opts.notify?.(m);
   const turn = await orchestratorTurn(repo, userText, sessionId, opts.workerId ?? 'claude', opts.model);
@@ -412,10 +406,20 @@ export function repoRefs(paths: string[]): RepoRef[] {
   });
 }
 
+/** danh sách skill cho brain (tối đa 40) — chat ngoài project chỉ xem, không dispatch được */
+function skillsBlock(skills: { name: string; description: string }[] | undefined, canDispatch: boolean): string {
+  if (!skills?.length) return '';
+  const list = skills.slice(0, 40).map((s) => `- ${s.name} — ${s.description}`).join('\n');
+  const more = skills.length > 40 ? `\n…(+${skills.length - 40} more)` : '';
+  return canDispatch
+    ? `\n\nSKILLS (attach with fleet_dispatch/fleet_pipeline \`skills\` — ONLY the ones clearly relevant to that task, usually 0-2):\n${list}${more}`
+    : `\n\nSKILLS installed (informational — skills can only be attached to work inside a project):\n${list}${more}`;
+}
+
 /** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
-export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; globalMemory: string; projectMemory?: string }): string {
+export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
   const p = o.project;
-  if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + `\n\n${renderMemoryBlock(o.globalMemory)}`;
+  if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + skillsBlock(o.skills, false) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   const budget = Math.floor(1500 / Math.max(p.repos.length, 1));
   const kb = p.repos.flatMap((r) => {
     const k = recallKB(r.path, ['**'], budget);
@@ -424,10 +428,12 @@ export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[
   return BRAIN_SYSTEM_PROMPT + PROJECT_RULES + MEMORY_RULE + BRAIN_LANGUAGE
     + `\nPROJECT: ${p.name}\nREPOS:\n${p.repos.map((r) => `- ${r.name}: ${r.path}`).join('\n') || '(none yet — ask the user to add repos on the Project page)'}`
     + (kb.length ? `\n\nPROJECT KNOWLEDGE (repo KB — use it to determine scope):\n${kb.join('\n\n')}` : '')
+    + skillsBlock(o.skills, true)
     + `\n\n${renderMemoryBlock(o.globalMemory, { name: p.name, text: o.projectMemory ?? '' })}`;
 }
 
 const strArr = { type: 'array', items: { type: 'string' } };
+const skillsArr = { ...strArr, description: 'skill names from SKILLS — only those relevant to this task' };
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
 export const BRAIN_TOOLS: { name: string; description: string; input_schema: Record<string, unknown> }[] = [
   { name: 'repo_glob', description: 'List repo files matching a glob (e.g. src/**/*.ts). Max 200.', input_schema: obj({ pattern: { type: 'string' } }, ['pattern']) },
@@ -436,9 +442,8 @@ export const BRAIN_TOOLS: { name: string; description: string; input_schema: Rec
   { name: 'git_diff', description: 'git diff (stat + content, truncated) against an optional ref (default: working tree vs HEAD). ref = task id (t-…) → same as task_diff.', input_schema: obj({ ref: { type: 'string' } }) },
   { name: 'task_diff', description: 'Show a task result: worker, changed files, scope check, outcome + patch. Call before fleet_merge.', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'fleet_status', description: 'Fleet worker status + 5 most recent tasks.', input_schema: obj({}) },
-  { name: 'fleet_dispatch', description: 'Assign one task to a worker (own worktree, guarded + scope check). scope is REQUIRED. Coding by default; readonly:true runs it read-only and returns the worker answer.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr, readonly: { type: 'boolean', description: 'true for survey/list/explain/review tasks that must not modify files' } }, ['goal', 'scope']) },
-  { name: 'fleet_pipeline', description: 'Run a pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' } }, ['template', 'goal', 'scope']) },
-  { name: 'skills_sync', description: 'Sync project KB to AGENTS.md + CLAUDE.md.', input_schema: obj({}) },
+  { name: 'fleet_dispatch', description: 'Assign one task to a worker (own worktree, guarded + scope check). scope is REQUIRED. Coding by default; readonly:true runs it read-only and returns the worker answer.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr, readonly: { type: 'boolean', description: 'true for survey/list/explain/review tasks that must not modify files' }, skills: skillsArr }, ['goal', 'scope']) },
+  { name: 'fleet_pipeline', description: 'Run a pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' }, skills: skillsArr }, ['template', 'goal', 'scope']) },
   { name: 'fleet_merge', description: "Merge a task's branch into main (REQUIRES user approval). The system checks the task + runs tests before asking.", input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'policy_promote', description: 'Move a worker to #1 for a role in the policy (REQUIRES user approval).', input_schema: obj({ role: { type: 'string' }, cli: { type: 'string' } }, ['role', 'cli']) },
 ];
@@ -460,7 +465,8 @@ export interface BrainToolDeps {
   /** pipeline plan approval */
   askUser?: (q: string) => Promise<string>;
   hooksEnabled?: boolean;
-  skillSync?: boolean;
+  /** skill = global + project này (project đè global) */
+  projectId?: string | null;
   templatesDir?: string;
   autoApprovePlan?: boolean;
   onLog?: (line: string) => void;
@@ -581,6 +587,15 @@ const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every(isSt
 const optStr = (v: unknown) => v === undefined || v === null || typeof v === 'string';
 const bad = (content: string): ToolOut => ({ ok: false, content });
 
+/** skills từ brain: undefined → []; tên lạ → chuỗi lỗi kèm danh sách hợp lệ */
+function checkSkills(v: unknown, projectId?: string | null): string[] | string {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return 'skills must be an array of skill names';
+  const valid = availableSkills(projectId).map((s) => s.name);
+  const unknown = v.filter((x) => !valid.includes(x));
+  return unknown.length ? `unknown skill(s): ${unknown.join(', ')} — available: ${valid.join(', ') || '(none installed)'}` : [...new Set(v as string[])];
+}
+
 export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: string, input: unknown) => Promise<ToolOut> {
   return async (name, raw) => {
     const i = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -638,14 +653,14 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         return isStr(i.taskId) ? taskDiff(repo, i.taskId) : bad('taskId must be a string');
       case 'fleet_status':
         return { ok: true, content: await executeAction(repo, { action: 'status' }) };
-      case 'skills_sync':
-        return { ok: true, content: await executeAction(repo, { action: 'sync_skills' }) };
       case 'fleet_dispatch': {
         if (!isStr(i.goal)) return bad('goal must be a non-empty string');
         if (!isStrArr(i.scope) || !i.scope.length) return bad('scope is required: non-empty array of globs');
         if (!optStr(i.worker) || !optStr(i.model)) return bad('worker/model must be strings');
         if (i.acceptance !== undefined && !isStrArr(i.acceptance)) return bad('acceptance must be an array of strings');
         if (i.readonly !== undefined && typeof i.readonly !== 'boolean') return bad('readonly must be a boolean');
+        const skills = checkSkills(i.skills, deps.projectId);
+        if (typeof skills === 'string') return bad(skills);
         const ro = i.readonly === true;
         const acceptance = (i.acceptance as string[] | undefined) ?? [];
         // read-only: node plan (sandbox read-only, không tính no_change, không vào EMA coder) — prompt trả lời thẳng, không bắt viết plan
@@ -657,7 +672,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
             : undefined,
           pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
           model: isStr(i.model) ? i.model : undefined,
-          hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true, signal: deps.signal, router: deps.router,
+          hooksEnabled: deps.hooksEnabled ?? true, skills, projectId: deps.projectId, signal: deps.signal, router: deps.router,
           onEvent: deps.onLog
             ? (e) => deps.onLog!(e.t === 'tool_use' ? `[tool_use] ${e.tool} ${e.target}` : e.t === 'message' ? `[message] ${e.text}` : `[${e.t}] ${JSON.stringify(e).slice(0, 160)}`)
             : undefined,
@@ -674,13 +689,15 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         if (!isStr(i.goal)) return bad('goal must be a non-empty string');
         if (!isStrArr(i.scope) || !i.scope.length) return bad('scope is required: non-empty array of globs');
         if (!optStr(i.model)) return bad('model must be a string');
+        const skills = checkSkills(i.skills, deps.projectId);
+        if (typeof skills === 'string') return bad(skills);
         const dir = deps.templatesDir || protoAsset('templates');
         const tpl = dir && path.join(dir, `${i.template}.yml`);
         if (!tpl || !existsSync(tpl)) return bad(`no template ${i.template}`);
         const { runPipeline } = await import('../../prototype/src/orchestrator.js');
         const r = await runPipeline({
           repo, templatePath: tpl, goal: i.goal, scope: i.scope, acceptance: [],
-          model: isStr(i.model) ? i.model : undefined, signal: deps.signal, router: deps.router,
+          model: isStr(i.model) ? i.model : undefined, signal: deps.signal, router: deps.router, skills, projectId: deps.projectId,
           autoYes: deps.autoApprovePlan ?? false, askUser: deps.askUser, onLog: deps.onLog ?? (() => {}),
         });
         const nodes = Object.entries(r.nodes).map(([k, n]) => `${k}:${n.status}${n.worker ? `/${n.worker}` : ''}`).join(' ');

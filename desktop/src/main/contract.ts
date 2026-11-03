@@ -36,7 +36,15 @@ export const IPC = {
   OAUTH_START: 'oauth:start',
   OAUTH_FINISH: 'oauth:finish',
   CONFORMANCE_RUN: 'conformance:run',
-  SKILLS_SYNC: 'skills:sync',
+  SKILLS_LIST: 'skills:list',
+  SKILLS_SAVE: 'skills:save',
+  SKILLS_REMOVE: 'skills:remove',
+  SKILLS_PREVIEW_GITHUB: 'skills:previewGithub',
+  SKILLS_PREVIEW_LOCAL: 'skills:previewLocal',
+  SKILLS_INSTALL: 'skills:install',
+  SKILLS_CHECK_UPDATE: 'skills:checkUpdate',
+  SKILLS_UPDATE: 'skills:update',
+  SKILLS_CANCEL_PREVIEW: 'skills:cancelPreview',
   TERMINAL_CREATE: 'terminal:create',
   TERMINAL_INPUT: 'terminal:input',
   TERMINAL_RESIZE: 'terminal:resize',
@@ -87,7 +95,6 @@ export interface AppSettings {
   routerDefaultModel: string;
   autoApprovePlan: boolean;
   hooksEnabled: boolean;
-  skillSync: boolean;
   templatesDir: string;
   /** ngôn ngữ UI; thiếu (settings cũ / lần đầu) → fallbackLang (main: detectLocale(app.getLocale())) */
   language: Locale;
@@ -101,7 +108,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   routerDefaultModel: '',
   autoApprovePlan: false,
   hooksEnabled: true,
-  skillSync: true,
   templatesDir: '',
   language: 'en',
 };
@@ -122,7 +128,6 @@ export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SE
     routerDefaultModel: typeof r.routerDefaultModel === 'string' ? r.routerDefaultModel.trim() : '',
     autoApprovePlan: r.autoApprovePlan === true,
     hooksEnabled: r.hooksEnabled !== false,
-    skillSync: r.skillSync !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
     language: r.language === 'en' || r.language === 'vi' ? r.language : fallbackLang,
   };

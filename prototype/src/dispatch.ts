@@ -10,6 +10,7 @@ import { DEFAULT_ARTIFACTS, validateBrief, type NodeType, type TaskBrief } from 
 import { resolveWorker, loadPolicy } from './policy.js';
 import { buildFleetStats, recallKB } from './memory.js';
 import { changedFiles, commitAll, createWorktree, diffPatch, stageAll } from './worktree.js';
+import { deliverSkills } from './skills.js';
 
 export interface DispatchOptions {
   repo: string;
@@ -26,9 +27,11 @@ export interface DispatchOptions {
   tags?: string[];
   /** P6.2: resume session (retry không mất context) */
   resumeSession?: string;
-  /** P5.4: tắt guard hook + skill-sync (từ VS Code settings) */
+  /** P5.4: tắt guard hook (từ VS Code settings) */
   hooksEnabled?: boolean;
-  skillSync?: boolean;
+  /** skill giao cho worker (tên đã validate) — project đè global; lọc theo frontmatter workers */
+  skills?: string[];
+  projectId?: string | null;
   /** P5: live transcript hook */
   onEvent?: (e: import('./types.js').FleetEvent) => void;
   /** P3: tái dùng worktree đã có (verify/review/fix chạy trên worktree của implement) */
@@ -122,16 +125,6 @@ function buildPlanPrompt(b: TaskBrief): string {
 export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   const taskId = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-  // P5.4 skill-sync: KB → AGENTS.md/CLAUDE.md TRƯỚC khi tạo worktree — worker checkout nhận phiên bản mới
-  if (o.skillSync !== false) {
-    try {
-      const { syncSkills } = await import('./skillsync.js');
-      syncSkills(o.repo);
-    } catch {
-      /* sync fail không chặn dispatch */
-    }
-  }
-
   // 1. Resolve worker (Role Policy từ file + track record — P4)
   const pol = loadPolicy(o.repo);
   const stats = buildFleetStats(path.join(o.repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
@@ -186,6 +179,9 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   if (kb.injected && ['plan', 'implement'].includes(o.node)) {
     prompt += `\n\nPROJECT KNOWLEDGE (repo memory — follow the conventions below):\n${kb.injected}`;
   }
+  // skills: claude → .claude/skills/ trong worktree; codex → section trong prompt + file phụ trợ (đều git-ignored)
+  const skills = o.skills?.length ? deliverSkills(wt.path, routing.pick, o.skills, o.projectId) : undefined;
+  if (skills) prompt += skills.prompt;
   const started = Date.now();
   const run = await runHeadless(manifest, prompt, {
     cwd: wt.path,
@@ -246,6 +242,7 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
       ? { tokens_in: lastUsage['tokens_in'] ?? null, tokens_out: lastUsage['tokens_out'] ?? null, usd: lastUsage['usd'] ?? null }
       : null,
     artifacts: { files_changed: files, patch_ref: patch ? patchPath : null },
+    ...(skills ? { skills: { delivered: skills.delivered, skipped: skills.skipped } } : {}),
     ...(noChange ? { outcome: 'no_change' } : {}),
     last_message: lastMessage,
     session: run.session ?? null,

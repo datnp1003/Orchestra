@@ -36,7 +36,7 @@ và mọi worker CLI đều gọi LLM qua router.
 
 Brain (`prototype/src/brain.ts`) là agent loop riêng của Orchestra (Messages API + tool calling).
 Tool chia tầng: T0 khảo sát (`repo_glob`, `repo_grep`, `repo_read`, `git_diff`, `task_diff`,
-`fleet_status`), T1 hành động có guard (`fleet_dispatch`, `fleet_pipeline`, `skills_sync`), T2 cần
+`fleet_status`), T1 hành động có guard (`fleet_dispatch`, `fleet_pipeline`, đều nhận `skills`), T2 cần
 user duyệt (`fleet_merge`, `policy_promote`). `fleet_merge` có gate trong code: xem diff +
 `npm test` trước khi hiện modal duyệt.
 
@@ -60,7 +60,7 @@ cd desktop && npm install && npm run build && npm start
 ## Extension VS Code (`extension/`)
 
 View Chat / Fleet / Tasks trên Activity bar và các lệnh Dispatch Task, Run Pipeline, Show Policy
-Matrix, Review & Merge, Sync Skills, Install Worker. Setting nằm dưới `orchestra.*`.
+Matrix, Review & Merge, Install Worker. Setting nằm dưới `orchestra.*`.
 
 ## CLI (`prototype/`)
 
@@ -86,7 +86,6 @@ node dist/cli.js <lệnh>
 | `conformance <repo> <id> [--with-smoke] [--model m]` | bộ test Worker Protocol §10 |
 | `vault <list\|set\|get\|delete\|auth>` | credential vault DPAPI |
 | `install <id>` / `uninstall <id>` | cài/gỡ worker qua `npm -g` |
-| `sync-skills <repo>` | render KB → `AGENTS.md` + `CLAUDE.md` |
 | `router [--port n] [--default-model p/m]` | chạy router độc lập |
 
 Ngôn ngữ: `--lang en|vi` hoặc `ORCHESTRA_LANG=vi` (mặc định `en`).
