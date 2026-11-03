@@ -11,16 +11,17 @@
     <aside id="sidebar">
       <div class="brand"><span class="brand-mark">◆</span>ORCHESTRA</div>
       <button id="newChat" class="btn-primary btn-new" data-i18n="desktop.newChat.label" data-i18n-title="desktop.newChat.title"></button>
-      <div id="repoPick" class="repo-pick" hidden></div>
 
-      <nav id="nav">
-        <div class="side-title" data-i18n="desktop.nav.title"></div>
-        <a href="#/chat" data-page="chat">Chat</a>
-      </nav>
-
-      <div class="side-section">
-        <div class="side-title">Sessions</div>
-        <div id="sideSessionList"></div>
+      <div id="sideLists">
+        <div class="side-section">
+          <div class="side-title side-head"><span data-i18n="desktop.projects.title"></span><button id="newProject" class="side-plus" data-i18n-title="desktop.projects.new">＋</button></div>
+          <input id="newProjectName" class="side-input" data-i18n-placeholder="desktop.projects.namePlaceholder" autocomplete="off" hidden />
+          <div id="sideProjects"></div>
+        </div>
+        <div class="side-section">
+          <div class="side-title" data-i18n="desktop.chats.title"></div>
+          <div id="sideChats"></div>
+        </div>
       </div>
 
       <div id="sideFooter">

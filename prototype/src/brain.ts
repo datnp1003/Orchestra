@@ -61,6 +61,17 @@ export async function listBrainModels(c: BrainCreds, fetchImpl: FetchFn = fetch)
   }
 }
 
+/** 1 lượt không tool (system + 1 user message) → text — dùng cho memory reflection/consolidate */
+export async function callBrainText(c: BrainCreds & { model: string; fetchImpl?: FetchFn }, system: string, user: string, maxTokens = 2048): Promise<string> {
+  const r = await callJson(
+    c.fetchImpl ?? fetch,
+    apiUrl(c.baseUrl, 'messages'),
+    { method: 'POST', headers: headers(c.apiKey), body: JSON.stringify({ model: c.model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }], stream: false }) },
+    c.apiKey,
+  );
+  return (Array.isArray(r?.content) ? r.content : []).flatMap((b: Block) => (b.type === 'text' ? [b.text] : [])).join('\n');
+}
+
 const MAX_RESULT = 20_000;
 
 export interface BrainTurnOpts extends BrainCreds {

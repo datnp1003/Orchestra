@@ -5,7 +5,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { brainToolExecutor, brainSystemPrompt, BRAIN_TOOLS } from '../out/extension/src/logic.js';
+import { brainToolExecutor, brainSystemPrompt, BRAIN_TOOLS, brainTools, projectToolExecutor, repoRefs } from '../out/extension/src/logic.js';
+import { setOrchestraHome } from '../out/prototype/src/home.js';
+import { loadMemory } from '../out/prototype/src/agentMemory.js';
 
 const tmp = (t) => {
   const d = mkdtempSync(path.join(os.tmpdir(), 'orch brain-'));
@@ -78,9 +80,67 @@ test('fleet_dispatch readonly → node plan/planner, kèm câu trả lời worke
   assert.equal((await x('fleet_dispatch', { goal: 'g', scope: ['a'], readonly: 'yes' })).ok, false);
   assert.equal(calls.length, 2, 'readonly sai kiểu → không dispatch');
   assert.ok(BRAIN_TOOLS.find((d) => d.name === 'fleet_dispatch').input_schema.properties.readonly.type === 'boolean');
-  const sys = brainSystemPrompt(repo);
-  assert.ok(sys.includes(`REPO: ${path.resolve(repo)}`), 'system prompt có REPO');
+  const sys = brainSystemPrompt({ project: { name: 'P', repos: repoRefs([repo]) }, globalMemory: '' });
+  assert.ok(sys.includes(`- ${path.basename(repo)}: ${path.resolve(repo)}`), 'system prompt có REPOS');
   assert.match(sys, /readonly:true for tasks that only read/);
+});
+
+test('repoRefs: basename, trùng tên → -2', () => {
+  assert.deepEqual(repoRefs(['/a/api', '/b/api', '/c/web']).map((r) => r.name), ['api', 'api-2', 'web']);
+});
+
+test('projectToolExecutor: route theo repo; >1 repo bắt buộc repo; 1 repo mặc định', async (t) => {
+  const A = tmp(t);
+  const B = tmp(t);
+  writeFileSync(path.join(A, 'a.txt'), 'from A');
+  writeFileSync(path.join(B, 'a.txt'), 'from B');
+  const refs = repoRefs([A, B]);
+  const x = projectToolExecutor(refs, { approve: async () => true, projectId: 'p-1' });
+  assert.match((await x('repo_read', { path: 'a.txt', repo: refs[1].name })).content, /from B/);
+  assert.match((await x('repo_read', { path: 'a.txt', repo: refs[0].name })).content, /from A/);
+  const miss = await x('repo_read', { path: 'a.txt' });
+  assert.equal(miss.ok, false);
+  assert.match(miss.content, /repo is required — one of: /);
+  assert.ok(miss.content.includes(refs[1].name));
+  assert.match((await x('repo_read', { path: 'a.txt', repo: 'nope' })).content, /unknown repo "nope"/);
+  const one = projectToolExecutor([refs[0]], { approve: async () => true, projectId: 'p-1' });
+  assert.match((await one('repo_read', { path: 'a.txt' })).content, /from A/, '1 repo → mặc định');
+  const none = projectToolExecutor([], { approve: async () => true, projectId: null });
+  assert.equal((await none('repo_read', { path: 'a.txt' })).ok, false, 'chat global không có repo tool');
+  assert.equal((await x('nope', {})).ok, false);
+  // schema: repo tool có `repo` enum; global chỉ có memory_update
+  const tools = brainTools(refs);
+  assert.deepEqual(tools.find((d) => d.name === 'repo_read').input_schema.properties.repo.enum, refs.map((r) => r.name));
+  assert.ok(tools.some((d) => d.name === 'memory_update'));
+  assert.deepEqual(brainTools(null).map((d) => d.name), ['memory_update']);
+});
+
+test('memory_update: global vs project; project bị chặn ngoài project', async (t) => {
+  setOrchestraHome(tmp(t));
+  const inProj = projectToolExecutor([], { approve: async () => true, projectId: 'p-1' });
+  const global = projectToolExecutor([], { approve: async () => true, projectId: null });
+  assert.ok((await inProj('memory_update', { scope: 'project', action: 'add', text: 'uses pnpm' })).ok);
+  assert.ok((await inProj('memory_update', { scope: 'global', action: 'add', text: 'likes short answers' })).ok);
+  assert.match((await inProj('memory_update', { scope: 'global', action: 'add', text: 'likes short answers' })).content, /no change/);
+  const blocked = await global('memory_update', { scope: 'project', action: 'add', text: 'leak' });
+  assert.equal(blocked.ok, false, 'chat global không ghi project memory');
+  assert.equal((await global('memory_update', { scope: 'x', action: 'add', text: 'y' })).ok, false);
+  assert.match(loadMemory('p-1'), /uses pnpm/);
+  assert.match(loadMemory(null), /likes short answers/);
+  assert.ok(!loadMemory(null).includes('pnpm') && !loadMemory('p-1').includes('leak'));
+});
+
+test('system prompt: chat global chỉ thấy global memory; project thấy cả hai + PROJECT/REPOS', () => {
+  const g = brainSystemPrompt({ globalMemory: '- G1', projectMemory: '- P1' });
+  assert.match(g, /USER\/GLOBAL MEMORY:\n- G1/);
+  assert.ok(!g.includes('P1') && !g.includes('PROJECT MEMORY') && !g.includes('REPOS:'), 'global không thấy project');
+  assert.match(g, /open a chat inside a project/);
+  const p = brainSystemPrompt({ project: { name: 'Shop', repos: repoRefs(['/x/api', '/x/web']) }, globalMemory: '- G1', projectMemory: '- P1' });
+  assert.match(p, /PROJECT: Shop\nREPOS:\n- api: .*api\n- web: .*web/);
+  assert.match(p, /USER\/GLOBAL MEMORY:\n- G1/);
+  assert.match(p, /PROJECT MEMORY \(Shop\):\n- P1/);
+  assert.match(p, /one fleet_dispatch per repo/);
+  assert.match(p, /memory_update/);
 });
 
 test('T2 fleet_merge: approve=false → không merge; true → merge', async (t) => {

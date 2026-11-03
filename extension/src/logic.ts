@@ -9,6 +9,7 @@ import { protoAsset } from '../../prototype/src/paths.js';
 import { mergeBranch } from '../../prototype/src/worktree.js';
 import { globToRegex } from '../../prototype/src/dispatch.js';
 import { t } from '../../prototype/src/i18n/index.js';
+import { renderMemoryBlock, writeMemoryOps, type CallModel, type ScopedOp } from '../../prototype/src/agentMemory.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
@@ -389,9 +390,41 @@ Rules:
 
 // ngôn ngữ do chính user quyết (theo tin nhắn), KHÔNG theo locale UI/i18n
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
-export function brainSystemPrompt(repo: string): string {
-  const kb = recallKB(repo, ['**'], 1500);
-  return BRAIN_SYSTEM_PROMPT + BRAIN_LANGUAGE + `\nREPO: ${path.resolve(repo)}` + (kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '');
+const MEMORY_RULE = `\nMEMORY: save durable facts proactively and silently with memory_update — no permission needed. User preferences/style → scope "global"; project facts (decisions, conventions, architecture, repo roles, recurring pitfalls) → scope "project". One short line per fact; replace outdated entries instead of adding duplicates. Never store secrets or transient task progress.`;
+const PROJECT_RULES = `\n8. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
+const GLOBAL_PROMPT = `You are Orchestra — the coordinating agent of an AI coding fleet. You talk to the user directly.
+This chat is NOT inside a project: you have no repo or worker tools here. Reply BRIEFLY. For code work, ask the user to open a chat inside a project (sidebar → Projects) so you can see its repos.
+Only scope "global" exists for memory_update in this chat.`;
+
+export interface RepoRef {
+  name: string;
+  path: string;
+}
+/** tên repo = basename; trùng → thêm -2, -3… (tên ổn định theo thứ tự repo trong project) */
+export function repoRefs(paths: string[]): RepoRef[] {
+  const seen = new Set<string>();
+  return paths.map((p) => {
+    const base = path.basename(path.resolve(p)) || 'repo';
+    let name = base;
+    for (let n = 2; seen.has(name); n++) name = `${base}-${n}`;
+    seen.add(name);
+    return { name, path: path.resolve(p) };
+  });
+}
+
+/** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
+export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; globalMemory: string; projectMemory?: string }): string {
+  const p = o.project;
+  if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + `\n\n${renderMemoryBlock(o.globalMemory)}`;
+  const budget = Math.floor(1500 / Math.max(p.repos.length, 1));
+  const kb = p.repos.flatMap((r) => {
+    const k = recallKB(r.path, ['**'], budget);
+    return k.injected ? [`[${r.name}]\n${k.injected}`] : [];
+  });
+  return BRAIN_SYSTEM_PROMPT + PROJECT_RULES + MEMORY_RULE + BRAIN_LANGUAGE
+    + `\nPROJECT: ${p.name}\nREPOS:\n${p.repos.map((r) => `- ${r.name}: ${r.path}`).join('\n') || '(none yet — ask the user to add repos on the Project page)'}`
+    + (kb.length ? `\n\nPROJECT KNOWLEDGE (repo KB — use it to determine scope):\n${kb.join('\n\n')}` : '')
+    + `\n\n${renderMemoryBlock(o.globalMemory, { name: p.name, text: o.projectMemory ?? '' })}`;
 }
 
 const strArr = { type: 'array', items: { type: 'string' } };
@@ -409,6 +442,17 @@ export const BRAIN_TOOLS: { name: string; description: string; input_schema: Rec
   { name: 'fleet_merge', description: "Merge a task's branch into main (REQUIRES user approval). The system checks the task + runs tests before asking.", input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'policy_promote', description: 'Move a worker to #1 for a role in the policy (REQUIRES user approval).', input_schema: obj({ role: { type: 'string' }, cli: { type: 'string' } }, ['role', 'cli']) },
 ];
+export const MEMORY_TOOL = {
+  name: 'memory_update',
+  description: 'Update long-term memory (no approval needed). scope global = user preferences/general facts; project = facts about this project. add needs text; replace needs old_text (unique substring of one entry) + text; remove needs old_text.',
+  input_schema: obj({ scope: { type: 'string', enum: ['global', 'project'] }, action: { type: 'string', enum: ['add', 'replace', 'remove'] }, text: { type: 'string' }, old_text: { type: 'string' } }, ['scope', 'action']),
+};
+/** repos = null → chat ngoài project (chỉ memory_update); có project → repo tool nhận thêm `repo` */
+export function brainTools(repos: RepoRef[] | null): typeof BRAIN_TOOLS {
+  if (!repos) return [MEMORY_TOOL];
+  const repo = { type: 'string', description: 'repo name from REPOS (required when the project has more than one repo)', ...(repos.length ? { enum: repos.map((r) => r.name) } : {}) };
+  return [...BRAIN_TOOLS.map((d) => ({ ...d, input_schema: { ...d.input_schema, properties: { ...(d.input_schema.properties as object), repo } } })), MEMORY_TOOL];
+}
 
 export interface BrainToolDeps {
   /** T2: hỏi user — false = từ chối */
@@ -673,6 +717,31 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       default:
         return bad(`unknown tool: ${name}`);
     }
+  };
+}
+
+export interface SessionToolDeps extends BrainToolDeps {
+  /** null = chat ngoài project — memory_update chỉ nhận scope global */
+  projectId: string | null;
+  /** consolidate memory khi vượt budget; thiếu → giữ entry mới nhất vừa budget */
+  callModel?: CallModel;
+}
+/** tool executor của 1 session: route repo tool tới repo theo `repo` + memory_update */
+export function projectToolExecutor(repos: RepoRef[], deps: SessionToolDeps): (name: string, input: unknown) => Promise<ToolOut> {
+  return async (name, raw) => {
+    const { repo, ...i } = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    if (name === 'memory_update') {
+      if (!['global', 'project'].includes(i.scope as string)) return bad('scope must be "global" or "project"');
+      if (!optStr(i.text) || !optStr(i.old_text)) return bad('text/old_text must be strings');
+      const r = await writeMemoryOps(deps.projectId, [i as unknown as ScopedOp], deps.callModel);
+      return r.errors.length ? bad(r.errors.join('; ')) : { ok: true, content: r.applied.length ? 'memory updated' : 'no change (duplicate)' };
+    }
+    if (!BRAIN_TOOLS.some((d) => d.name === name)) return bad(`unknown tool: ${name}`);
+    if (!repos.length) return bad(deps.projectId ? 'this project has no repos yet — ask the user to add one on the Project page' : 'no repo in this chat — ask the user to open a chat inside a project');
+    const names = repos.map((r) => r.name).join(', ');
+    const target = repo === undefined || repo === null || repo === '' ? (repos.length === 1 ? repos[0] : undefined) : repos.find((r) => r.name === repo);
+    if (!target) return bad(repo === undefined || repo === null || repo === '' ? `repo is required — one of: ${names}` : `unknown repo "${String(repo)}" — one of: ${names}`);
+    return brainToolExecutor(target.path, deps)(name, i);
   };
 }
 

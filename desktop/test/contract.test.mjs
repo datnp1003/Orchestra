@@ -1,11 +1,13 @@
 // Unit test contract + settings store — node thường, không Electron
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo } from '../out/desktop/src/main/contract.js';
 import { loadSettings, saveSettings, initLanguage } from '../out/desktop/src/main/settingsStore.js';
 import { setLocale } from '../out/prototype/src/i18n/index.js';
+import { setOrchestraHome, PROJECT_ID_RE } from '../out/prototype/src/home.js';
+import { copyLegacySessions } from '../out/desktop/src/main/chatSessions.js';
 
 // 1. channels unique + đầy đủ
 const chans = Object.values(IPC);
@@ -33,10 +35,19 @@ assert.equal(validateSettings({ routerDefaultModel: 7 }).routerDefaultModel, '')
 const old = validateSettings({ repos: ['C:/a'], activeRepo: 'C:/a', orchestratorWorker: 'claude', orchestratorModel: 'opus', brainModel: 'worker-claude', hooksEnabled: false });
 assert.deepEqual([old.activeRepo, old.brainModel, old.routerDefaultModel, old.hooksEnabled], ['C:/a', '', '', false]);
 assert.ok(chans.includes('models:list'), 'có channel models:list');
-for (const c of ['brain:models', 'chat:new', 'repo:add','chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'router:status', 'chat:sessions', 'chat:open']) {
+for (const c of ['brain:models', 'chat:new', 'chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'router:status', 'chat:sessions', 'chat:open',
+  'projects:list', 'project:create', 'project:addRepo', 'project:removeRepo', 'project:rename', 'project:delete', 'memory:get', 'memory:set']) {
   assert.ok(chans.includes(c), `có channel ${c}`);
 }
-for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import', 'repo:add', 'repo:set-active'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
+// projects: id hợp lệ + unique, repos = hợp repo project, activeRepo kéo về repo còn tồn tại
+const vp = validateSettings({
+  projects: [{ id: 'a-1', name: ' A ', repos: ['C:/a', 'C:/b', 'C:/a'] }, { id: 'a-1', name: 'dup', repos: [] }, { id: '../x', name: 'bad', repos: [] }, { id: 'b-2', name: 'B', repos: ['C:/b', 'C:/c'] }],
+  repos: ['C:/zzz'], activeRepo: 'C:/gone',
+});
+assert.deepEqual(vp.projects, [{ id: 'a-1', name: 'A', repos: ['C:/a', 'C:/b'] }, { id: 'b-2', name: 'B', repos: ['C:/b', 'C:/c'] }]);
+assert.deepEqual([vp.repos, vp.activeRepo], [['C:/a', 'C:/b', 'C:/c'], 'C:/a']);
+console.log('✓ validateSettings projects: id regex/unique, repos dẫn xuất, activeRepo hợp lệ');
 assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: có oauth:start + oauth:finish');
 assert.ok(chans.includes('i18n:get'), 'có channel i18n:get');
 // language: settings cũ không có field → fallback (main truyền locale OS), rác → fallback
@@ -64,8 +75,9 @@ console.log('✓ proto-default policy từ desktop/out + extension/out; modelsLi
 
 // 3. settingsStore roundtrip
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'orch-set-'));
+setOrchestraHome(path.join(tmp, 'home')); // migration không được đụng ~/.orchestra thật
 const file = path.join(tmp, 'settings.json');
-const s1 = saveSettings(file, { ...DEFAULT_SETTINGS, repos: ['C:/a', 'C:/b'], activeRepo: 'C:/a' });
+saveSettings(file, { ...DEFAULT_SETTINGS, projects: [{ id: 'p-1', name: 'P', repos: ['C:/a', 'C:/b'] }], activeRepo: 'C:/a' });
 assert.ok(existsSync(file));
 const s2 = loadSettings(file);
 assert.equal(s2.activeRepo, 'C:/a');
@@ -83,8 +95,25 @@ writeFileSync(f2, JSON.stringify({ repos: ['C:/old'] })); // settings cũ chưa 
 assert.deepEqual([initLanguage(f2, 'vi').language, loadSettings(f2).repos], ['vi', ['C:/old']]);
 assert.equal(initLanguage(file, 'vi').language, 'en', 'file hỏng → defaults, không ghi');
 assert.equal(readFileSync(file, 'utf8'), '{broken json');
-rmSync(tmp, { recursive: true, force: true });
 console.log('✓ settingsStore: roundtrip + broken-file fallback + initLanguage');
+
+// migration: settings cũ (chỉ repos) → 1 project / repo, COPY session cũ, idempotent
+const legacy = path.join(tmp, 'svc-a');
+mkdirSync(path.join(legacy, '.orchestra', 'chat'), { recursive: true });
+writeFileSync(path.join(legacy, '.orchestra', 'chat', 's1.jsonl'), '{"role":"user","content":"hi"}\n');
+const f3 = path.join(tmp, 'legacy.json');
+writeFileSync(f3, JSON.stringify({ repos: [legacy, 'C:/nope'], activeRepo: 'C:/nope', language: 'en' }));
+const m1 = loadSettings(f3);
+assert.deepEqual(m1.projects.map((p) => [p.name, p.repos]), [['svc-a', [legacy]], ['nope', ['C:/nope']]]);
+assert.ok(m1.projects.every((p) => PROJECT_ID_RE.test(p.id)) && m1.projects[0].id.startsWith('svc-a-'));
+assert.equal(m1.activeRepo, 'C:/nope', 'giữ activeRepo cũ');
+const copied = path.join(tmp, 'home', 'projects', m1.projects[0].id, 'chat', 's1.jsonl');
+assert.ok(existsSync(copied), 'session cũ được copy vào project');
+assert.ok(existsSync(path.join(legacy, '.orchestra', 'chat', 's1.jsonl')), 'COPY, không move');
+assert.deepEqual(loadSettings(f3).projects, m1.projects, 'idempotent: lần load sau không migrate lại');
+assert.equal(copyLegacySessions(legacy, m1.projects[0].id), 0, 'copy lại → bỏ qua file đã có');
+rmSync(tmp, { recursive: true, force: true });
+console.log('✓ migration: 1 project/repo, copy session cũ, idempotent');
 
 // 4. requireRepo — chặn chạy trong process cwd khi chưa có repo (lỗi theo locale)
 setLocale('vi');

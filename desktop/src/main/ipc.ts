@@ -6,9 +6,12 @@ import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshot, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
-  dispatchTracked, conformanceBadge, modelsList, BRAIN_TOOLS, brainSystemPrompt, brainToolExecutor,
+  dispatchTracked, conformanceBadge, modelsList, brainTools, brainSystemPrompt, projectToolExecutor, repoRefs,
 } from '../../../extension/src/logic.js';
-import { runBrainTurn, listBrainModels, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
+import { runBrainTurn, listBrainModels, callBrainText, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
+import { loadMemory, setMemoryText, reflectMemory, writeMemoryOps, transcriptOf, summarizeOps, BUDGET, type CallModel } from '../../../prototype/src/agentMemory.js';
+import { chatDir } from '../../../prototype/src/home.js';
+import { loadKB } from '../../../prototype/src/memory.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
 import { syncSkills } from '../../../prototype/src/skillsync.js';
 import { runConformance } from '../../../prototype/src/conformance.js';
@@ -19,7 +22,7 @@ import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '
 import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
-import { parseChatSession, listChatSessions, sessionFile, addRepoDir } from './chatSessions.js';
+import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -74,6 +77,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return fn(repo);
   };
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
+  reflectSettingsFile = ctx.settingsFile;
+  reflectStep = (text) => send(EVENTS.CHAT_STEP, { kind: 'memory', text });
   // hỏi user qua modal Electron — pipeline plan approval + tool T2 của brain
   const ask = async (q: string, buttons: [string, string]): Promise<boolean> => {
     ctx.notify(t('desktop.approval.title'), q);
@@ -175,24 +180,83 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     }
   });
   ipcMain.handle(IPC.ROUTER_STATUS, () => ({ running: !!router, port: router?.port ?? null, providers: store.listProviders().length }));
-  ipcMain.handle(IPC.REPO_SET_ACTIVE, (_e, repo: string) => {
+
+  // ---- Projects: nhóm repo (microservices) + session + memory riêng; xoá project KHÔNG đụng repo ----
+  const projectOf = (id: unknown) => {
+    const f = findProject(settings().projects, id);
+    if ('error' in f) throw new Error(f.error);
+    if (!f.project) throw new Error(t('desktop.project.notFound', { id: String(id) }));
+    return f.project;
+  };
+  const projectName = (v: unknown) => {
+    const n = typeof v === 'string' ? v.trim() : '';
+    if (!n || n.length > 80) throw new Error(t('desktop.project.badName'));
+    return n;
+  };
+  // sửa project id rồi lưu; activeRepo được validateSettings kéo về repo còn tồn tại
+  const updateProject = (id: unknown, fn: (p: { id: string; name: string; repos: string[] }) => void) => {
     const s = settings();
-    if (!s.repos.includes(repo)) s.repos.push(repo);
-    s.activeRepo = repo;
-    return saveSettings(ctx.settingsFile, s);
-  });
+    const p = projectOf(id);
+    fn(p);
+    return saveSettings(ctx.settingsFile, { ...s, projects: s.projects.map((x) => (x.id === p.id ? p : x)) }).projects.find((x) => x.id === p.id)!;
+  };
+  const guard = async <T>(fn: () => T | Promise<T>) => {
+    try {
+      return { ok: true, ...(await fn()) };
+    } catch (err) {
+      return { ok: false, error: errMsg(err) };
+    }
+  };
+  ipcMain.handle(IPC.PROJECTS_LIST, () => settings().projects);
+  ipcMain.handle(IPC.PROJECT_GET, (_e, p: { id: string }) => guard(() => {
+    const project = projectOf(p?.id);
+    const refs = repoRefs(project.repos);
+    return { project, repos: refs.map((r, i) => ({ ...r, repo: project.repos[i]!, exists: existsSync(r.path), kb: existsSync(r.path) ? loadKB(r.path).map((e) => ({ id: e.id, title: e.title, scope: e.scope, source: e.source, pinned: !!e.pinned })) : [] })) };
+  }));
+  ipcMain.handle(IPC.PROJECT_CREATE, (_e, p: { name: string }) => guard(() => {
+    const s = settings();
+    const project = { id: newProjectId(projectName(p?.name), s.projects.map((x) => x.id)), name: projectName(p?.name), repos: [] };
+    saveSettings(ctx.settingsFile, { ...s, projects: [...s.projects, project] });
+    return { project };
+  }));
   // path do main chọn qua dialog — renderer không gửi path
-  ipcMain.handle(IPC.REPO_ADD, async () => {
+  ipcMain.handle(IPC.PROJECT_ADD_REPO, (_e, p: { id: string }) => guard(async () => {
+    projectOf(p?.id);
     const w = ctx.win();
     const opts = { properties: ['openDirectory' as const] };
     const pick = await (w ? dialog.showOpenDialog(w, opts) : dialog.showOpenDialog(opts));
-    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
+    if (pick.canceled || !pick.filePaths[0]) return { canceled: true };
+    const r = addRepoDir(projectOf(p.id).repos, pick.filePaths[0]);
+    if (!r.ok) throw new Error(r.error);
+    return { repo: r.repo, project: updateProject(p.id, (x) => { x.repos = r.repos; }) };
+  }));
+  ipcMain.handle(IPC.PROJECT_REMOVE_REPO, (_e, p: { id: string; repo: string }) => guard(() =>
+    ({ project: updateProject(p?.id, (x) => { x.repos = x.repos.filter((r) => r !== p.repo); }) })));
+  ipcMain.handle(IPC.PROJECT_RENAME, (_e, p: { id: string; name: string }) => guard(() =>
+    ({ project: updateProject(p?.id, (x) => { x.name = projectName(p.name); }) })));
+  ipcMain.handle(IPC.PROJECT_DELETE, (_e, p: { id: string }) => guard(() => {
+    const project = projectOf(p?.id);
+    if (chat.projectId === project.id) {
+      if (chatBusy) throw new Error(t('desktop.chat.err.busyOpen'));
+      resetChat();
+    }
     const s = settings();
-    const r = addRepoDir(s.repos, pick.filePaths[0]);
-    if (!r.ok) return r;
-    saveSettings(ctx.settingsFile, { ...s, repos: r.repos, activeRepo: s.activeRepo || r.repo });
-    return { ok: true, repo: r.repo };
-  });
+    saveSettings(ctx.settingsFile, { ...s, projects: s.projects.filter((x) => x.id !== project.id) });
+    deleteProjectData(project.id); // chỉ ~/.orchestra/projects/<id>
+    return {};
+  }));
+  ipcMain.handle(IPC.MEMORY_GET, (_e, p: { projectId: string | null }) => guard(() => {
+    const id = p?.projectId ? projectOf(p.projectId).id : null;
+    const text = loadMemory(id).trimEnd();
+    return { text, used: text.length, budget: BUDGET[id ? 'project' : 'global'] };
+  }));
+  ipcMain.handle(IPC.MEMORY_SET, (_e, p: { projectId: string | null; text: string }) => guard(() => {
+    const id = p?.projectId ? projectOf(p.projectId).id : null;
+    if (typeof p?.text !== 'string') throw new Error(t('desktop.memory.badText'));
+    const r = setMemoryText(id, p.text);
+    if (!r.ok) throw new Error(r.error);
+    return { text: r.text, used: r.used, budget: r.budget };
+  }));
 
   ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
   ipcMain.handle(IPC.TASKS_LIST, (_e, p?: { limit?: number }) => withRepo((repo) => tasksSnapshot(repo, p?.limit), () => []));
@@ -276,18 +340,25 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     };
     try {
       const s = settings();
-      // repo cố định theo session: hội thoại mới chưa có repo → lấy activeRepo lúc gửi lượt đầu
-      const repo = requireRepo(conv.repo ? { activeRepo: conv.repo, repos: [] } : s);
-      conv.repo = repo;
+      // project cố định theo session (null = chat ngoài project: chỉ global memory, không repo tool)
+      const project = conv.projectId ? projectOf(conv.projectId) : null;
+      const refs = project ? repoRefs(project.repos) : null;
+      const callModel = modelCaller(creds, s.brainModel);
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
         userText: p.text,
         model: s.brainModel,
-        system: brainSystemPrompt(repo),
-        tools: BRAIN_TOOLS,
+        system: brainSystemPrompt({
+          project: project && refs ? { name: project.name, repos: refs } : undefined,
+          globalMemory: loadMemory(null),
+          projectMemory: project ? loadMemory(project.id) : undefined,
+        }),
+        tools: brainTools(refs),
         signal: ac.signal,
-        execTool: brainToolExecutor(repo, {
+        execTool: projectToolExecutor(refs ?? [], {
+          projectId: project?.id ?? null,
+          callModel,
           approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),
           askUser: askContinue,
           hooksEnabled: s.hooksEnabled,
@@ -300,9 +371,14 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         }),
         onStep: (step) => send(EVENTS.CHAT_STEP, step),
       });
-      persistChat(repo, conv, r.history.slice(conv.history.length));
+      const fresh = r.history.slice(conv.history.length);
+      persistChat(conv, fresh);
       conv.history = r.history;
+      conv.userTurns++;
       notify({ kind: 'orch', text: r.text || t('desktop.chat.noReply') });
+      // reflection nền: sau lượt có dispatch/pipeline/merge hoặc mỗi 4 lượt user — không chặn chat
+      const heavy = fresh.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use' && HEAVY_TOOLS.has(b.name)));
+      if (heavy || conv.userTurns >= 4) void reflect(conv);
       return { ok: true };
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
@@ -316,28 +392,33 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { ok: !!chatAbort };
   });
   // session = 1 file jsonl; mở lại → lượt sau append tiếp vào file đó
-  ipcMain.handle(IPC.CHAT_SESSIONS, () =>
-    listChatSessions(settings().repos).map((x) => ({ ...x, active: x.id === chat.startedAt && x.repo === chat.repo })));
-  ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { repo: string; id: string }) => {
-    if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
+  ipcMain.handle(IPC.CHAT_SESSIONS, () => chatSessionsView(settings().projects, { projectId: chat.projectId, id: chat.startedAt }));
+  // Dashboard/Settings theo session: activeRepo = repo đầu của project đang mở
+  const followProject = (project: { repos: string[] } | null) => {
     const s = settings();
-    const sf = sessionFile(s.repos, p?.repo, p?.id);
+    if (project?.repos[0] && project.repos[0] !== s.activeRepo) saveSettings(ctx.settingsFile, { ...s, activeRepo: project.repos[0] });
+  };
+  ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { projectId: string | null; id: string }) => {
+    if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
+    const sf = sessionFile(settings().projects, p?.projectId, p?.id);
     if ('error' in sf) return { ok: false, error: sf.error };
-    if (!existsSync(sf.file)) return { ok: false, error: t('desktop.chat.err.noSession', { id: p.id }) };
+    if (!existsSync(sf.file)) return { ok: false, error: t('desktop.chat.err.noSession', { id: String(p.id) }) };
     const { history, messages } = parseChatSession(readFileSync(sf.file, 'utf8'));
-    chat = { history, startedAt: p.id, repo: p.repo };
-    saveSettings(ctx.settingsFile, { ...s, activeRepo: p.repo }); // Dashboard/Settings theo session
-    return { ok: true, messages, repo: p.repo };
+    const projectId = sf.project?.id ?? null;
+    if (chat.startedAt !== p.id || chat.projectId !== projectId) void reflect(chat); // flush session cũ
+    // ponytail: reflectedUpTo chỉ trong RAM — mở lại session cũ coi như đã reflect hết (không quét lại lịch sử)
+    chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0 };
+    followProject(sf.project);
+    return { ok: true, messages, projectId, projectName: sf.project?.name ?? null };
   });
-  ipcMain.handle(IPC.CHAT_NEW, (_e, p?: { repo?: string }) => {
+  ipcMain.handle(IPC.CHAT_NEW, (_e, p?: { projectId?: string | null }) => {
     if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
-    const s = settings();
-    const repo = p?.repo ?? s.activeRepo;
-    if (p?.repo !== undefined && !s.repos.includes(p.repo)) return { ok: false, error: t('desktop.repo.notAllowed', { repo: String(repo) }) };
-    resetChat();
-    chat.repo = repo;
-    if (repo !== s.activeRepo) saveSettings(ctx.settingsFile, { ...s, activeRepo: repo });
-    return { ok: true, repo };
+    const f = findProject(settings().projects, p?.projectId);
+    if ('error' in f) return { ok: false, error: f.error };
+    void reflect(chat);
+    resetChat(f.project?.id ?? null);
+    followProject(f.project);
+    return { ok: true, projectId: f.project?.id ?? null, projectName: f.project?.name ?? null };
   });
   ipcMain.handle(IPC.BRAIN_MODELS, async () => {
     const creds = routerCreds();
@@ -379,19 +460,53 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
 const oauthPending = new Map<string, { verifier: string; state: string }>();
 
 // hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
-// repo: cố định cho cả session ('' = chưa gửi lượt nào → lấy activeRepo lúc gửi)
-let chat: { history: Msg[]; startedAt: string; repo: string } = { history: [], startedAt: '', repo: '' };
+// projectId: cố định cho cả session (null = chat ngoài project)
+// reflectedUpTo/userTurns: memory reflection — history[reflectedUpTo..] chưa reflect, userTurns = lượt user từ lần reflect trước
+interface Conv { history: Msg[]; startedAt: string; projectId: string | null; reflectedUpTo: number; userTurns: number }
+let chat: Conv = { history: [], startedAt: '', projectId: null, reflectedUpTo: 0, userTurns: 0 };
 let chatBusy = false;
 let chatAbort: AbortController | null = null; // lượt đang chạy — chat:cancel abort
-const resetChat = () => {
-  chat = { history: [], startedAt: '', repo: '' };
+const resetChat = (projectId: string | null = chat.projectId) => {
+  chat = { history: [], startedAt: '', projectId, reflectedUpTo: 0, userTurns: 0 };
 };
 
-/** append message mới vào <repo>/.orchestra/chat/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */
-function persistChat(repo: string, conv: typeof chat, msgs: Msg[]): void {
+const HEAVY_TOOLS = new Set(['fleet_dispatch', 'fleet_pipeline', 'fleet_merge']);
+const modelCaller = (creds: BrainCreds, model: string): CallModel => (system, user) => callBrainText({ ...creds, model }, system, user);
+let reflectSettingsFile = '';
+let reflectStep: (text: string) => void = () => {};
+/** memory reflection nền cho phần hội thoại chưa reflect — lỗi chỉ log; step chỉ hiện nếu session còn đang mở */
+async function reflect(conv: Conv): Promise<void> {
+  const from = conv.reflectedUpTo;
+  const msgs = conv.history.slice(from);
+  const s = loadSettings(reflectSettingsFile);
+  const creds = routerCreds();
+  if (!msgs.length || !s.brainModel || !creds) return;
+  conv.reflectedUpTo = conv.history.length;
+  conv.userTurns = 0;
+  try {
+    const project = conv.projectId ? s.projects.find((p) => p.id === conv.projectId) : undefined;
+    if (conv.projectId && !project) return; // project đã bị xoá
+    const callModel = modelCaller(creds, s.brainModel);
+    const ops = await reflectMemory({
+      callModel,
+      global: loadMemory(null),
+      project: project ? { name: project.name, text: loadMemory(project.id) } : undefined,
+      transcript: transcriptOf(msgs),
+    });
+    const r = await writeMemoryOps(project?.id ?? null, ops, callModel);
+    if (r.errors.length) console.log('[memory] reflection ops skipped:', r.errors.join('; '));
+    if (r.applied.length && chat === conv) reflectStep(t('desktop.memory.step', { summary: summarizeOps(r.applied) }));
+  } catch (err) {
+    conv.reflectedUpTo = Math.min(conv.reflectedUpTo, from); // lần sau thử lại
+    console.log('[memory] reflection failed:', errMsg(err));
+  }
+}
+
+/** append message mới vào ~/.orchestra/{projects/<id>/chat,chats}/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */
+function persistChat(conv: Conv, msgs: Msg[]): void {
   try {
     conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
-    const dir = path.join(repo, '.orchestra', 'chat');
+    const dir = chatDir(conv.projectId);
     mkdirSync(dir, { recursive: true });
     const at = new Date().toISOString();
     appendFileSync(path.join(dir, `${conv.startedAt}.jsonl`), msgs.map((m) => JSON.stringify({ at, ...m })).join('\n') + '\n', 'utf8');

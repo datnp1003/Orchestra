@@ -59,19 +59,18 @@ function modelOptions(worker, cur, defLabel) {
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
-// repo của session đang mở ('' = hội thoại mới chưa gán → main dùng activeRepo lúc gửi)
-let CHAT_REPO = '';
-const chatRepo = () => CHAT_REPO || SETTINGS?.activeRepo || '';
+// session đang mở: projectId null = chat ngoài project (chỉ global memory)
+let CHAT = { projectId: null, projectName: '' };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
 
-// repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
+// project/repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
 function renderRepo() {
-  const r = chatRepo();
-  $('#stRepo').textContent = 'repo: ' + (baseName(r) || `(${t('desktop.common.notSelected')})`);
+  const r = CHAT.projectId ? SETTINGS?.activeRepo || '' : '';
+  $('#stRepo').textContent = CHAT.projectId ? `${CHAT.projectName} · repo: ${baseName(r) || '—'}` : t('desktop.chat.global');
   $('#stRepo').title = r;
   const onChat = !location.hash || location.hash.startsWith('#/chat');
-  $('#pageRepo').textContent = onChat ? baseName(r) : '';
+  $('#pageRepo').textContent = onChat ? CHAT.projectName || t('desktop.chat.global') : '';
   $('#pageRepo').title = onChat ? r : '';
 }
 
@@ -104,16 +103,39 @@ const ago = (iso) => {
   return s < 60 ? t('desktop.time.now') : s < 3600 ? t('desktop.time.minutes', { n: Math.floor(s / 60) })
     : s < 86400 ? t('desktop.time.hours', { n: Math.floor(s / 3600) }) : t('desktop.time.days', { n: Math.floor(s / 86400) });
 };
-async function loadSessions() {
-  const box = $('#sideSessionList');
-  const list = await api.invoke('chat:sessions');
-  box.innerHTML = list.map((x) => `
-    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-repo="${esc(x.repo)}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
+// collapsed project groups — chỉ là trạng thái UI, lưu localStorage
+const COLLAPSED = new Set(JSON.parse(localStorage.getItem('orchestra.collapsed') || '[]'));
+const sessionItem = (x, projectId) => `
+    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-project="${esc(projectId ?? '')}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
       <span class="session-title">${esc(x.title)}</span>
       <span class="session-time">${esc(ago(x.updatedAt))}</span>
-      <span class="session-repo" title="${esc(x.repo)}">${esc(x.repoName)}</span>
-    </div>`).join('') || `<div class="side-empty">${esc(t('desktop.sessions.empty'))}</div>`;
-  box.querySelectorAll('[data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.repo, el.dataset.session); });
+    </div>`;
+const emptyLine = (key) => `<div class="side-empty">${esc(t(key))}</div>`;
+async function loadSessions() {
+  const v = await api.invoke('chat:sessions');
+  const curProject = location.hash.startsWith('#/project/') ? decodeURIComponent(location.hash.slice('#/project/'.length)) : '';
+  $('#sideProjects').innerHTML = v.projects.map((p) => `
+    <div class="proj" data-proj="${esc(p.id)}">
+      <div class="proj-head">
+        <button class="proj-toggle" data-toggle="${esc(p.id)}">${COLLAPSED.has(p.id) ? '▶' : '▼'}</button>
+        <span class="proj-name ${p.id === curProject ? 'active' : ''}" data-open-project="${esc(p.id)}" title="${esc(p.name)}">${esc(p.name)}</span>
+        <span class="proj-badge" title="${esc(p.repos.join('\n'))}">${esc(t('desktop.projects.repoCount', { n: p.repos.length }))}</span>
+        <button class="side-plus" data-new-in="${esc(p.id)}" title="${esc(t('desktop.projects.newChatIn', { name: p.name }))}">＋</button>
+      </div>
+      <div class="proj-sessions" ${COLLAPSED.has(p.id) ? 'hidden' : ''}>${p.sessions.map((x) => sessionItem(x, p.id)).join('') || emptyLine('desktop.sessions.empty')}</div>
+    </div>`).join('') || emptyLine('desktop.projects.empty');
+  $('#sideChats').innerHTML = v.chats.map((x) => sessionItem(x, null)).join('') || emptyLine('desktop.sessions.empty');
+  document.querySelectorAll('#sideLists [data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.project || null, el.dataset.session); });
+  document.querySelectorAll('#sideLists [data-new-in]').forEach((el) => { el.onclick = () => startChat(el.dataset.newIn); });
+  document.querySelectorAll('#sideLists [data-open-project]').forEach((el) => { el.onclick = () => { location.hash = '#/project/' + encodeURIComponent(el.dataset.openProject); }; });
+  document.querySelectorAll('#sideLists [data-toggle]').forEach((el) => {
+    el.onclick = () => {
+      const id = el.dataset.toggle;
+      if (!COLLAPSED.delete(id)) COLLAPSED.add(id);
+      localStorage.setItem('orchestra.collapsed', JSON.stringify([...COLLAPSED]));
+      loadSessions();
+    };
+  });
 }
 let openedMsgs = null; // tin nhắn của session vừa mở — renderChat vẽ 1 lần
 const showChat = () => {
@@ -121,50 +143,42 @@ const showChat = () => {
   else location.hash = '#/chat';
   loadSessions();
 };
-async function openSession(repo, id) {
-  const r = await api.invoke('chat:open', { repo, id });
+async function openSession(projectId, id) {
+  const r = await api.invoke('chat:open', { projectId, id });
   if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = r.messages;
-  CHAT_REPO = r.repo;
-  await loadSettings(); // activeRepo theo session
+  CHAT = { projectId: r.projectId, projectName: r.projectName || '' };
+  await loadSettings(); // activeRepo theo project của session
   showChat();
 }
-async function startChat(repo) {
-  $('#repoPick').hidden = true;
-  const r = await api.invoke('chat:new', repo ? { repo } : {});
+async function startChat(projectId) {
+  const r = await api.invoke('chat:new', { projectId: projectId ?? null });
   if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = null;
-  CHAT_REPO = r.repo;
+  CHAT = { projectId: r.projectId, projectName: r.projectName || '' };
   await loadSettings();
   showChat();
 }
-// main mở dialog chọn thư mục; chỉ nhận folder có .git
-async function addRepo() {
-  const r = await api.invoke('repo:add');
-  if (r.error) alert('✗ ' + r.error);
-  if (r.ok) await loadSettings();
-  return r.ok ? r.repo : '';
-}
-// 1 repo → vào thẳng; ≥2 → chooser dưới nút (mặc định = activeRepo); 0 → chỉ "Thêm repo…"
-function newChat() {
-  const repos = SETTINGS?.repos || [];
-  if (repos.length === 1) return startChat(repos[0]);
-  const box = $('#repoPick');
-  if (!box.hidden) { box.hidden = true; return; }
-  box.title = t('desktop.repo.pickTitle');
-  box.innerHTML = repos.map((r) => `<button data-pick="${esc(r)}" title="${esc(r)}" class="${r === SETTINGS.activeRepo ? 'cur' : ''}">${esc(baseName(r))}</button>`).join('')
-    + `<button data-add>${esc(t('desktop.repo.add'))}</button>`;
-  box.querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => startChat(b.dataset.pick); });
-  box.querySelector('[data-add]').onclick = async () => {
-    const r = await addRepo();
-    if (r) startChat(r);
-  };
-  box.hidden = false;
-  (box.querySelector('.cur') || box.firstElementChild).focus();
-}
+// tạo project: ô nhập ngay dưới header (Electron không có prompt())
+$('#newProject').onclick = () => {
+  const box = $('#newProjectName');
+  box.hidden = !box.hidden;
+  if (!box.hidden) box.focus();
+};
+$('#newProjectName').addEventListener('keydown', async (e) => {
+  if (e.key === 'Escape') { e.target.hidden = true; return; }
+  if (e.key !== 'Enter' || !e.target.value.trim()) return;
+  const r = await api.invoke('project:create', { name: e.target.value });
+  if (!r.ok) return alert('✗ ' + r.error);
+  e.target.value = '';
+  e.target.hidden = true;
+  await loadSettings();
+  location.hash = '#/project/' + encodeURIComponent(r.project.id);
+  loadSessions();
+});
 
 // ---------- chrome clicks ----------
-document.getElementById('newChat').onclick = newChat;
+document.getElementById('newChat').onclick = () => startChat(null);
 document.getElementById('btnSettings').onclick = () => {
   settingsTab = 'chung';
   if (!location.hash.includes('#/settings')) location.hash = '#/settings';
@@ -173,12 +187,11 @@ $('#fleetPill').onclick = () => { location.hash = '#/dashboard'; route(); };
 // đổi model Orchestra → lưu ngay (main reset hội thoại)
 $('#cbModel').addEventListener('change', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
-  CHAT_REPO = '';
   renderChrome();
   if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
   loadSessions();
 });
-$('#cbNew').addEventListener('click', newChat);
+$('#cbNew').addEventListener('click', () => startChat(CHAT.projectId)); // chat mới cùng project
 
 function logLine(s) {
   const el = $('#log');
@@ -211,7 +224,6 @@ async function renderChat() {
     input.style.height = 'auto';
     add('user', text);
     add('orch pending', t('desktop.chat.pending'));
-    CHAT_REPO ||= chatRepo(); // main gán repo cho session ở lượt đầu = activeRepo
     const stop = $('#chatStop');
     stop.hidden = false;
     try {
@@ -241,6 +253,7 @@ async function renderChat() {
   };
   let progressBox = null; // tiến độ worker của tool call hiện tại — giữ 5 dòng cuối
   on('chat:step', (s) => {
+    if (!$('#chatMsgs')) return; // memory step nền có thể tới khi đã rời Chat
     if (s.kind === 'progress') {
       progressBox ??= addStep('progress', '');
       const line = document.createElement('div');
@@ -255,6 +268,7 @@ async function renderChat() {
     if (s.kind === 'tool_call') addStep('step', `⚙ ${s.name} ${JSON.stringify(s.input ?? {}).slice(0, 160)}`);
     else if (s.kind === 'tool_result') addStep(s.ok ? 'step' : 'step err', `${s.ok ? '✓' : '✗'} ${s.name}: ${s.preview}`);
     else if (s.kind === 'text') addStep('orch', s.text);
+    else if (s.kind === 'memory') addStep('step', s.text);
     else addStep('step err', `✗ ${s.text}`);
   });
   on('chat:message', (m) => {
@@ -393,9 +407,6 @@ async function renderSettings() {
       <div class="card">
         <label>${esc(t('desktop.set.language'))}</label>
         <select id="sLang">${['en', 'vi'].map((l) => `<option value="${l}" ${s.language === l ? 'selected' : ''}>${esc(t('desktop.lang.' + l))}</option>`).join('')}</select>
-        <label>${esc(t('desktop.set.repos'))}</label>
-        <textarea id="sRepos" rows="4" class="mono">${esc(s.repos.join('\n'))}</textarea>
-        <button class="secondary" id="sAddRepo">${esc(t('desktop.repo.add'))}</button>
         <label>${esc(t('desktop.set.templatesDir'))}</label><input id="sTpl" value="${esc(s.templatesDir)}" />
         <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> ${esc(t('desktop.set.autoApprove'))}</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
@@ -405,7 +416,8 @@ async function renderSettings() {
           <button class="secondary" id="sUpdate">${esc(t('desktop.set.checkUpdate'))}</button>
           <span id="sUpdateOut" class="dim"></span>
         </div>
-      </div>`)}
+      </div>
+      <div class="card" id="globalMemory"></div>`)}
     ${pane('workers', `
       <div class="card">
         <h3>Worker CLI (npm)</h3>
@@ -468,6 +480,7 @@ async function renderSettings() {
       </div>`)}
     ${pane('matrix', '<div id="matrixBox"></div>')}`;
   renderMatrix($('#matrixBox'));
+  renderMemoryEditor($('#globalMemory'), null);
   // chuyển tab
   page.querySelectorAll('.tab').forEach((tb) => {
     tb.onclick = () => {
@@ -480,23 +493,15 @@ async function renderSettings() {
   $('#sSave').onclick = async () => {
     const next = {
       ...s,
-      repos: $('#sRepos').value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
       templatesDir: $('#sTpl').value.trim(),
       autoApprovePlan: $('#sAuto').checked,
       hooksEnabled: $('#sHooks').checked,
       skillSync: $('#sSync').checked,
     };
     await api.invoke('settings:set', next);
-    if (!next.activeRepo && next.repos[0]) await api.invoke('repo:set-active', next.repos[0]);
     await loadSettings();
     alert(t('desktop.common.saved'));
     route();
-  };
-  // repo:add đã lưu vào settings — chỉ thêm vào textarea, giữ phần user đang sửa dở
-  $('#sAddRepo').onclick = async () => {
-    const r = await addRepo();
-    const box = $('#sRepos');
-    if (r && !box.value.split(/\r?\n/).map((x) => x.trim()).includes(r)) box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + r;
   };
   // đổi ngôn ngữ → lưu ngay (main setLocale) + vẽ lại, không restart
   $('#sLang').onchange = async (e) => {
@@ -675,6 +680,79 @@ async function renderSettings() {
   on('install:log', (line) => logLine(line));
 }
 
+// ---------- Memory editor (Project page + Settings › General) ----------
+async function renderMemoryEditor(box, projectId) {
+  const m = await api.invoke('memory:get', { projectId });
+  box.innerHTML = `<h3>${esc(t(projectId ? 'desktop.memory.project' : 'desktop.memory.global'))}</h3>
+    <div class="dim">${esc(t('desktop.memory.hint'))}</div>
+    <textarea class="memory-box" rows="10"></textarea>
+    <div class="row"><button data-mem-save>${esc(t('desktop.common.save'))}</button><span class="dim" data-mem-out></span></div>`;
+  const area = box.querySelector('textarea');
+  const out = box.querySelector('[data-mem-out]');
+  if (!m.ok) { out.textContent = '✗ ' + m.error; return; }
+  const used = (n) => { out.textContent = t('desktop.memory.used', { used: n, budget: m.budget }); };
+  area.value = m.text;
+  used(m.used);
+  area.addEventListener('input', () => used(area.value.length));
+  box.querySelector('[data-mem-save]').onclick = async () => {
+    const r = await api.invoke('memory:set', { projectId, text: area.value });
+    if (!r.ok) { out.textContent = '✗ ' + r.error; return; }
+    area.value = r.text; // main đã redact secret
+    used(r.used);
+    out.textContent += ' · ' + t('desktop.common.saved');
+  };
+}
+
+// ---------- Project (#/project/<id>): tên, repos, memory, KB read-only ----------
+async function renderProject(id) {
+  composerWrap.hidden = true;
+  page.classList.remove('fill');
+  const d = await api.invoke('project:get', { id });
+  if (!d.ok) { page.innerHTML = `<div class="card err">${esc(d.error)}</div>`; return; }
+  const p = d.project;
+  $('#pageTitle').textContent = `${t('desktop.project.page')} — ${p.name}`;
+  const kbTable = (kb) => (kb.length
+    ? `<table><thead><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th></th></tr></thead><tbody>${kb.map((e) => `<tr><td class="mono">${esc(e.id)}</td><td>${esc(e.title)}</td><td class="mono">${esc(e.scope.join(', '))}</td><td>${esc(e.source)}</td><td>${e.pinned ? '📌' : ''}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="dim">${esc(t('desktop.mx.noKb'))}</div>`);
+  page.innerHTML = `
+    <h2>${esc(p.name)}</h2>
+    <div class="card">
+      <label>${esc(t('desktop.project.name'))}</label>
+      <div class="row"><input id="pjName" value="${esc(p.name)}" maxlength="80" /><button class="secondary" id="pjRename">${esc(t('desktop.project.rename'))}</button></div>
+    </div>
+    <div class="card"><h3>${esc(t('desktop.project.repos'))}</h3>
+      ${d.repos.length ? `<table><tbody>${d.repos.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="mono">${esc(r.path)}${r.exists ? '' : ` <span class="err">${esc(t('desktop.project.missing'))}</span>`}</td>
+        <td><button class="secondary" data-rm-repo="${esc(r.repo)}" title="${esc(t('desktop.project.removeRepoTitle'))}">${esc(t('desktop.project.removeRepo'))}</button></td></tr>`).join('')}</tbody></table>`
+        : `<div class="dim">${esc(t('desktop.project.noRepos'))}</div>`}
+      <div class="row"><button class="secondary" id="pjAddRepo">${esc(t('desktop.repo.add'))}</button><button class="secondary" id="pjNewChat">${esc(t('desktop.projects.newChatIn', { name: p.name }))}</button></div>
+    </div>
+    <div class="card" id="pjMemory"></div>
+    ${d.repos.filter((r) => r.exists).map((r) => `<div class="card"><h3>${esc(t('desktop.project.kbTitle', { name: r.name }))}</h3>${kbTable(r.kb)}</div>`).join('')}
+    <div class="card"><button class="secondary" id="pjDelete">${esc(t('desktop.project.delete'))}</button></div>`;
+  renderMemoryEditor($('#pjMemory'), id);
+  const after = async (r) => {
+    if (!r.ok) return alert('✗ ' + r.error);
+    if (r.canceled) return;
+    if (CHAT.projectId === id && r.project) CHAT.projectName = r.project.name;
+    await loadSettings();
+    loadSessions();
+    renderProject(id);
+  };
+  $('#pjRename').onclick = async () => after(await api.invoke('project:rename', { id, name: $('#pjName').value }));
+  $('#pjAddRepo').onclick = async () => after(await api.invoke('project:addRepo', { id }));
+  page.querySelectorAll('[data-rm-repo]').forEach((b) => { b.onclick = async () => after(await api.invoke('project:removeRepo', { id, repo: b.dataset.rmRepo })); });
+  $('#pjNewChat').onclick = () => startChat(id);
+  $('#pjDelete').onclick = async () => {
+    if (!confirm(t('desktop.project.confirmDelete', { name: p.name }))) return;
+    const r = await api.invoke('project:delete', { id });
+    if (!r.ok) return alert('✗ ' + r.error);
+    if (CHAT.projectId === id) CHAT = { projectId: null, projectName: '' };
+    await loadSettings();
+    location.hash = '#/chat';
+    loadSessions();
+  };
+}
+
 // ---------- Terminal (node-pty) ----------
 let termSession = null;
 async function renderTerminal() {
@@ -738,6 +816,10 @@ function route() {
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
   $('#pageTitle').textContent = TITLES[hash]?.() || 'Orchestra';
   renderRepo();
+  if (hash.startsWith('project/')) {
+    loadSessions(); // highlight project trong sidebar
+    return renderProject(decodeURIComponent(hash.slice('project/'.length)));
+  }
   (ROUTES[hash] || renderChat)();
 }
 on('nav', (p) => { location.hash = '#/' + p; route(); });
@@ -754,7 +836,8 @@ window.addEventListener('hashchange', route);
 // Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
-  const settings = { activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true, language: 'en' };
+  const project = { id: 'payments-a1b2', name: 'Payments', repos };
+  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, skillSync: true, language: 'en' };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },
@@ -778,9 +861,11 @@ function devStub() {
     if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true },
       { id: 'cc', kind: 'oauth-anthropic', baseUrl: 'https://api.anthropic.com', formats: ['messages'], enabled: true, hasKey: false, riskAcknowledged: true, models: ['claude-sonnet-5-5'], oauthStatus: 'none', expiresAt: null }];
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
-    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Add payment gateway X', updatedAt: new Date().toISOString(), turns: 2, active: false, repo: repos[0], repoName: 'payment-svc' }];
-    if (ch === 'chat:open') return { ok: true, repo: p.repo, messages: [{ role: 'user', text: 'Add payment gateway X' }, { role: 'orch', text: '(stub) session opened' }] };
-    if (ch === 'chat:new') return { ok: true, repo: p.repo ?? settings.activeRepo };
+    if (ch === 'chat:sessions') return { projects: [{ ...project, sessions: [{ id: '2026-11-02T08-00-00-000Z', title: 'Add payment gateway X', updatedAt: new Date().toISOString(), turns: 2, active: false }] }], chats: [] };
+    if (ch === 'chat:open') return { ok: true, projectId: p.projectId, projectName: p.projectId ? project.name : null, messages: [{ role: 'user', text: 'Add payment gateway X' }, { role: 'orch', text: '(stub) session opened' }] };
+    if (ch === 'chat:new') return { ok: true, projectId: p.projectId, projectName: p.projectId ? project.name : null };
+    if (ch === 'project:get') return { ok: true, project, repos: [{ name: 'payment-svc', path: repos[0], repo: repos[0], exists: true, kb: [] }] };
+    if (ch === 'memory:get') return { ok: true, text: '- prefers short answers', used: 22, budget: p.projectId ? 5000 : 3000 };
     if (ch === 'matrix:data') return { source: 'preview', errors: [], minSample: 10, workers: [{ id: 'claude', display: 'Claude Code' }], rows: [{ role: 'coder', cells: [{ cli: 'claude', rank: 1, model: null, n: 0, ema: null }] }], kb: [] };
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) received — running preview outside Electron.' })), 400);
     return { ok: true };

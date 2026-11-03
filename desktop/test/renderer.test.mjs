@@ -43,26 +43,33 @@ for (const l of ['＋ Anthropic API', '＋ OpenAI API', '＋ Anthropic Compatibl
 console.log('✓ Providers tab: password key, quick-add, không còn import/vault/brain:config');
 
 // UI feedback: sessions thay Tasks gần đây; nav gọn; Dashboard ngay trên Cài đặt; Matrix vào Settings
-assert.ok(html.includes('id="sideSessionList"') && js.includes("'chat:sessions'") && js.includes("'chat:open'"), 'sidebar có Sessions');
+assert.ok(js.includes("'chat:sessions'") && js.includes("'chat:open'"), 'sidebar có sessions');
 assert.ok(!html.includes('Tasks gần đây') && !html.includes('sideTaskList') && !js.includes('loadSideTasks'), 'bỏ Tasks gần đây');
 assert.ok(html.includes('data-i18n="desktop.newChat.label"') && !html.includes('Task mới'), 'nút Chat mới');
 assert.ok(!js.includes('data-auth') && !/>Auth</.test(js), 'bỏ nút Auth worker');
 assert.ok(js.includes('desktop.w.authRouter') && js.includes('f.display'), 'worker có tên + dòng auth router');
 assert.ok(!html.includes('href="#/terminal"') && !html.includes('href="#/matrix"'), 'Terminal + Policy Matrix không còn trên nav');
 assert.ok(js.includes("['matrix', 'Policy Matrix']"), 'Policy Matrix là tab Settings');
-const nav = html.slice(html.indexOf('<nav id="nav">'), html.indexOf('</nav>'));
-assert.deepEqual([...nav.matchAll(/data-page="(\w+)"/g)].map((m) => m[1]), ['chat'], 'top nav: chỉ Chat');
+assert.ok(!html.includes('<nav id="nav">'), 'bỏ nav Chat (Chat mới là lối vào)');
 assert.ok(!html.includes('href="#/transcript"'), 'không còn link Transcript');
 const foot = html.slice(html.indexOf('id="sideFooter"'));
 assert.ok(foot.indexOf('href="#/dashboard"') > 0 && foot.indexOf('href="#/dashboard"') < foot.indexOf('id="btnSettings"'), 'Dashboard ngay trên Cài đặt');
-console.log('✓ sidebar: Sessions, Chat mới, nav chỉ Chat, Dashboard trên Cài đặt; Matrix tab; không Auth/Import/Terminal/Transcript');
+console.log('✓ sidebar: Chat mới, Dashboard trên Cài đặt; Matrix tab; không Auth/Import/Terminal/Transcript');
 
-// session theo repo: không còn chọn repo global; item có tag repo; chooser + Thêm repo
-assert.ok(!html.includes('repoSel') && !js.includes('repoSel') && !html.includes('repoLabel') && !js.includes('repoLabel'), 'bỏ #repoSel / #repoLabel');
-assert.ok(js.includes('<span class="session-repo" title="${esc(x.repo)}">${esc(x.repoName)}</span>'), 'session item có tag repo');
-assert.ok(js.includes("api.invoke('chat:open', { repo, id })") && js.includes("api.invoke('chat:new'") && !js.includes("'chat:reset'"), 'chat:open/chat:new theo repo');
-assert.ok(html.includes('id="repoPick"') && html.includes('id="pageRepo"') && js.includes("api.invoke('repo:add')") && js.includes('id="sAddRepo"'), 'chooser repo + Thêm repo');
-console.log('✓ session theo repo: không repoSel/repoLabel, tag repo, chooser, repo:add');
+// Projects: thứ tự sidebar Chat mới → PROJECTS → CHATS → footer; không còn chọn repo / tag repo
+const order = ['id="newChat"', 'id="sideProjects"', 'id="sideChats"', 'id="sideFooter"'].map((s) => html.indexOf(s));
+assert.ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), `thứ tự sidebar: ${order}`);
+assert.ok(html.includes('id="newProject"') && js.includes("'project:create'"), 'header PROJECTS có ＋ → project:create');
+for (const s of ['repoPick', 'repoSel', 'repoLabel', 'session-repo', 'sRepos', 'sAddRepo', "'repo:add'", "'repo:set-active'", 'sideSessionList']) {
+  assert.ok(!html.includes(s) && !js.includes(s), `bỏ ${s}`);
+}
+assert.ok(js.includes("api.invoke('chat:open', { projectId, id })") && js.includes("api.invoke('chat:new', { projectId: projectId ?? null })") && !js.includes("'chat:reset'"), 'chat:open/chat:new theo project');
+assert.ok(js.includes("localStorage.setItem('orchestra.collapsed'") && js.includes('data-new-in=') && js.includes('proj-badge'), 'group project: collapse (localStorage), ＋ chat, badge repo');
+assert.ok(js.includes("'#/project/'") && js.includes('function renderProject') && ['project:get', 'project:rename', 'project:addRepo', 'project:removeRepo', 'project:delete'].every((c) => js.includes(`'${c}'`)), 'trang Project');
+assert.ok(/if \(!confirm\(t\('desktop\.project\.confirmDelete'/.test(js), 'xoá project phải confirm');
+assert.ok(js.includes("renderMemoryEditor($('#globalMemory'), null)") && js.includes("renderMemoryEditor($('#pjMemory'), id)") && js.includes("'memory:set'"), 'memory editor: global (Settings) + project');
+assert.ok(html.includes('id="pageRepo"') && js.includes("t('desktop.chat.global')"), 'header: tên project hoặc Chat');
+console.log('✓ projects: sidebar PROJECTS/CHATS, collapse, trang Project, memory editor; không repoPick/repo tag');
 
 // Transcript là section trong Dashboard; #/transcript cũ → dashboard; top 20 (main giới hạn qua limit)
 const dash = js.slice(js.indexOf('async function renderDashboard'), js.indexOf('// ---------- Transcript'));

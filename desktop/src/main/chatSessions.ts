@@ -1,8 +1,12 @@
-// Session chat — parse <repo>/.orchestra/chat/<id>.jsonl để resume hội thoại brain; mỗi session thuộc 1 repo
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+// Session chat — parse ~/.orchestra/{projects/<id>/chat,chats}/<sessionId>.jsonl để resume hội thoại brain.
+// Mỗi session thuộc 1 project (nhiều repo) hoặc là chat ngoài project (projectId null).
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { Block, Msg } from '../../../prototype/src/brain.js';
+import { chatDir, projectDir } from '../../../prototype/src/home.js';
 import { t } from '../../../prototype/src/i18n/index.js';
+import type { Project } from './contract.js';
 
 export interface ChatView {
   role: 'user' | 'orch' | 'step';
@@ -17,31 +21,81 @@ export interface ChatSession {
 
 export const SESSION_ID_RE = /^[\w.-]+$/;
 
-const chatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
-export const repoName = (repo: string) => repo.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? repo;
+const legacyChatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
 
-/** session của mọi repo (bỏ repo/thư mục không tồn tại), mới nhất trước, top `limit` */
-export function listChatSessions(repos: string[], limit = 30) {
-  const files = repos.flatMap((repo) => {
-    const dir = chatDir(repo);
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
-      const file = path.join(dir, f);
-      return { repo, file, id: f.slice(0, -'.jsonl'.length), updatedAt: statSync(file).mtime.toISOString() };
-    });
+/** session trong 1 thư mục chat, mới nhất trước, top `limit` */
+export function listChatSessions(dir: string, limit = 30) {
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+    const file = path.join(dir, f);
+    return { file, id: f.slice(0, -'.jsonl'.length), updatedAt: statSync(file).mtime.toISOString() };
   }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
   // ponytail: parse cả file của top `limit` mỗi lần list — chậm khi session rất dài → cache theo mtime
-  return files.map(({ repo, file, id, updatedAt }) => {
+  return files.map(({ file, id, updatedAt }) => {
     const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
-    return { id, title, turns, updatedAt, repo, repoName: repoName(repo) };
+    return { id, title, turns, updatedAt };
   });
 }
 
-/** trust boundary chat:open — repo phải nằm trong settings.repos, id không chứa path */
-export function sessionFile(repos: string[], repo: unknown, id: unknown): { file: string } | { error: string } {
-  if (typeof repo !== 'string' || !repos.includes(repo)) return { error: t('desktop.repo.notAllowed', { repo: String(repo) }) };
+/** chat:sessions — nhóm theo project + chat ngoài project; active = session đang mở */
+export function chatSessionsView(projects: Project[], active: { projectId: string | null; id: string }) {
+  const mark = (projectId: string | null) => (x: ReturnType<typeof listChatSessions>[number]) => ({ ...x, active: !!active.id && x.id === active.id && projectId === active.projectId });
+  return {
+    projects: projects.map((p) => ({ id: p.id, name: p.name, repos: p.repos, sessions: listChatSessions(chatDir(p.id)).map(mark(p.id)) })),
+    chats: listChatSessions(chatDir(null)).map(mark(null)),
+  };
+}
+
+/** projectId null/undefined = chat ngoài project; chuỗi phải là project có thật */
+export function findProject(projects: Project[], projectId: unknown): { project: Project | null } | { error: string } {
+  if (projectId === null || projectId === undefined) return { project: null };
+  const p = projects.find((x) => x.id === projectId);
+  return p ? { project: p } : { error: t('desktop.project.notFound', { id: String(projectId) }) };
+}
+
+/** trust boundary chat:open — project phải tồn tại, id không chứa path */
+export function sessionFile(projects: Project[], projectId: unknown, id: unknown): { file: string; project: Project | null } | { error: string } {
+  const f = findProject(projects, projectId);
+  if ('error' in f) return f;
   if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) return { error: t('desktop.chat.err.badSession') };
-  return { file: path.join(chatDir(repo), `${id}.jsonl`) };
+  return { file: path.join(chatDir(f.project?.id ?? null), `${id}.jsonl`), project: f.project };
+}
+
+const slug = (name: string) => name.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/_/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'project';
+export function newProjectId(name: string, taken: string[] = []): string {
+  for (;;) {
+    const id = `${slug(name)}-${randomBytes(2).toString('hex')}`;
+    if (!taken.includes(id)) return id;
+  }
+}
+
+/** settings cũ chưa có projects → 1 project / repo; COPY (không move) session cũ <repo>/.orchestra/chat → project. Lặp lại an toàn. */
+export function migrateRepos(repos: string[]): Project[] {
+  const projects: Project[] = [];
+  for (const repo of repos) {
+    const p = { id: newProjectId(path.basename(repo), projects.map((x) => x.id)), name: path.basename(repo.replace(/[\\/]+$/, '')) || repo, repos: [repo] };
+    projects.push(p);
+    copyLegacySessions(repo, p.id);
+  }
+  return projects;
+}
+export function copyLegacySessions(repo: string, projectId: string): number {
+  const from = legacyChatDir(repo);
+  if (!existsSync(from)) return 0;
+  const to = chatDir(projectId);
+  mkdirSync(to, { recursive: true });
+  let n = 0;
+  for (const f of readdirSync(from).filter((x) => x.endsWith('.jsonl') && SESSION_ID_RE.test(x))) {
+    if (existsSync(path.join(to, f))) continue;
+    copyFileSync(path.join(from, f), path.join(to, f));
+    n++;
+  }
+  return n;
+}
+
+/** xoá dữ liệu Orchestra của project (session + memory) — KHÔNG bao giờ đụng repo */
+export function deleteProjectData(id: string): void {
+  rmSync(projectDir(id), { recursive: true, force: true });
 }
 
 const repoKey = (p: string) => {
