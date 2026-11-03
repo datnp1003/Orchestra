@@ -191,6 +191,20 @@ button.secondary:hover { border-color: var(--accent); background: var(--accent-s
 .m.greet { background: transparent; border: 1px dashed var(--line); color: var(--dim); align-self: stretch; max-width: 100%; }
 .m.step { padding: 1px 4px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); align-self: stretch; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m.step.err { color: var(--err); }
+/* tool call gộp theo lượt: thu gọn mặc định, click mở; mỗi call mở được để xem input + kết quả */
+.m.toolgroup { align-self: stretch; max-width: 100%; padding: 2px 4px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+.m.toolgroup > summary { cursor: pointer; list-style: none; display: flex; gap: 10px; white-space: nowrap; overflow: hidden; }
+.m.toolgroup > summary::before { content: '▸'; color: var(--faint); }
+.m.toolgroup[open] > summary::before { content: '▾'; }
+.m.toolgroup .tg-count { color: var(--fg); flex: none; }
+.m.toolgroup .tg-last { overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
+.m.toolgroup[open] .tg-last { display: none; }
+.tc { margin: 2px 0 0 14px; }
+.tc > summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc.err > summary { color: var(--err); }
+.tc.run > summary { color: var(--accent); }
+.tc pre { margin: 3px 0 6px 12px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; font-size: 10.5px; }
+.tc .tc-res { color: var(--fg); }
 .m.progress { padding: 0 4px 0 18px; display: flex; flex-direction: column; align-self: stretch; max-width: 100%; }
 .m.progress div { font-family: var(--mono); font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #chatStop { margin: 0; padding: 5px 10px; border-radius: 9px; font-size: 11px; }

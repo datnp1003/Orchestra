@@ -69,6 +69,8 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.sessions.empty': 'Chưa có session',
   'desktop.chat.greet': '◆ Orchestra sẵn sàng. Mô tả task — Orchestra tự khảo sát repo và giao việc cho worker.',
   'desktop.chat.pending': '…đang xử lý',
+  'desktop.chat.tools': '{n} tool call',
+  'desktop.chat.toolsErr': '{n} tool call · {e} lỗi',
   'desktop.chat.global': 'Chat',
 
   // ---- projects / memory ----
@@ -112,7 +114,7 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.skills.updated': '✓ đã cập nhật',
   'desktop.skills.new': 'Skill mới',
   'desktop.skills.name': 'Tên (a-z, 0-9, -)',
-  'desktop.skills.description': 'Mô tả (tối đa 300 ký tự)',
+  'desktop.skills.description': 'Mô tả (tối đa 1024 ký tự)',
   'desktop.skills.workers': 'Worker',
   'desktop.skills.body': 'Hướng dẫn (phần thân SKILL.md)',
   'desktop.skills.fromGithub': 'Thêm từ GitHub',

@@ -283,6 +283,59 @@ async function renderChat() {
     return d;
   };
   let progressBox = null; // tiến độ worker của tool call hiện tại — giữ 5 dòng cuối
+  // tool call của 1 lượt gộp vào 1 <details> (mặc định thu gọn, hiện call đang chạy); mỗi call 1 <details> con
+  let toolGroup = null;
+  let lastCall = null;
+  const argSummary = (input) => {
+    const o = input && typeof input === 'object' ? input : {};
+    const v = o.repo ? `${o.repo} · ` : '';
+    const main = o.path ?? o.pattern ?? o.taskId ?? o.goal ?? o.template ?? o.text ?? o.ref ?? '';
+    return (v + String(main)).replace(/\s+/g, ' ').slice(0, 90);
+  };
+  const groupSummary = () => {
+    const n = toolGroup.querySelectorAll('.tc').length;
+    const e = toolGroup.querySelectorAll('.tc.err').length;
+    const sum = toolGroup.querySelector(':scope > summary');
+    sum.querySelector('.tg-count').textContent = e ? t('desktop.chat.toolsErr', { n, e }) : t('desktop.chat.tools', { n });
+    sum.querySelector('.tg-last').textContent = lastCall ? lastCall.querySelector('summary').textContent : '';
+  };
+  const addToolCall = (s) => {
+    if (!toolGroup) {
+      toolGroup = document.createElement('details');
+      toolGroup.className = 'm toolgroup';
+      const sum = document.createElement('summary');
+      const c = document.createElement('span'); c.className = 'tg-count';
+      const l = document.createElement('span'); l.className = 'tg-last';
+      sum.append(c, l);
+      toolGroup.appendChild(sum);
+      $('#chatMsgs').appendChild(toolGroup);
+      const pending = $('#chatMsgs .pending');
+      if (pending) $('#chatMsgs').appendChild(pending);
+    }
+    const d = document.createElement('details');
+    d.className = 'tc run';
+    const sum = document.createElement('summary');
+    sum.textContent = `⚙ ${s.name}  ${argSummary(s.input)}`;
+    const body = document.createElement('pre');
+    body.textContent = JSON.stringify(s.input ?? {}, null, 2);
+    d.append(sum, body);
+    toolGroup.appendChild(d);
+    lastCall = d;
+    groupSummary();
+  };
+  const addToolResult = (s) => {
+    const d = lastCall && lastCall.classList.contains('run') ? lastCall : null;
+    if (!d) return addStep(s.ok ? 'step' : 'step err', `${s.ok ? '✓' : '✗'} ${s.name}: ${s.preview}`);
+    d.classList.remove('run');
+    if (!s.ok) d.classList.add('err');
+    const sum = d.querySelector('summary');
+    sum.textContent = sum.textContent.replace(/^⚙/, s.ok ? '✓' : '✗');
+    const res = document.createElement('pre');
+    res.className = 'tc-res';
+    res.textContent = s.preview ?? '';
+    d.appendChild(res);
+    groupSummary();
+  };
   on('chat:step', (s) => {
     if (!$('#chatMsgs')) return; // memory step nền có thể tới khi đã rời Chat
     if (s.kind === 'progress') {
@@ -296,13 +349,15 @@ async function renderChat() {
       return;
     }
     progressBox = null;
-    if (s.kind === 'tool_call') addStep('step', `⚙ ${s.name} ${JSON.stringify(s.input ?? {}).slice(0, 160)}`);
-    else if (s.kind === 'tool_result') addStep(s.ok ? 'step' : 'step err', `${s.ok ? '✓' : '✗'} ${s.name}: ${s.preview}`);
-    else if (s.kind === 'text') addStep('orch', s.text);
+    if (s.kind === 'tool_call') addToolCall(s);
+    else if (s.kind === 'tool_result') addToolResult(s);
+    else if (s.kind === 'text') { toolGroup = null; addStep('orch', s.text); }
     else if (s.kind === 'memory') addStep('step', s.text);
     else addStep('step err', `✗ ${s.text}`);
   });
   on('chat:message', (m) => {
+    toolGroup = null;
+    lastCall = null;
     const pending = $('#chatMsgs .pending');
     if (pending) pending.remove(); // kể cả 'result' lỗi (vd. chưa chọn repo)
     add(m.kind, m.text);

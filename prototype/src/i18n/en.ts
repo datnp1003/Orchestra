@@ -68,6 +68,8 @@ export const en = {
   'desktop.sessions.empty': 'No sessions yet',
   'desktop.chat.greet': '◆ Orchestra is ready. Describe a task — Orchestra surveys the repo and hands the work to workers.',
   'desktop.chat.pending': '…working',
+  'desktop.chat.tools': '{n} tool calls',
+  'desktop.chat.toolsErr': '{n} tool calls · {e} failed',
   'desktop.chat.global': 'Chat',
 
   // ---- projects / memory ----
@@ -112,7 +114,7 @@ export const en = {
   'desktop.skills.updated': '✓ updated',
   'desktop.skills.new': 'New skill',
   'desktop.skills.name': 'Name (a-z, 0-9, -)',
-  'desktop.skills.description': 'Description (max 300 characters)',
+  'desktop.skills.description': 'Description (max 1024 characters)',
   'desktop.skills.workers': 'Workers',
   'desktop.skills.body': 'Instructions (SKILL.md body)',
   'desktop.skills.fromGithub': 'Add from GitHub',

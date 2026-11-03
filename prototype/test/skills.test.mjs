@@ -58,7 +58,7 @@ test('parseSkillMd: hợp lệ + mặc định workers; lỗi name/description/w
   assert.equal(body, 'Steps for my-skill.');
   assert.throws(() => parseSkillMd('no frontmatter'));
   assert.throws(() => parseSkillMd(md('Bad_Name')));
-  assert.throws(() => parseSkillMd(md('x', 'a'.repeat(301))));
+  assert.throws(() => parseSkillMd(md('x', 'a'.repeat(1025))));
   assert.throws(() => parseSkillMd(md('x', 'd', 'workers: [gemini]\n')));
 });
 
