@@ -10,7 +10,7 @@ import {
 } from '../../../extension/src/logic.js';
 import { runBrainTurn, listBrainModels, callBrainText, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
 import { loadMemory, setMemoryText, reflectMemory, writeMemoryOps, transcriptOf, summarizeOps, BUDGET, type CallModel } from '../../../prototype/src/agentMemory.js';
-import { chatDir } from '../../../prototype/src/home.js';
+import { chatDir, ensureWorkspace } from '../../../prototype/src/home.js';
 import { loadKB } from '../../../prototype/src/memory.js';
 import { runPipeline } from '../../../prototype/src/orchestrator.js';
 import {
@@ -344,6 +344,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       // project cố định theo session (null = chat ngoài project: chỉ global memory, không repo tool)
       const project = conv.projectId ? projectOf(conv.projectId) : null;
       const refs = project ? repoRefs(project.repos) : null;
+      // chat ngoài project vẫn gọi worker được → repo scratch; git lỗi → chỉ còn memory tool
+      let ws: { name: string; path: string } | undefined;
+      if (!project) {
+        try { ws = { name: 'workspace', path: ensureWorkspace() }; } catch (err) { console.log('[chat] workspace:', err instanceof Error ? err.message : err); }
+      }
+      const toolRefs = refs ?? (ws ? [ws] : null);
       const callModel = modelCaller(creds, s.brainModel);
       const r = await runBrainTurn({
         ...creds,
@@ -352,13 +358,14 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         model: s.brainModel,
         system: brainSystemPrompt({
           project: project && refs ? { name: project.name, repos: refs } : undefined,
+          workspace: ws,
           globalMemory: loadMemory(null),
           projectMemory: project ? loadMemory(project.id) : undefined,
           skills: availableSkills(project?.id ?? null),
         }),
-        tools: brainTools(refs),
+        tools: brainTools(toolRefs),
         signal: ac.signal,
-        execTool: projectToolExecutor(refs ?? [], {
+        execTool: projectToolExecutor(toolRefs ?? [], {
           projectId: project?.id ?? null,
           callModel,
           approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),

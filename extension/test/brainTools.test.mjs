@@ -282,3 +282,14 @@ test('fleet_merge: test fail → từ chối không hỏi; test pass → hỏi (
   assert.match(asked[0], /test pass/);
   assert.equal(green.merged(), true);
 });
+
+test('chat ngoài project có workspace: thấy tool worker + WORKSPACE, không có project memory', async () => {
+  const { brainSystemPrompt, brainTools, repoRefs } = await import('../out/extension/src/logic.js');
+  const ws = { name: 'workspace', path: '/home/u/.orchestra/workspace' };
+  const sys = brainSystemPrompt({ workspace: ws, globalMemory: '- G1', projectMemory: '- P1' });
+  assert.match(sys, /WORKSPACE: \/home\/u\/\.orchestra\/workspace/);
+  assert.ok(!sys.includes('P1') && !sys.includes('PROJECT MEMORY') && sys.includes('G1'));
+  assert.ok(!/no repo or worker tools/.test(sys));
+  assert.ok(brainTools([ws]).some((d) => d.name === 'fleet_dispatch'));
+  void repoRefs;
+});

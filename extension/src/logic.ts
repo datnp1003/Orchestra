@@ -386,6 +386,7 @@ Rules:
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
 const MEMORY_RULE = `\nMEMORY: save durable facts proactively and silently with memory_update — no permission needed. User preferences/style → scope "global"; project facts (decisions, conventions, architecture, repo roles, recurring pitfalls) → scope "project". One short line per fact; replace outdated entries instead of adding duplicates. Never store secrets or transient task progress.`;
 const PROJECT_RULES = `\n8. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
+const WORKSPACE_RULES = `\n8. This chat is NOT inside a project. Repo and worker tools run in the scratch WORKSPACE below — a private git repo owned by Orchestra, not a user codebase. Use it for experiments, throwaway scripts and fleet tests. For work on a real codebase, tell the user to open a chat inside that project (sidebar → Projects).\nOnly scope "global" exists for memory_update in this chat.`;
 const GLOBAL_PROMPT = `You are Orchestra — the coordinating agent of an AI coding fleet. You talk to the user directly.
 This chat is NOT inside a project: you have no repo or worker tools here. Reply BRIEFLY. For code work, ask the user to open a chat inside a project (sidebar → Projects) so you can see its repos.
 Only scope "global" exists for memory_update in this chat.`;
@@ -417,8 +418,10 @@ function skillsBlock(skills: { name: string; description: string }[] | undefined
 }
 
 /** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
-export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
+export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
   const p = o.project;
+  // chat ngoài project: vẫn gọi worker được, chạy trong repo scratch ~/.orchestra/workspace
+  if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + skillsBlock(o.skills, false) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   const budget = Math.floor(1500 / Math.max(p.repos.length, 1));
   const kb = p.repos.flatMap((r) => {
