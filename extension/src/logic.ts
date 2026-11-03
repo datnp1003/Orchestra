@@ -386,7 +386,7 @@ Rules:
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
 const MEMORY_RULE = `\nMEMORY: save durable facts proactively and silently with memory_update — no permission needed. User preferences/style → scope "global"; project facts (decisions, conventions, architecture, repo roles, recurring pitfalls) → scope "project". One short line per fact; replace outdated entries instead of adding duplicates. Never store secrets or transient task progress.`;
 const PROJECT_RULES = `\n8. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
-const WORKSPACE_RULES = `\n8. This chat is NOT inside a project. Repo and worker tools run in the scratch WORKSPACE below — a private git repo owned by Orchestra, not a user codebase. Use it for experiments, throwaway scripts and fleet tests. For work on a real codebase, tell the user to open a chat inside that project (sidebar → Projects).\nOnly scope "global" exists for memory_update in this chat.`;
+const WORKSPACE_RULES = `\n8. This chat is NOT inside a project — that is fine, never ask the user to create one. When the user mentions a local folder or repo path, call repo_attach with that absolute path (the user approves once), then work on it directly with the repo/worker tools (\`repo\` = a name returned by repo_attach). Without an attached repo, tools run in the scratch WORKSPACE below (Orchestra's private git repo, for experiments/throwaway scripts/fleet tests).\nOnly scope "global" exists for memory_update in this chat.`;
 const GLOBAL_PROMPT = `You are Orchestra — the coordinating agent of an AI coding fleet. You talk to the user directly.
 This chat is NOT inside a project: you have no repo or worker tools here. Reply BRIEFLY. For code work, ask the user to open a chat inside a project (sidebar → Projects) so you can see its repos.
 Only scope "global" exists for memory_update in this chat.`;
@@ -418,10 +418,11 @@ function skillsBlock(skills: { name: string; description: string }[] | undefined
 }
 
 /** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
-export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
+export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; attached?: RepoRef[]; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[] }): string {
   const p = o.project;
-  // chat ngoài project: vẫn gọi worker được, chạy trong repo scratch ~/.orchestra/workspace
-  if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
+  // chat ngoài project: vẫn gọi worker được — repo user nhắc tới (repo_attach) hoặc repo scratch ~/.orchestra/workspace
+  const att = o.attached?.length ? `\nATTACHED REPOS:\n${o.attached.map((r) => `- ${r.name}: ${r.path}`).join('\n')}` : '';
+  if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + att + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + skillsBlock(o.skills, false) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   const budget = Math.floor(1500 / Math.max(p.repos.length, 1));
   const kb = p.repos.flatMap((r) => {
@@ -455,11 +456,32 @@ export const MEMORY_TOOL = {
   description: 'Update long-term memory (no approval needed). scope global = user preferences/general facts; project = facts about this project. add needs text; replace needs old_text (unique substring of one entry) + text; remove needs old_text.',
   input_schema: obj({ scope: { type: 'string', enum: ['global', 'project'] }, action: { type: 'string', enum: ['add', 'replace', 'remove'] }, text: { type: 'string' }, old_text: { type: 'string' } }, ['scope', 'action']),
 };
-/** repos = null → chat ngoài project (chỉ memory_update); có project → repo tool nhận thêm `repo` */
-export function brainTools(repos: RepoRef[] | null): typeof BRAIN_TOOLS {
+/** repos = null → chỉ memory_update; attach = chat ngoài project → thêm repo_attach, `repo` không enum (danh sách đổi giữa lượt) */
+export function brainTools(repos: RepoRef[] | null, opts: { attach?: boolean } = {}): typeof BRAIN_TOOLS {
   if (!repos) return [MEMORY_TOOL];
-  const repo = { type: 'string', description: 'repo name from REPOS (required when the project has more than one repo)', ...(repos.length ? { enum: repos.map((r) => r.name) } : {}) };
-  return [...BRAIN_TOOLS.map((d) => ({ ...d, input_schema: { ...d.input_schema, properties: { ...(d.input_schema.properties as object), repo } } })), MEMORY_TOOL];
+  const repo = { type: 'string', description: 'repo name from REPOS (required when the project has more than one repo)', ...(repos.length && !opts.attach ? { enum: repos.map((r) => r.name) } : {}) };
+  return [...BRAIN_TOOLS.map((d) => ({ ...d, input_schema: { ...d.input_schema, properties: { ...(d.input_schema.properties as object), repo } } })), MEMORY_TOOL, ...(opts.attach ? [ATTACH_TOOL] : [])];
+}
+export const ATTACH_TOOL = {
+  name: 'repo_attach',
+  description: 'Attach a local folder the user mentioned so the repo/worker tools can work on it (the user approves once). path = absolute path. A git repo attaches as one repo; a folder containing several git repos (microservices) attaches each of them. Returns the repo names to pass as `repo`.',
+  input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+};
+
+const FIND_SKIP = new Set(['node_modules', '.git', '.orchestra', 'bin', 'obj', 'dist', 'out', 'build', '.vs', '.idea']);
+/** git repo con trong dir (dir là repo → [dir]); .git là thư mục hoặc file (worktree). Dừng ở repo đầu tiên mỗi nhánh. */
+export function findRepos(dir: string, maxDepth = 3, max = 40): string[] {
+  const out: string[] = [];
+  const walk = (d: string, depth: number) => {
+    if (out.length >= max) return;
+    if (existsSync(path.join(d, '.git'))) { out.push(d); return; }
+    if (depth >= maxDepth) return;
+    let ents;
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) if (e.isDirectory() && !FIND_SKIP.has(e.name) && !e.name.startsWith('.')) walk(path.join(d, e.name), depth + 1);
+  };
+  walk(path.resolve(dir), 0);
+  return out.sort();
 }
 
 export interface BrainToolDeps {
@@ -745,6 +767,8 @@ export interface SessionToolDeps extends BrainToolDeps {
   projectId: string | null;
   /** consolidate memory khi vượt budget; thiếu → giữ entry mới nhất vừa budget */
   callModel?: CallModel;
+  /** chat ngoài project: repo_attach — validate + hỏi user, trả repo đã gắn (caller push vào `repos`) */
+  attach?: (path: string) => Promise<{ ok: boolean; content: string }>;
 }
 /** tool executor của 1 session: route repo tool tới repo theo `repo` + memory_update */
 export function projectToolExecutor(repos: RepoRef[], deps: SessionToolDeps): (name: string, input: unknown) => Promise<ToolOut> {
@@ -755,6 +779,11 @@ export function projectToolExecutor(repos: RepoRef[], deps: SessionToolDeps): (n
       if (!optStr(i.text) || !optStr(i.old_text)) return bad('text/old_text must be strings');
       const r = await writeMemoryOps(deps.projectId, [i as unknown as ScopedOp], deps.callModel);
       return r.errors.length ? bad(r.errors.join('; ')) : { ok: true, content: r.applied.length ? 'memory updated' : 'no change (duplicate)' };
+    }
+    if (name === 'repo_attach') {
+      if (!deps.attach) return bad('repo_attach is only available in chats outside a project');
+      if (!isStr(i.path)) return bad('path must be a non-empty string');
+      return deps.attach(i.path);
     }
     if (!BRAIN_TOOLS.some((d) => d.name === name)) return bad(`unknown tool: ${name}`);
     if (!repos.length) return bad(deps.projectId ? 'this project has no repos yet — ask the user to add one on the Project page' : 'no repo in this chat — ask the user to open a chat inside a project');

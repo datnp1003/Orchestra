@@ -6,6 +6,7 @@ export const en = {
   'desktop.approval.continue': 'Continue',
   'desktop.approval.stop': 'Stop',
   'desktop.approval.approve': 'Approve',
+  'desktop.chat.attachAsk': 'Orchestra wants to work on {path} ({n} git repo(s): {list}). Workers run in their own worktrees; merging still asks you. Allow for this chat?',
   'desktop.approval.reject': 'Reject',
   'desktop.notify.updateAvailable': 'Orchestra — update available',
   'desktop.notify.updateDownloading': 'v{version} downloading…',

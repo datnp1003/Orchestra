@@ -7,6 +7,7 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.approval.continue': 'Tiếp tục',
   'desktop.approval.stop': 'Dừng',
   'desktop.approval.approve': 'Đồng ý',
+  'desktop.chat.attachAsk': 'Orchestra muốn làm việc trên {path} ({n} git repo: {list}). Worker chạy trong worktree riêng; merge vẫn hỏi mày. Cho phép trong chat này?',
   'desktop.approval.reject': 'Từ chối',
   'desktop.notify.updateAvailable': 'Orchestra — có bản mới',
   'desktop.notify.updateDownloading': 'v{version} đang tải…',

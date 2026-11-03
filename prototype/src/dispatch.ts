@@ -68,9 +68,19 @@ export function shouldCommit(node: NodeType): boolean {
 
 // glob đơn giản không dependency: ** → .*  |  * → [^\/]*
 export function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const body = escaped.replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*');
-  return new RegExp(`^${body}$`);
+  // ** = .*, * = [^/]*, {a,b} = (?:a|b) (lồng được); còn lại escape
+  let body = '';
+  let depth = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === '*') {
+      if (pattern[i + 1] === '*') { body += '.*'; i++; } else body += '[^/]*';
+    } else if (c === '{') { depth++; body += '(?:'; }
+    else if (c === '}' && depth) { depth--; body += ')'; }
+    else if (c === ',' && depth) body += '|';
+    else body += c.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${body}${')'.repeat(depth)}$`);
 }
 
 export function checkScope(files: string[], patterns: string[]): ScopeCheck {

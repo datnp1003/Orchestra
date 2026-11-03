@@ -6,7 +6,7 @@ import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshot, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
-  dispatchTracked, conformanceBadge, modelsList, brainTools, brainSystemPrompt, projectToolExecutor, repoRefs,
+  dispatchTracked, conformanceBadge, modelsList, brainTools, brainSystemPrompt, projectToolExecutor, repoRefs, findRepos,
 } from '../../../extension/src/logic.js';
 import { runBrainTurn, listBrainModels, callBrainText, type BrainCreds, type Msg } from '../../../prototype/src/brain.js';
 import { loadMemory, setMemoryText, reflectMemory, writeMemoryOps, transcriptOf, summarizeOps, BUDGET, type CallModel } from '../../../prototype/src/agentMemory.js';
@@ -28,7 +28,7 @@ import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDi
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 // R2a: 1 provider store + 1 router cho cả app — brain, dispatch, pipeline đều đi qua đây
 const store = createProviderStore();
@@ -349,7 +349,28 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       if (!project) {
         try { ws = { name: 'workspace', path: ensureWorkspace() }; } catch (err) { console.log('[chat] workspace:', err instanceof Error ? err.message : err); }
       }
-      const toolRefs = refs ?? (ws ? [ws] : null);
+      // ngoài project: repo đã attach (giữ cả session) + workspace; mảng sống → repo_attach thêm được giữa lượt
+      const toolRefs = refs ?? (ws ? [ws, ...repoRefs(conv.attached).map((r) => ({ ...r, name: r.name === 'workspace' ? 'workspace-2' : r.name }))] : null);
+      const attach = async (raw: string) => {
+        const dir = path.resolve(raw);
+        if (!existsSync(dir)) return { ok: false, content: `no such folder: ${dir}` };
+        const found = findRepos(dir);
+        if (!found.length) return { ok: false, content: `no git repo found in ${dir} (searched 3 levels)` };
+        const fresh = found.filter((f) => !conv.attached.includes(f));
+        if (fresh.length) {
+          const ok = await ask(t('desktop.chat.attachAsk', { path: dir, n: fresh.length, list: fresh.slice(0, 12).map((f) => path.relative(dir, f) || '.').join(', ') + (fresh.length > 12 ? ', …' : '') }), [t('desktop.approval.approve'), t('desktop.approval.reject')]);
+          if (!ok) return { ok: false, content: 'user declined' };
+          conv.attached.push(...fresh);
+          try {
+            conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
+            mkdirSync(chatDir(conv.projectId), { recursive: true });
+            writeFileSync(attachedFile(conv), JSON.stringify(conv.attached), 'utf8');
+          } catch (err) { console.log('[chat] attach persist:', err instanceof Error ? err.message : err); }
+        }
+        if (toolRefs) toolRefs.splice(1, toolRefs.length - 1, ...repoRefs(conv.attached).map((r) => ({ ...r, name: r.name === 'workspace' ? 'workspace-2' : r.name })));
+        const names = (toolRefs ?? []).filter((r) => found.includes(r.path)).map((r) => `${r.name}: ${r.path}`);
+        return { ok: true, content: `attached ${names.length} repo(s) — pass repo=<name>:\n${names.join('\n')}` };
+      };
       const callModel = modelCaller(creds, s.brainModel);
       const r = await runBrainTurn({
         ...creds,
@@ -359,15 +380,17 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         system: brainSystemPrompt({
           project: project && refs ? { name: project.name, repos: refs } : undefined,
           workspace: ws,
+          attached: toolRefs && ws ? toolRefs.slice(1) : undefined,
           globalMemory: loadMemory(null),
           projectMemory: project ? loadMemory(project.id) : undefined,
           skills: availableSkills(project?.id ?? null),
         }),
-        tools: brainTools(toolRefs),
+        tools: brainTools(toolRefs, { attach: !project && !!ws }),
         signal: ac.signal,
         execTool: projectToolExecutor(toolRefs ?? [], {
           projectId: project?.id ?? null,
           callModel,
+          attach: !project && ws ? attach : undefined,
           approve: (q) => ask(q, [t('desktop.approval.approve'), t('desktop.approval.reject')]),
           askUser: askContinue,
           hooksEnabled: s.hooksEnabled,
@@ -415,7 +438,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     const projectId = sf.project?.id ?? null;
     if (chat.startedAt !== p.id || chat.projectId !== projectId) void reflect(chat); // flush session cũ
     // ponytail: reflectedUpTo chỉ trong RAM — mở lại session cũ coi như đã reflect hết (không quét lại lịch sử)
-    chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0 };
+    chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0, attached: [] };
+    chat.attached = loadAttached(chat);
     followProject(sf.project);
     return { ok: true, messages, projectId, projectName: sf.project?.name ?? null };
   });
@@ -508,13 +532,23 @@ const oauthPending = new Map<string, { verifier: string; state: string }>();
 // hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
 // projectId: cố định cho cả session (null = chat ngoài project)
 // reflectedUpTo/userTurns: memory reflection — history[reflectedUpTo..] chưa reflect, userTurns = lượt user từ lần reflect trước
-interface Conv { history: Msg[]; startedAt: string; projectId: string | null; reflectedUpTo: number; userTurns: number }
-let chat: Conv = { history: [], startedAt: '', projectId: null, reflectedUpTo: 0, userTurns: 0 };
+// attached: repo user nhắc tới trong chat ngoài project (repo_attach, đã duyệt) — lưu kèm session (<id>.repos.json)
+interface Conv { history: Msg[]; startedAt: string; projectId: string | null; reflectedUpTo: number; userTurns: number; attached: string[] }
+let chat: Conv = { history: [], startedAt: '', projectId: null, reflectedUpTo: 0, userTurns: 0, attached: [] };
 let chatBusy = false;
 let chatAbort: AbortController | null = null; // lượt đang chạy — chat:cancel abort
 const resetChat = (projectId: string | null = chat.projectId) => {
-  chat = { history: [], startedAt: '', projectId, reflectedUpTo: 0, userTurns: 0 };
+  chat = { history: [], startedAt: '', projectId, reflectedUpTo: 0, userTurns: 0, attached: [] };
 };
+const attachedFile = (conv: Conv) => path.join(chatDir(conv.projectId), `${conv.startedAt}.repos.json`);
+function loadAttached(conv: Conv): string[] {
+  try {
+    const v = JSON.parse(readFileSync(attachedFile(conv), 'utf8'));
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && existsSync(path.join(x, '.git'))) : [];
+  } catch {
+    return [];
+  }
+}
 
 const HEAVY_TOOLS = new Set(['fleet_dispatch', 'fleet_pipeline', 'fleet_merge']);
 const modelCaller = (creds: BrainCreds, model: string): CallModel => (system, user) => callBrainText({ ...creds, model }, system, user);

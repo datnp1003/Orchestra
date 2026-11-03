@@ -293,3 +293,24 @@ test('chat ngoài project có workspace: thấy tool worker + WORKSPACE, không 
   assert.ok(brainTools([ws]).some((d) => d.name === 'fleet_dispatch'));
   void repoRefs;
 });
+
+test('repo_attach: findRepos tìm repo con (microservice), chỉ có ở chat ngoài project', async () => {
+  const { findRepos, brainTools, projectToolExecutor } = await import('../out/extension/src/logic.js');
+  const { mkdtempSync, mkdirSync } = await import('node:fs');
+  const os = await import('node:os'); const path = await import('node:path');
+  const root = mkdtempSync(path.join(os.tmpdir(), 'att-'));
+  for (const d of ['api/a', 'api/b', 'ui/web', 'api/a/node_modules/x']) mkdirSync(path.join(root, d, '.git'), { recursive: true });
+  mkdirSync(path.join(root, 'plans'), { recursive: true });
+  const found = findRepos(root).map((p) => path.relative(root, p).split(path.sep).join('/'));
+  assert.deepEqual(found, ['api/a', 'api/b', 'ui/web']);
+  assert.deepEqual(findRepos(path.join(root, 'api/a')).map((p) => path.relative(root, p).split(path.sep).join('/')), ['api/a'], 'path là repo → chính nó');
+  const ws = { name: 'workspace', path: root };
+  assert.ok(brainTools([ws], { attach: true }).some((d) => d.name === 'repo_attach'));
+  assert.ok(!brainTools([ws]).some((d) => d.name === 'repo_attach'), 'project không có repo_attach');
+  const noAttach = projectToolExecutor([ws], { approve: async () => true, projectId: 'p1' });
+  assert.equal((await noAttach('repo_attach', { path: root })).ok, false);
+  let got = '';
+  const withAttach = projectToolExecutor([ws], { approve: async () => true, projectId: null, attach: async (p) => { got = p; return { ok: true, content: 'attached' }; } });
+  assert.equal((await withAttach('repo_attach', { path: root })).ok, true);
+  assert.equal(got, root);
+});

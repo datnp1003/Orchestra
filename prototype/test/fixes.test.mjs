@@ -175,3 +175,13 @@ test('fix trên worktree tái dùng được merge vào main', (t) => {
   assert.ok(existsSync(path.join(repo, 'fix.txt')), 'fix không lên main');
   assert.ok(existsSync(path.join(repo, 'impl.txt')));
 });
+
+test('globToRegex: brace {a,b} + giữ ngữ nghĩa ** / *', async () => {
+  const { globToRegex } = await import('../dist/dispatch.js');
+  const m = (p, f) => globToRegex(p).test(f);
+  assert.ok(m('{*.sln,*.csproj,package.json}', 'Api.sln') && m('{*.sln,*.csproj,package.json}', 'package.json'));
+  assert.ok(!m('{*.sln,*.csproj}', 'src/Api.csproj'), '* không qua /');
+  assert.ok(m('**/*.{sln,slnx,csproj}', 'a/b/X.slnx'));
+  assert.ok(m('src/payment/**', 'src/payment/gateways/stripe.ts') && !m('src/payment/**', 'src/other.ts'));
+  assert.ok(m('a.b', 'a.b') && !m('a.b', 'axb'), 'dấu . vẫn literal');
+});
