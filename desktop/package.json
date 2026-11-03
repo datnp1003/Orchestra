@@ -1,7 +1,7 @@
 {
   "name": "orchestra-desktop",
   "productName": "Orchestra Desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Orchestra Desktop",
   "main": "out/desktop/src/main/main.js",
   "type": "module",
