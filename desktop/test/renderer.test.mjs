@@ -57,6 +57,13 @@ const foot = html.slice(html.indexOf('id="sideFooter"'));
 assert.ok(foot.indexOf('href="#/dashboard"') > 0 && foot.indexOf('href="#/dashboard"') < foot.indexOf('id="btnSettings"'), 'Dashboard ngay trên Cài đặt');
 console.log('✓ sidebar: Sessions, Chat mới, nav chỉ Chat, Dashboard trên Cài đặt; Matrix tab; không Auth/Import/Terminal/Transcript');
 
+// session theo repo: không còn chọn repo global; item có tag repo; chooser + Thêm repo
+assert.ok(!html.includes('repoSel') && !js.includes('repoSel') && !html.includes('repoLabel') && !js.includes('repoLabel'), 'bỏ #repoSel / #repoLabel');
+assert.ok(js.includes('<span class="session-repo" title="${esc(x.repo)}">${esc(x.repoName)}</span>'), 'session item có tag repo');
+assert.ok(js.includes("api.invoke('chat:open', { repo, id })") && js.includes("api.invoke('chat:new'") && !js.includes("'chat:reset'"), 'chat:open/chat:new theo repo');
+assert.ok(html.includes('id="repoPick"') && html.includes('id="pageRepo"') && js.includes("api.invoke('repo:add')") && js.includes('id="sAddRepo"'), 'chooser repo + Thêm repo');
+console.log('✓ session theo repo: không repoSel/repoLabel, tag repo, chooser, repo:add');
+
 // Transcript là section trong Dashboard; #/transcript cũ → dashboard; top 20 (main giới hạn qua limit)
 const dash = js.slice(js.indexOf('async function renderDashboard'), js.indexOf('// ---------- Transcript'));
 assert.ok(dash.includes('id="transcript"') && dash.includes("renderTranscript($('#transcript'), tasks)"), 'Dashboard chứa section Transcript');

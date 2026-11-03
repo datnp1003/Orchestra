@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { brainToolExecutor, BRAIN_TOOLS } from '../out/extension/src/logic.js';
+import { brainToolExecutor, brainSystemPrompt, BRAIN_TOOLS } from '../out/extension/src/logic.js';
 
 const tmp = (t) => {
   const d = mkdtempSync(path.join(os.tmpdir(), 'orch brain-'));
@@ -59,6 +59,28 @@ test('fleet_dispatch / fleet_pipeline validate input, không throw', async (t) =
   assert.match((await x('fleet_dispatch', { goal: 'g', scope: [] })).content, /scope/);
   assert.equal((await x('fleet_pipeline', { template: '../evil', goal: 'g', scope: ['a'] })).ok, false);
   assert.equal((await x('nope', {})).ok, false);
+});
+
+test('fleet_dispatch readonly → node plan/planner, kèm câu trả lời worker; mặc định implement/coder', async (t) => {
+  const repo = tmp(t);
+  const calls = [];
+  const dispatch = async (_repo, o) => (calls.push(o), {
+    result: { ok: true, taskId: 't-x', stage: 'done', record: { routing: { pick: 'claude' }, artifacts: { files_changed: [] }, scope_check: { ok: true }, last_message: 'a.ts\nb.ts' } },
+  });
+  const x = brainToolExecutor(repo, { approve: async () => true, dispatch });
+  const ro = await x('fleet_dispatch', { goal: 'list files', scope: ['src/**'], readonly: true });
+  assert.equal(ro.ok, true);
+  assert.deepEqual([calls[0].node, calls[0].role], ['plan', 'planner']);
+  assert.match(calls[0].promptOverride, /READ-ONLY/);
+  assert.match(ro.content, /worker answer:\na\.ts\nb\.ts/);
+  await x('fleet_dispatch', { goal: 'fix', scope: ['src/**'] });
+  assert.deepEqual([calls[1].node, calls[1].role, calls[1].promptOverride], ['implement', 'coder', undefined]);
+  assert.equal((await x('fleet_dispatch', { goal: 'g', scope: ['a'], readonly: 'yes' })).ok, false);
+  assert.equal(calls.length, 2, 'readonly sai kiểu → không dispatch');
+  assert.ok(BRAIN_TOOLS.find((d) => d.name === 'fleet_dispatch').input_schema.properties.readonly.type === 'boolean');
+  const sys = brainSystemPrompt(repo);
+  assert.ok(sys.includes(`REPO: ${path.resolve(repo)}`), 'system prompt có REPO');
+  assert.match(sys, /readonly:true for tasks that only read/);
 });
 
 test('T2 fleet_merge: approve=false → không merge; true → merge', async (t) => {

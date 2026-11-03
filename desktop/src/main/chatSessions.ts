@@ -1,4 +1,6 @@
-// Session chat — parse <repo>/.orchestra/chat/<id>.jsonl (thuần, không fs) để resume hội thoại brain
+// Session chat — parse <repo>/.orchestra/chat/<id>.jsonl để resume hội thoại brain; mỗi session thuộc 1 repo
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import type { Block, Msg } from '../../../prototype/src/brain.js';
 import { t } from '../../../prototype/src/i18n/index.js';
 
@@ -14,6 +16,45 @@ export interface ChatSession {
 }
 
 export const SESSION_ID_RE = /^[\w.-]+$/;
+
+const chatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
+export const repoName = (repo: string) => repo.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? repo;
+
+/** session của mọi repo (bỏ repo/thư mục không tồn tại), mới nhất trước, top `limit` */
+export function listChatSessions(repos: string[], limit = 30) {
+  const files = repos.flatMap((repo) => {
+    const dir = chatDir(repo);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+      const file = path.join(dir, f);
+      return { repo, file, id: f.slice(0, -'.jsonl'.length), updatedAt: statSync(file).mtime.toISOString() };
+    });
+  }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
+  // ponytail: parse cả file của top `limit` mỗi lần list — chậm khi session rất dài → cache theo mtime
+  return files.map(({ repo, file, id, updatedAt }) => {
+    const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
+    return { id, title, turns, updatedAt, repo, repoName: repoName(repo) };
+  });
+}
+
+/** trust boundary chat:open — repo phải nằm trong settings.repos, id không chứa path */
+export function sessionFile(repos: string[], repo: unknown, id: unknown): { file: string } | { error: string } {
+  if (typeof repo !== 'string' || !repos.includes(repo)) return { error: t('desktop.repo.notAllowed', { repo: String(repo) }) };
+  if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) return { error: t('desktop.chat.err.badSession') };
+  return { file: path.join(chatDir(repo), `${id}.jsonl`) };
+}
+
+const repoKey = (p: string) => {
+  const n = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? n.toLowerCase() : n;
+};
+/** repo:add — chỉ nhận thư mục có .git; lưu dạng '/' như các entry khác; trùng → trả entry cũ */
+export function addRepoDir(repos: string[], dir: string): { ok: true; repo: string; repos: string[] } | { ok: false; error: string } {
+  if (!dir || !existsSync(path.join(dir, '.git'))) return { ok: false, error: t('desktop.repo.notGit', { dir }) };
+  const hit = repos.find((r) => repoKey(r) === repoKey(dir));
+  const repo = hit ?? dir.replace(/\\/g, '/').replace(/\/+$/, '');
+  return { ok: true, repo, repos: hit ? repos : [...repos, repo] };
+}
 
 const userText = (m: Msg): string =>
   typeof m.content === 'string' ? m.content : m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');

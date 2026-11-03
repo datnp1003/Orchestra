@@ -59,20 +59,24 @@ function modelOptions(worker, cur, defLabel) {
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
-const repo = () => SETTINGS?.activeRepo || '';
+// repo của session đang mở ('' = hội thoại mới chưa gán → main dùng activeRepo lúc gửi)
+let CHAT_REPO = '';
+const chatRepo = () => CHAT_REPO || SETTINGS?.activeRepo || '';
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
 
+// repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
+function renderRepo() {
+  const r = chatRepo();
+  $('#stRepo').textContent = 'repo: ' + (baseName(r) || `(${t('desktop.common.notSelected')})`);
+  $('#stRepo').title = r;
+  const onChat = !location.hash || location.hash.startsWith('#/chat');
+  $('#pageRepo').textContent = onChat ? baseName(r) : '';
+  $('#pageRepo').title = onChat ? r : '';
+}
+
 function renderChrome() {
-  // repo label (sidebar) + repo select (topbar)
-  const notSel = `(${t('desktop.common.notSelected')})`;
-  document.getElementById('repoLabel').textContent = 'repo: ' + (repo() || notSel);
-  const sel = $('#repoSel');
-  if (sel && SETTINGS) {
-    const cur = repo();
-    sel.innerHTML = (SETTINGS.repos || []).map((r) => `<option ${r === cur ? 'selected' : ''}>${esc(r)}</option>`).join('')
-      || `<option>${esc(t('desktop.repo.none'))}</option>`;
-  }
+  renderRepo();
   // fleet pill
   const pill = $('#fleetPill');
   if (pill && FLEET.length) {
@@ -81,7 +85,6 @@ function renderChrome() {
   }
   // statusbar
   $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
-  $('#stRepo').textContent = 'repo: ' + (baseName(repo()) || notSel);
   const stFleet = $('#stFleet');
   if (FLEET.length) {
     const n = fleetInstalled();
@@ -105,27 +108,59 @@ async function loadSessions() {
   const box = $('#sideSessionList');
   const list = await api.invoke('chat:sessions');
   box.innerHTML = list.map((x) => `
-    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
+    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-repo="${esc(x.repo)}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
       <span class="session-title">${esc(x.title)}</span>
       <span class="session-time">${esc(ago(x.updatedAt))}</span>
+      <span class="session-repo" title="${esc(x.repo)}">${esc(x.repoName)}</span>
     </div>`).join('') || `<div class="side-empty">${esc(t('desktop.sessions.empty'))}</div>`;
-  box.querySelectorAll('[data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.session); });
+  box.querySelectorAll('[data-session]').forEach((el) => { el.onclick = () => openSession(el.dataset.repo, el.dataset.session); });
 }
 let openedMsgs = null; // tin nhắn của session vừa mở — renderChat vẽ 1 lần
-async function openSession(id) {
-  const r = await api.invoke('chat:open', { id });
+const showChat = () => {
+  if (location.hash.startsWith('#/chat') || !location.hash) route();
+  else location.hash = '#/chat';
+  loadSessions();
+};
+async function openSession(repo, id) {
+  const r = await api.invoke('chat:open', { repo, id });
   if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = r.messages;
-  if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
-  else location.hash = '#/chat';
-  loadSessions();
+  CHAT_REPO = r.repo;
+  await loadSettings(); // activeRepo theo session
+  showChat();
 }
-async function newChat() {
-  await api.invoke('chat:reset');
+async function startChat(repo) {
+  $('#repoPick').hidden = true;
+  const r = await api.invoke('chat:new', repo ? { repo } : {});
+  if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = null;
-  if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
-  else location.hash = '#/chat';
-  loadSessions();
+  CHAT_REPO = r.repo;
+  await loadSettings();
+  showChat();
+}
+// main mở dialog chọn thư mục; chỉ nhận folder có .git
+async function addRepo() {
+  const r = await api.invoke('repo:add');
+  if (r.error) alert('✗ ' + r.error);
+  if (r.ok) await loadSettings();
+  return r.ok ? r.repo : '';
+}
+// 1 repo → vào thẳng; ≥2 → chooser dưới nút (mặc định = activeRepo); 0 → chỉ "Thêm repo…"
+function newChat() {
+  const repos = SETTINGS?.repos || [];
+  if (repos.length === 1) return startChat(repos[0]);
+  const box = $('#repoPick');
+  if (!box.hidden) { box.hidden = true; return; }
+  box.title = t('desktop.repo.pickTitle');
+  box.innerHTML = repos.map((r) => `<button data-pick="${esc(r)}" title="${esc(r)}" class="${r === SETTINGS.activeRepo ? 'cur' : ''}">${esc(baseName(r))}</button>`).join('')
+    + `<button data-add>${esc(t('desktop.repo.add'))}</button>`;
+  box.querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => startChat(b.dataset.pick); });
+  box.querySelector('[data-add]').onclick = async () => {
+    const r = await addRepo();
+    if (r) startChat(r);
+  };
+  box.hidden = false;
+  (box.querySelector('.cur') || box.firstElementChild).focus();
 }
 
 // ---------- chrome clicks ----------
@@ -135,18 +170,10 @@ document.getElementById('btnSettings').onclick = () => {
   if (!location.hash.includes('#/settings')) location.hash = '#/settings';
 };
 $('#fleetPill').onclick = () => { location.hash = '#/dashboard'; route(); };
-$('#repoSel').addEventListener('change', async (e) => {
-  const r = e.target.value;
-  if (!r || r.startsWith('(')) return;
-  await api.invoke('repo:set-active', r);
-  await loadSettings();
-  loadSessions();
-  route(); // nạp lại trang hiện tại với repo mới
-});
-
 // đổi model Orchestra → lưu ngay (main reset hội thoại)
 $('#cbModel').addEventListener('change', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
+  CHAT_REPO = '';
   renderChrome();
   if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
   loadSessions();
@@ -184,6 +211,7 @@ async function renderChat() {
     input.style.height = 'auto';
     add('user', text);
     add('orch pending', t('desktop.chat.pending'));
+    CHAT_REPO ||= chatRepo(); // main gán repo cho session ở lượt đầu = activeRepo
     const stop = $('#chatStop');
     stop.hidden = false;
     try {
@@ -367,6 +395,7 @@ async function renderSettings() {
         <select id="sLang">${['en', 'vi'].map((l) => `<option value="${l}" ${s.language === l ? 'selected' : ''}>${esc(t('desktop.lang.' + l))}</option>`).join('')}</select>
         <label>${esc(t('desktop.set.repos'))}</label>
         <textarea id="sRepos" rows="4" class="mono">${esc(s.repos.join('\n'))}</textarea>
+        <button class="secondary" id="sAddRepo">${esc(t('desktop.repo.add'))}</button>
         <label>${esc(t('desktop.set.templatesDir'))}</label><input id="sTpl" value="${esc(s.templatesDir)}" />
         <label><input type="checkbox" id="sAuto" ${s.autoApprovePlan ? 'checked' : ''}/> ${esc(t('desktop.set.autoApprove'))}</label>
         <label><input type="checkbox" id="sHooks" ${s.hooksEnabled ? 'checked' : ''}/> Guard hook pre-execution</label>
@@ -462,6 +491,12 @@ async function renderSettings() {
     await loadSettings();
     alert(t('desktop.common.saved'));
     route();
+  };
+  // repo:add đã lưu vào settings — chỉ thêm vào textarea, giữ phần user đang sửa dở
+  $('#sAddRepo').onclick = async () => {
+    const r = await addRepo();
+    const box = $('#sRepos');
+    if (r && !box.value.split(/\r?\n/).map((x) => x.trim()).includes(r)) box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + r;
   };
   // đổi ngôn ngữ → lưu ngay (main setLocale) + vẽ lại, không restart
   $('#sLang').onchange = async (e) => {
@@ -702,6 +737,7 @@ function route() {
   document.querySelectorAll('#sidebar a[data-page]').forEach((a) => a.classList.toggle('active', a.dataset.page === hash));
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
   $('#pageTitle').textContent = TITLES[hash]?.() || 'Orchestra';
+  renderRepo();
   (ROUTES[hash] || renderChat)();
 }
 on('nav', (p) => { location.hash = '#/' + p; route(); });
@@ -742,8 +778,9 @@ function devStub() {
     if (ch === 'providers:list') return [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'https://gw.example.com', formats: ['messages'], enabled: true, hasKey: true },
       { id: 'cc', kind: 'oauth-anthropic', baseUrl: 'https://api.anthropic.com', formats: ['messages'], enabled: true, hasKey: false, riskAcknowledged: true, models: ['claude-sonnet-5-5'], oauthStatus: 'none', expiresAt: null }];
     if (ch === 'router:status') return { running: false, port: null, providers: 1 };
-    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Add payment gateway X', updatedAt: new Date().toISOString(), turns: 2, active: false }];
-    if (ch === 'chat:open') return { ok: true, messages: [{ role: 'user', text: 'Add payment gateway X' }, { role: 'orch', text: '(stub) session opened' }] };
+    if (ch === 'chat:sessions') return [{ id: '2026-11-02T08-00-00-000Z', title: 'Add payment gateway X', updatedAt: new Date().toISOString(), turns: 2, active: false, repo: repos[0], repoName: 'payment-svc' }];
+    if (ch === 'chat:open') return { ok: true, repo: p.repo, messages: [{ role: 'user', text: 'Add payment gateway X' }, { role: 'orch', text: '(stub) session opened' }] };
+    if (ch === 'chat:new') return { ok: true, repo: p.repo ?? settings.activeRepo };
     if (ch === 'matrix:data') return { source: 'preview', errors: [], minSample: 10, workers: [{ id: 'claude', display: 'Claude Code' }], rows: [{ role: 'coder', cells: [{ cli: 'claude', rank: 1, model: null, n: 0, ema: null }] }], kb: [] };
     if (ch === 'chat:exchange') setTimeout(() => listeners['chat:message']?.forEach((f) => f({ kind: 'orch', text: '(stub) received — running preview outside Electron.' })), 400);
     return { ok: true };

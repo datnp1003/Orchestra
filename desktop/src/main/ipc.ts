@@ -1,6 +1,6 @@
 // IPC wiring — bọc logic.ts (API duy nhất) vào ipcMain. Không viết logic mới ở đây.
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
-import { app, shell } from 'electron';
+import { app, shell, dialog } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
 import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
@@ -19,11 +19,11 @@ import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '
 import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
-import { parseChatSession, SESSION_ID_RE } from './chatSessions.js';
+import { parseChatSession, listChatSessions, sessionFile, addRepoDir } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
 
 // R2a: 1 provider store + 1 router cho cả app — brain, dispatch, pipeline đều đi qua đây
 const store = createProviderStore();
@@ -181,11 +181,17 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     s.activeRepo = repo;
     return saveSettings(ctx.settingsFile, s);
   });
-  ipcMain.handle(IPC.REPO_ADD, (_e, repo: string) => {
+  // path do main chọn qua dialog — renderer không gửi path
+  ipcMain.handle(IPC.REPO_ADD, async () => {
+    const w = ctx.win();
+    const opts = { properties: ['openDirectory' as const] };
+    const pick = await (w ? dialog.showOpenDialog(w, opts) : dialog.showOpenDialog(opts));
+    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
     const s = settings();
-    if (typeof repo === 'string' && repo && !s.repos.includes(repo)) s.repos.push(repo);
-    if (!s.activeRepo && s.repos[0]) s.activeRepo = s.repos[0];
-    return saveSettings(ctx.settingsFile, s);
+    const r = addRepoDir(s.repos, pick.filePaths[0]);
+    if (!r.ok) return r;
+    saveSettings(ctx.settingsFile, { ...s, repos: r.repos, activeRepo: s.activeRepo || r.repo });
+    return { ok: true, repo: r.repo };
   });
 
   ipcMain.handle(IPC.FLEET_LIST, () => fleetSnapshot());
@@ -270,7 +276,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     };
     try {
       const s = settings();
-      const repo = requireRepo(s);
+      // repo cố định theo session: hội thoại mới chưa có repo → lấy activeRepo lúc gửi lượt đầu
+      const repo = requireRepo(conv.repo ? { activeRepo: conv.repo, repos: [] } : s);
+      conv.repo = repo;
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
@@ -308,30 +316,28 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { ok: !!chatAbort };
   });
   // session = 1 file jsonl; mở lại → lượt sau append tiếp vào file đó
-  ipcMain.handle(IPC.CHAT_SESSIONS, () => withRepo((repo) => {
-    const dir = path.join(repo, '.orchestra', 'chat');
-    if (!existsSync(dir)) return [];
-    // ponytail: parse cả file mỗi lần list — chậm khi hàng trăm session dài → cache theo mtime
-    return readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
-      const file = path.join(dir, f);
-      const id = f.slice(0, -'.jsonl'.length);
-      const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
-      return { id, title, turns, updatedAt: statSync(file).mtime.toISOString(), active: id === chat.startedAt };
-    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }, () => []));
-  ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { id: string }) => withRepo((repo) => {
+  ipcMain.handle(IPC.CHAT_SESSIONS, () =>
+    listChatSessions(settings().repos).map((x) => ({ ...x, active: x.id === chat.startedAt && x.repo === chat.repo })));
+  ipcMain.handle(IPC.CHAT_OPEN, (_e, p: { repo: string; id: string }) => {
     if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
-    const id = String(p?.id ?? '');
-    if (!SESSION_ID_RE.test(id)) return { ok: false, error: t('desktop.chat.err.badSession') };
-    const file = path.join(repo, '.orchestra', 'chat', `${id}.jsonl`);
-    if (!existsSync(file)) return { ok: false, error: t('desktop.chat.err.noSession', { id }) };
-    const { history, messages } = parseChatSession(readFileSync(file, 'utf8'));
-    chat = { history, startedAt: id };
-    return { ok: true, messages };
-  }, (error) => ({ ok: false, error })));
-  ipcMain.handle(IPC.CHAT_RESET, () => {
+    const s = settings();
+    const sf = sessionFile(s.repos, p?.repo, p?.id);
+    if ('error' in sf) return { ok: false, error: sf.error };
+    if (!existsSync(sf.file)) return { ok: false, error: t('desktop.chat.err.noSession', { id: p.id }) };
+    const { history, messages } = parseChatSession(readFileSync(sf.file, 'utf8'));
+    chat = { history, startedAt: p.id, repo: p.repo };
+    saveSettings(ctx.settingsFile, { ...s, activeRepo: p.repo }); // Dashboard/Settings theo session
+    return { ok: true, messages, repo: p.repo };
+  });
+  ipcMain.handle(IPC.CHAT_NEW, (_e, p?: { repo?: string }) => {
+    if (chatBusy) return { ok: false, error: t('desktop.chat.err.busyOpen') };
+    const s = settings();
+    const repo = p?.repo ?? s.activeRepo;
+    if (p?.repo !== undefined && !s.repos.includes(p.repo)) return { ok: false, error: t('desktop.repo.notAllowed', { repo: String(repo) }) };
     resetChat();
-    return { ok: true };
+    chat.repo = repo;
+    if (repo !== s.activeRepo) saveSettings(ctx.settingsFile, { ...s, activeRepo: repo });
+    return { ok: true, repo };
   });
   ipcMain.handle(IPC.BRAIN_MODELS, async () => {
     const creds = routerCreds();
@@ -373,11 +379,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
 const oauthPending = new Map<string, { verifier: string; state: string }>();
 
 // hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
-let chat: { history: Msg[]; startedAt: string } = { history: [], startedAt: '' };
+// repo: cố định cho cả session ('' = chưa gửi lượt nào → lấy activeRepo lúc gửi)
+let chat: { history: Msg[]; startedAt: string; repo: string } = { history: [], startedAt: '', repo: '' };
 let chatBusy = false;
 let chatAbort: AbortController | null = null; // lượt đang chạy — chat:cancel abort
 const resetChat = () => {
-  chat = { history: [], startedAt: '' };
+  chat = { history: [], startedAt: '', repo: '' };
 };
 
 /** append message mới vào <repo>/.orchestra/chat/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */

@@ -176,7 +176,7 @@ export function trackOverride(
 
 export async function dispatchTracked(
   repo: string,
-  o: { node: 'implement'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal; router?: RouterInfo },
+  o: { node: 'implement' | 'plan'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skillSync?: boolean; signal?: AbortSignal; router?: RouterInfo; promptOverride?: string },
 ): Promise<{ autoPick?: string; result: Awaited<ReturnType<typeof import('../../prototype/src/dispatch.js').dispatch>>; override: string }> {
   const pol = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
@@ -185,7 +185,7 @@ export async function dispatchTracked(
   const result = await dispatch({
     repo, node: o.node, role: o.role, goal: o.goal, scope: o.scope,
     constraints: [], acceptance: o.acceptance, workerPin: o.pin, model: o.model,
-    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal, router: o.router,
+    hooksEnabled: o.hooksEnabled, skillSync: o.skillSync, signal: o.signal, router: o.router, promptOverride: o.promptOverride,
     onEvent: o.onEvent as ((e: { t: string; [k: string]: unknown }) => void) | undefined,
   });
   const tr = trackOverride(repo, { autoPick: auto.pick, pin: o.pin, taskId: result.taskId, ok: result.ok });
@@ -384,13 +384,14 @@ Rules:
 3. Scope unclear → ASK the user, do not guess.
 4. Merging / changing policy needs user approval — the system asks automatically when you call the tool.
 5. Before fleet_merge you must call task_diff and read the diff; state what you checked.
-6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.`;
+6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.
+7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.`;
 
 // ngôn ngữ do chính user quyết (theo tin nhắn), KHÔNG theo locale UI/i18n
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
 export function brainSystemPrompt(repo: string): string {
   const kb = recallKB(repo, ['**'], 1500);
-  return BRAIN_SYSTEM_PROMPT + BRAIN_LANGUAGE + (kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '');
+  return BRAIN_SYSTEM_PROMPT + BRAIN_LANGUAGE + `\nREPO: ${path.resolve(repo)}` + (kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '');
 }
 
 const strArr = { type: 'array', items: { type: 'string' } };
@@ -402,7 +403,7 @@ export const BRAIN_TOOLS: { name: string; description: string; input_schema: Rec
   { name: 'git_diff', description: 'git diff (stat + content, truncated) against an optional ref (default: working tree vs HEAD). ref = task id (t-…) → same as task_diff.', input_schema: obj({ ref: { type: 'string' } }) },
   { name: 'task_diff', description: 'Show a task result: worker, changed files, scope check, outcome + patch. Call before fleet_merge.', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'fleet_status', description: 'Fleet worker status + 5 most recent tasks.', input_schema: obj({}) },
-  { name: 'fleet_dispatch', description: 'Assign one coding task to a worker (own worktree, guarded + scope check). scope is REQUIRED.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr }, ['goal', 'scope']) },
+  { name: 'fleet_dispatch', description: 'Assign one task to a worker (own worktree, guarded + scope check). scope is REQUIRED. Coding by default; readonly:true runs it read-only and returns the worker answer.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr, readonly: { type: 'boolean', description: 'true for survey/list/explain/review tasks that must not modify files' } }, ['goal', 'scope']) },
   { name: 'fleet_pipeline', description: 'Run a pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' } }, ['template', 'goal', 'scope']) },
   { name: 'skills_sync', description: 'Sync project KB to AGENTS.md + CLAUDE.md.', input_schema: obj({}) },
   { name: 'fleet_merge', description: "Merge a task's branch into main (REQUIRES user approval). The system checks the task + runs tests before asking.", input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
@@ -423,6 +424,8 @@ export interface BrainToolDeps {
   signal?: AbortSignal;
   /** R2a: worker chạy qua Orchestra router */
   router?: RouterInfo;
+  /** test seam — mặc định dispatchTracked */
+  dispatch?: typeof dispatchTracked;
 }
 type ToolOut = { ok: boolean; content: string };
 
@@ -598,9 +601,16 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         if (!isStrArr(i.scope) || !i.scope.length) return bad('scope is required: non-empty array of globs');
         if (!optStr(i.worker) || !optStr(i.model)) return bad('worker/model must be strings');
         if (i.acceptance !== undefined && !isStrArr(i.acceptance)) return bad('acceptance must be an array of strings');
-        const r = await dispatchTracked(repo, {
-          node: 'implement', role: 'coder', goal: i.goal, scope: i.scope,
-          acceptance: (i.acceptance as string[] | undefined) ?? [],
+        if (i.readonly !== undefined && typeof i.readonly !== 'boolean') return bad('readonly must be a boolean');
+        const ro = i.readonly === true;
+        const acceptance = (i.acceptance as string[] | undefined) ?? [];
+        // read-only: node plan (sandbox read-only, không tính no_change, không vào EMA coder) — prompt trả lời thẳng, không bắt viết plan
+        const r = await (deps.dispatch ?? dispatchTracked)(repo, {
+          node: ro ? 'plan' : 'implement', role: ro ? 'planner' : 'coder', goal: i.goal, scope: i.scope, acceptance,
+          promptOverride: ro
+            ? ['You are in READ-ONLY mode — do not create or edit any file.', '', `TASK: ${i.goal}`, '', 'FOCUS (globs):', ...i.scope.map((p) => `- ${p}`),
+              ...(acceptance.length ? ['', 'ACCEPTANCE:', ...acceptance.map((c) => `- ${c}`)] : []), '', 'Answer the task directly and concisely.'].join('\n')
+            : undefined,
           pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
           model: isStr(i.model) ? i.model : undefined,
           hooksEnabled: deps.hooksEnabled ?? true, skillSync: deps.skillSync ?? true, signal: deps.signal, router: deps.router,
@@ -611,7 +621,8 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const rec = r.result.record as Record<string, any> | undefined;
         return {
           ok: r.result.ok,
-          content: `dispatch ${r.result.ok ? 'OK' : 'FAILED'} task=${r.result.taskId} stage=${r.result.stage}${r.result.reason ? ` reason=${r.result.reason}` : ''} worker=${rec ? pickOf(rec) : '?'} files=[${(rec?.artifacts?.files_changed ?? []).join(', ')}] scope_ok=${rec?.scope_check?.ok !== false}`,
+          content: `dispatch ${r.result.ok ? 'OK' : 'FAILED'} task=${r.result.taskId} stage=${r.result.stage}${r.result.reason ? ` reason=${r.result.reason}` : ''} worker=${rec ? pickOf(rec) : '?'} files=[${(rec?.artifacts?.files_changed ?? []).join(', ')}] scope_ok=${rec?.scope_check?.ok !== false}`
+            + (ro && typeof rec?.last_message === 'string' ? `\n\nworker answer:\n${cap(rec.last_message, 8000)}` : ''),
         };
       }
       case 'fleet_pipeline': {

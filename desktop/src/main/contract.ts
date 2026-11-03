@@ -36,7 +36,7 @@ export const IPC = {
   UPDATE_CHECK: 'update:check',
   MODELS_LIST: 'models:list',
   BRAIN_MODELS: 'brain:models',
-  CHAT_RESET: 'chat:reset',
+  CHAT_NEW: 'chat:new',
   CHAT_CANCEL: 'chat:cancel',
   CHAT_SESSIONS: 'chat:sessions',
   CHAT_OPEN: 'chat:open',
