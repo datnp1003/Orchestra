@@ -1,14 +1,14 @@
-// Memory layer — memory-interface-spec v0.1, phần P4:
-// tầng 2 (episodic sqlite) · tầng 3 (KB markdown) · tầng 7 (fleet stats EMA)
-// Nguyên tắc: retrospective là hệ ghi chính; brains chỉ lưu + truy vấn (§1)
+// Memory layer — memory-interface-spec v0.1, part P4:
+// layer 2 (episodic sqlite) · layer 3 (KB markdown) · layer 7 (fleet stats EMA)
+// Principle: retrospective is the system of record; brains only store + query (§1)
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 
-// FIX (bug từ Desktop runtime): Electron 33 bundle Node 20 — KHÔNG có node:sqlite (landing 22.5+).
-// Lazy require tại điểm dùng + graceful degrade: Desktop chạy được, chỉ bỏ episodic sqlite
-// (JSONL mirror vẫn ghi). CLI dưới Node 24 vẫn đầy đủ.
+// FIX (bug from Desktop runtime): Electron 33 bundles Node 20 — NO node:sqlite (landed in 22.5+).
+// Lazy require at point of use + graceful degrade: Desktop still runs, only episodic sqlite is dropped
+// (JSONL mirror still written). CLI on Node 24 keeps everything.
 type DatabaseSync = { prepare: (sql: string) => { run: (...v: unknown[]) => unknown; get: (...v: unknown[]) => any }; exec: (sql: string) => void; close: () => void };
 function openSqliteOrNull(file: string): DatabaseSync | null {
   try {
@@ -16,11 +16,11 @@ function openSqliteOrNull(file: string): DatabaseSync | null {
     const { DatabaseSync } = req('node:sqlite') as { DatabaseSync: new (f: string) => DatabaseSync };
     return new DatabaseSync(file);
   } catch {
-    return null; // Electron Node 20 / môi trường thiếu node:sqlite
+    return null; // Electron Node 20 / environment without node:sqlite
   }
 }
 
-// ---------- Fleet stats (tầng 7) — Role Policy §5 ----------
+// ---------- Fleet stats (layer 7) — Role Policy §5 ----------
 export interface TaskRecordLite {
   id: string;
   ts: string;
@@ -63,7 +63,7 @@ function readRecords(dir: string): TaskRecordLite[] {
         files_changed: r.artifacts?.files_changed,
       });
     } catch {
-      /* record lỗi — bỏ qua, không crash aggregator */
+      /* bad record — skip, don't crash the aggregator */
     }
   }
   return out;
@@ -71,7 +71,7 @@ function readRecords(dir: string): TaskRecordLite[] {
 
 function passedRec(r: TaskRecordLite): boolean {
   if (r.outcome === 'no_change') return false;
-  // record cũ (chưa có outcome): implement không đổi file nào cũng là thất bại
+  // old record (no outcome yet): an implement that changed no files is also a failure
   if (r.node === 'implement' && Array.isArray(r.files_changed) && r.files_changed.length === 0) return false;
   return !r.run.killed && r.run.exit === 0 && r.scope_check?.ok !== false;
 }
@@ -80,7 +80,7 @@ export function buildFleetStats(tasksDir: string, decayDays = 30): Map<string, F
   const records = readRecords(tasksDir);
   const groups = new Map<string, TaskRecordLite[]>();
   for (const r of records) {
-    // chỉ aggregate node thực thi (implement/verify/review) — plan là read-only
+    // only aggregate executing nodes (implement/verify/review) — plan is read-only
     if (!['implement', 'verify', 'review', 'fix'].includes(r.node)) continue;
     const key = `${r.worker}|${r.role}`;
     const list = groups.get(key) ?? [];
@@ -127,7 +127,7 @@ export function statsKey(worker: string, role: string): string {
   return `${worker}|${role}`;
 }
 
-// ---------- Episodic sqlite (tầng 2) ----------
+// ---------- Episodic sqlite (layer 2) ----------
 export function openEpisodic(repo: string): DatabaseSync | null {
   const dir = path.join(repo, '.orchestra');
   mkdirSync(dir, { recursive: true });
@@ -145,7 +145,7 @@ export function openEpisodic(repo: string): DatabaseSync | null {
 
 export function syncTasksToSqlite(repo: string): number {
   const db = openEpisodic(repo);
-  if (!db) return 0; // node:sqlite không khả dụng (Electron Node 20) — episodic sqlite tắt tạm
+  if (!db) return 0; // node:sqlite unavailable (Electron Node 20) — episodic sqlite temporarily off
   const records = readRecords(path.join(repo, '.orchestra', 'tasks'));
   const insert = db.prepare(
     `INSERT OR REPLACE INTO tasks (id, ts, node, role, worker, exit, scope_ok, usd, tokens_in, tokens_out)
@@ -189,7 +189,7 @@ export function addFeedback(repo: string, fb: { type: FeedbackType; taskId?: str
     );
     db.close();
   }
-  // mirror JSONL — đọc được bằng mắt, sync qua git
+  // mirror JSONL — human-readable, synced via git
   appendFileSync(
     path.join(repo, '.orchestra', 'feedback.jsonl'),
     JSON.stringify({ ts: new Date().toISOString(), ...fb }) + '\n',
@@ -197,7 +197,7 @@ export function addFeedback(repo: string, fb: { type: FeedbackType; taskId?: str
   );
 }
 
-// ---------- Project KB (tầng 3) — markdown + frontmatter, inject có trần ----------
+// ---------- Project KB (layer 3) — markdown + frontmatter, capped injection ----------
 export interface KBEntry {
   id: string;
   title: string;
@@ -246,7 +246,7 @@ function globMatch(file: string, pattern: string): boolean {
   return new RegExp(`^${body}$`).test(file);
 }
 
-/** recallKB — inject luôn theo §5: pinned trước, scope-match sau, trần token, log bị bỏ (M3) */
+/** recallKB — always inject per §5: pinned first, then scope-match, token cap, log dropped (M3) */
 export function recallKB(
   repo: string,
   filesInScope: string[],

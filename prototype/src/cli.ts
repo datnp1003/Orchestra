@@ -349,7 +349,7 @@ async function main(): Promise<number> {
       if (sub === 'set') {
         const provider = args[1];
         const secret = args[2];
-        const baseUrl = args[3]; // P6.4: custom provider — ví dụ https://gateway.example.com/v1
+        const baseUrl = args[3]; // P6.4: custom provider — e.g. https://gateway.example.com/v1
         if (!provider || !secret) {
           console.error(t('cli.vault.setUsage'));
           return 2;
@@ -423,7 +423,7 @@ async function main(): Promise<number> {
         const worker = i % 2 === 0 ? 'codex' : 'claude';
         const passRate = worker === 'codex' ? 0.7 : 0.95;
         const pass = Math.random() < passRate;
-        const ageDays = (n - i) * 3; // trải đều 3n ngày — test decay
+        const ageDays = (n - i) * 3; // spread evenly over 3n days — tests decay
         const ts = new Date(now - ageDays * 86_400_000).toISOString();
         const id = `sim-${String(i).padStart(3, '0')}`;
         writeFileSync(
@@ -448,7 +448,7 @@ async function main(): Promise<number> {
       const store = createProviderStore();
       const r = await startRouter({ store, port: Number(f1(flags, 'port') ?? 0), defaultModel: f1(flags, 'default-model'), onLog: (l) => console.log(l) });
       console.log(`router http://127.0.0.1:${r.port}  token=${r.token}  providers=${store.listProviders().map((p) => p.id).join(',') || t('cli.router.noProviders')}`);
-      return new Promise<number>(() => {}); // chạy tới Ctrl+C
+      return new Promise<number>(() => {}); // run until Ctrl+C
     }
     default:
       console.log(t('cli.help'));

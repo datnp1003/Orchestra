@@ -1,5 +1,5 @@
-// Gate evaluator deterministic — pipeline-dsl-spec §6.3: tập đóng, không shell,
-// chỉ được tham chiếu artifact/params đã khai báo. Gate chạy bằng code, không LLM.
+// Deterministic gate evaluator — pipeline-dsl-spec §6.3: closed set, no shell,
+// may only reference declared artifacts/params. Gates run in code, no LLM.
 import { spawnSync } from 'node:child_process';
 import type { GateExpr } from './pipeline.js';
 import { t } from './i18n/index.js';
@@ -9,9 +9,9 @@ export interface GateContext {
   wtPath: string;
   params: Record<string, unknown>;
   testCommand?: string;
-  /** văn bản message cuối của từng node (dùng cho verdict.approved) */
+  /** last message text of each node (used for verdict.approved) */
   lastMessage: (nodeId: string) => string | undefined;
-  /** record của node đang chấm (files_changed…) */
+  /** record of the node being evaluated (files_changed…) */
   record?: { artifacts?: { files_changed?: string[] } };
 }
 
@@ -34,7 +34,7 @@ function runTests(ctx: GateContext): GateResult {
     cwd: ctx.wtPath,
     encoding: 'utf8',
     windowsHide: true,
-    shell: true, // "npm test" cần shell trên Windows (npm.cmd)
+    shell: true, // "npm test" needs a shell on Windows (npm.cmd)
     timeout: 120_000,
   });
   const tail = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split(/\r?\n/).slice(-5).join(' | ');
@@ -63,7 +63,7 @@ function evalOne(expr: GateExpr, ctx: GateContext): GateResult {
   const verdictMatch = /^verdict\.(approved|changes_requested|blocked)$/.exec(expr);
   if (verdictMatch) {
     const want = verdictMatch[1];
-    // message cuối của node nào chứa dòng VERDICT — quét các node đã chạy
+    // whichever node's last message has a VERDICT line — scan nodes that ran
     const text = ctx.lastMessage('__current__') ?? '';
     const m = /VERDICT:\s*(approved|changes_requested|blocked)/i.exec(text);
     if (!m) return { gate: expr, ok: false, detail: t('core.gates.noVerdict') };

@@ -1,4 +1,4 @@
-// Unit test contract + settings store — node thường, không Electron
+// Unit test contract + settings store — plain node, no Electron
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -9,64 +9,64 @@ import { setLocale } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, PROJECT_ID_RE } from '../out/prototype/src/home.js';
 import { copyLegacySessions } from '../out/desktop/src/main/chatSessions.js';
 
-// 1. channels unique + đầy đủ
+// 1. channels unique + complete
 const chans = Object.values(IPC);
-assert.equal(new Set(chans).size, chans.length, 'IPC channels trùng nhau');
-assert.ok(chans.length >= 18, `quá ít channels: ${chans.length}`);
-assert.ok(Object.values(EVENTS).every((e) => !chans.includes(e)), 'EVENTS không được trùng IPC channel');
+assert.equal(new Set(chans).size, chans.length, 'duplicate IPC channels');
+assert.ok(chans.length >= 18, `too few channels: ${chans.length}`);
+assert.ok(Object.values(EVENTS).every((e) => !chans.includes(e)), 'EVENTS must not collide with IPC channels');
 console.log(`✓ contract: ${chans.length} channels unique + ${Object.keys(EVENTS).length} events`);
 
-// 2. validateSettings — merge defaults, chặn rác
-// settings cũ còn orchestratorWorker/orchestratorModel → bị bỏ, không lỗi
+// 2. validateSettings — merge defaults, reject junk
+// old settings with orchestratorWorker/orchestratorModel → dropped, no error
 const v1 = validateSettings({ repos: ['', 'C:/x', 42], orchestratorWorker: 'codex', orchestratorModel: 'x' });
-assert.deepEqual(v1.repos, ['C:/x'], 'repo rỗng/không string phải bị lọc');
-assert.equal(v1.hooksEnabled, true, 'hooksEnabled mặc định true');
-assert.ok(!('orchestratorWorker' in v1) && !('orchestratorModel' in v1), 'field CLI brain cũ bị bỏ');
+assert.deepEqual(v1.repos, ['C:/x'], 'empty/non-string repos must be filtered');
+assert.equal(v1.hooksEnabled, true, 'hooksEnabled defaults to true');
+assert.ok(!('orchestratorWorker' in v1) && !('orchestratorModel' in v1), 'old CLI brain fields dropped');
 const v2 = validateSettings(null);
 assert.deepEqual(v2, DEFAULT_SETTINGS, 'null → defaults');
-assert.equal(DEFAULT_SETTINGS.brainModel, '', 'brainModel mặc định rỗng (phải chọn)');
-assert.equal(DEFAULT_SETTINGS.routerDefaultModel, '', 'routerDefaultModel mặc định rỗng');
-assert.equal(v1.brainModel, '', 'brainModel thiếu → rỗng');
-assert.equal(validateSettings({ brainModel: ' cc/claude-sonnet-5-5 ' }).brainModel, 'cc/claude-sonnet-5-5', 'giữ model (trim)');
-for (const junk of [42, '', '  ', null, 'worker-claude']) assert.equal(validateSettings({ brainModel: junk }).brainModel, '', `brainModel ${JSON.stringify(junk)} → rỗng`);
+assert.equal(DEFAULT_SETTINGS.brainModel, '', 'brainModel defaults to empty (must choose)');
+assert.equal(DEFAULT_SETTINGS.routerDefaultModel, '', 'routerDefaultModel defaults to empty');
+assert.equal(v1.brainModel, '', 'missing brainModel → empty');
+assert.equal(validateSettings({ brainModel: ' cc/claude-sonnet-5-5 ' }).brainModel, 'cc/claude-sonnet-5-5', 'keeps model (trimmed)');
+for (const junk of [42, '', '  ', null, 'worker-claude']) assert.equal(validateSettings({ brainModel: junk }).brainModel, '', `brainModel ${JSON.stringify(junk)} → empty`);
 assert.equal(validateSettings({ routerDefaultModel: ' gw/m ' }).routerDefaultModel, 'gw/m');
 assert.equal(validateSettings({ routerDefaultModel: 7 }).routerDefaultModel, '');
-// settings cũ (CLI brain + brainModel kiểu cũ) vẫn load, không lỗi
+// old settings (CLI brain + old-style brainModel) still load, no error
 const old = validateSettings({ repos: ['C:/a'], activeRepo: 'C:/a', orchestratorWorker: 'claude', orchestratorModel: 'opus', brainModel: 'worker-claude', hooksEnabled: false });
 assert.deepEqual([old.activeRepo, old.brainModel, old.routerDefaultModel, old.hooksEnabled], ['C:/a', '', '', false]);
-assert.ok(chans.includes('models:list'), 'có channel models:list');
+assert.ok(chans.includes('models:list'), 'has channel models:list');
 for (const c of ['brain:models', 'chat:new', 'chat:cancel', 'providers:list', 'providers:save', 'providers:delete', 'providers:test', 'router:status', 'chat:sessions', 'chat:open',
   'projects:list', 'project:create', 'project:addRepo', 'project:removeRepo', 'project:rename', 'project:delete', 'memory:get', 'memory:set']) {
-  assert.ok(chans.includes(c), `có channel ${c}`);
+  assert.ok(chans.includes(c), `has channel ${c}`);
 }
-for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import', 'repo:add', 'repo:set-active', 'skills:sync'])assert.ok(!chans.includes(c), `đã bỏ channel ${c}`);
-for (const c of ['list', 'save', 'remove', 'previewGithub', 'previewLocal', 'install', 'checkUpdate', 'update', 'cancelPreview']) assert.ok(chans.includes(`skills:${c}`), `có channel skills:${c}`);
-assert.ok(!('skillSync' in DEFAULT_SETTINGS) && !('skillSync' in validateSettings({ skillSync: true })), 'bỏ setting skillSync (settings cũ vẫn load)');
-console.log('✓ skills: 9 channel mới, skills:sync + skillSync đã bỏ');
-// projects: id hợp lệ + unique, repos = hợp repo project, activeRepo kéo về repo còn tồn tại
+for (const c of ['brain:config', 'vault:set', 'vault:delete', 'providers:import', 'repo:add', 'repo:set-active', 'skills:sync'])assert.ok(!chans.includes(c), `channel ${c} removed`);
+for (const c of ['list', 'save', 'remove', 'previewGithub', 'previewLocal', 'install', 'checkUpdate', 'update', 'cancelPreview']) assert.ok(chans.includes(`skills:${c}`), `has channel skills:${c}`);
+assert.ok(!('skillSync' in DEFAULT_SETTINGS) && !('skillSync' in validateSettings({ skillSync: true })), 'skillSync setting removed (old settings still load)');
+console.log('✓ skills: 9 new channels, skills:sync + skillSync removed');
+// projects: valid + unique id, repos = union of project repos, activeRepo falls back to an existing repo
 const vp = validateSettings({
   projects: [{ id: 'a-1', name: ' A ', repos: ['C:/a', 'C:/b', 'C:/a'] }, { id: 'a-1', name: 'dup', repos: [] }, { id: '../x', name: 'bad', repos: [] }, { id: 'b-2', name: 'B', repos: ['C:/b', 'C:/c'] }],
   repos: ['C:/zzz'], activeRepo: 'C:/gone',
 });
 assert.deepEqual(vp.projects, [{ id: 'a-1', name: 'A', repos: ['C:/a', 'C:/b'] }, { id: 'b-2', name: 'B', repos: ['C:/b', 'C:/c'] }]);
 assert.deepEqual([vp.repos, vp.activeRepo], [['C:/a', 'C:/b', 'C:/c'], 'C:/a']);
-console.log('✓ validateSettings projects: id regex/unique, repos dẫn xuất, activeRepo hợp lệ');
-assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: có oauth:start + oauth:finish');
-assert.ok(chans.includes('i18n:get'), 'có channel i18n:get');
-// language: settings cũ không có field → fallback (main truyền locale OS), rác → fallback
+console.log('✓ validateSettings projects: id regex/unique, derived repos, valid activeRepo');
+assert.ok(chans.includes('oauth:start') && chans.includes('oauth:finish'), 'R3: has oauth:start + oauth:finish');
+assert.ok(chans.includes('i18n:get'), 'has channel i18n:get');
+// language: old settings without the field → fallback (main passes OS locale), junk → fallback
 assert.equal(DEFAULT_SETTINGS.language, 'en');
-assert.equal(old.language, 'en', 'settings cũ thiếu language → en');
-assert.equal(validateSettings({}, 'vi').language, 'vi', 'fallback = locale OS');
+assert.equal(old.language, 'en', 'old settings missing language → en');
+assert.equal(validateSettings({}, 'vi').language, 'vi', 'fallback = OS locale');
 assert.equal(validateSettings({ language: 'vi' }).language, 'vi');
-assert.equal(validateSettings({ language: 'fr' }, 'vi').language, 'vi', 'giá trị lạ → fallback');
+assert.equal(validateSettings({ language: 'fr' }, 'vi').language, 'vi', 'unknown value → fallback');
 assert.equal(EVENTS.CHAT_STEP, 'chat:step', 'event chat:step');
 const evs = Object.values(EVENTS);
-assert.equal(new Set(evs).size, evs.length, 'EVENTS trùng nhau');
+assert.equal(new Set(evs).size, evs.length, 'duplicate EVENTS');
 assert.equal(IPC.FLEET_REFRESH, 'fleet:refresh', 'IPC fleet:refresh');
 assert.equal(EVENTS.FLEET_CHANGED, 'fleet:changed', 'event fleet:changed');
-console.log('✓ validateSettings: filter + defaults đúng');
+console.log('✓ validateSettings: filter + defaults correct');
 
-// 2b. policy mặc định tìm được từ out/ (desktop + extension); modelsList theo router
+// 2b. default policy found from out/ (desktop + extension); modelsList per router
 for (const pkg of ['desktop', 'extension']) {
   const { loadPolicy } = await import(new URL(`../../${pkg}/out/prototype/src/policy.js`, import.meta.url));
   assert.equal(loadPolicy().source, 'proto-default', `${pkg} loadPolicy`);
@@ -75,34 +75,34 @@ const { modelsList } = await import('../out/extension/src/logic.js'); // desktop
 const ml = modelsList(['gw/opus'], [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: 'x', formats: ['messages'], enabled: true }]);
 assert.deepEqual(ml.models, ['gw/opus']);
 assert.equal(ml.byWorker.claude[0].ok, true, 'claude + messages');
-assert.equal(ml.byWorker.codex[0].ok, true, 'codex + messages qua router dịch Responses');
-console.log('✓ proto-default policy từ desktop/out + extension/out; modelsList byWorker đúng');
+assert.equal(ml.byWorker.codex[0].ok, true, 'codex + messages via router Responses translation');
+console.log('✓ proto-default policy from desktop/out + extension/out; modelsList byWorker correct');
 
 // 3. settingsStore roundtrip
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'orch-set-'));
-setOrchestraHome(path.join(tmp, 'home')); // migration không được đụng ~/.orchestra thật
+setOrchestraHome(path.join(tmp, 'home')); // migration must not touch the real ~/.orchestra
 const file = path.join(tmp, 'settings.json');
 saveSettings(file, { ...DEFAULT_SETTINGS, projects: [{ id: 'p-1', name: 'P', repos: ['C:/a', 'C:/b'] }], activeRepo: 'C:/a' });
 assert.ok(existsSync(file));
 const s2 = loadSettings(file);
 assert.equal(s2.activeRepo, 'C:/a');
 assert.deepEqual(s2.repos, ['C:/a', 'C:/b']);
-// file hỏng → fallback defaults, không crash
+// broken file → fallback defaults, no crash
 writeFileSync(file, '{broken json');
 const s3 = loadSettings(file);
 assert.deepEqual(s3, DEFAULT_SETTINGS);
-// initLanguage: lần đầu → ghi locale OS; đã có language → giữ; file hỏng → không ghi đè
+// initLanguage: first run → write OS locale; language already set → keep; broken file → don't overwrite
 const f2 = path.join(tmp, 'first.json');
 assert.equal(initLanguage(f2, 'vi').language, 'vi');
-assert.equal(loadSettings(f2).language, 'vi', 'đã ghi xuống file');
-assert.equal(initLanguage(f2, 'en').language, 'vi', 'không đè lựa chọn cũ');
-writeFileSync(f2, JSON.stringify({ repos: ['C:/old'] })); // settings cũ chưa có language
+assert.equal(loadSettings(f2).language, 'vi', 'written to file');
+assert.equal(initLanguage(f2, 'en').language, 'vi', 'does not override previous choice');
+writeFileSync(f2, JSON.stringify({ repos: ['C:/old'] })); // old settings without language
 assert.deepEqual([initLanguage(f2, 'vi').language, loadSettings(f2).repos], ['vi', ['C:/old']]);
-assert.equal(initLanguage(file, 'vi').language, 'en', 'file hỏng → defaults, không ghi');
+assert.equal(initLanguage(file, 'vi').language, 'en', 'broken file → defaults, not written');
 assert.equal(readFileSync(file, 'utf8'), '{broken json');
 console.log('✓ settingsStore: roundtrip + broken-file fallback + initLanguage');
 
-// migration: settings cũ (chỉ repos) → 1 project / repo, COPY session cũ, idempotent
+// migration: old settings (repos only) → 1 project / repo, COPY old sessions, idempotent
 const legacy = path.join(tmp, 'svc-a');
 mkdirSync(path.join(legacy, '.orchestra', 'chat'), { recursive: true });
 writeFileSync(path.join(legacy, '.orchestra', 'chat', 's1.jsonl'), '{"role":"user","content":"hi"}\n');
@@ -111,16 +111,16 @@ writeFileSync(f3, JSON.stringify({ repos: [legacy, 'C:/nope'], activeRepo: 'C:/n
 const m1 = loadSettings(f3);
 assert.deepEqual(m1.projects.map((p) => [p.name, p.repos]), [['svc-a', [legacy]], ['nope', ['C:/nope']]]);
 assert.ok(m1.projects.every((p) => PROJECT_ID_RE.test(p.id)) && m1.projects[0].id.startsWith('svc-a-'));
-assert.equal(m1.activeRepo, 'C:/nope', 'giữ activeRepo cũ');
+assert.equal(m1.activeRepo, 'C:/nope', 'keeps old activeRepo');
 const copied = path.join(tmp, 'home', 'projects', m1.projects[0].id, 'chat', 's1.jsonl');
-assert.ok(existsSync(copied), 'session cũ được copy vào project');
-assert.ok(existsSync(path.join(legacy, '.orchestra', 'chat', 's1.jsonl')), 'COPY, không move');
-assert.deepEqual(loadSettings(f3).projects, m1.projects, 'idempotent: lần load sau không migrate lại');
-assert.equal(copyLegacySessions(legacy, m1.projects[0].id), 0, 'copy lại → bỏ qua file đã có');
+assert.ok(existsSync(copied), 'old session copied into project');
+assert.ok(existsSync(path.join(legacy, '.orchestra', 'chat', 's1.jsonl')), 'COPY, not move');
+assert.deepEqual(loadSettings(f3).projects, m1.projects, 'idempotent: next load does not migrate again');
+assert.equal(copyLegacySessions(legacy, m1.projects[0].id), 0, 'copy again → skips existing files');
 rmSync(tmp, { recursive: true, force: true });
-console.log('✓ migration: 1 project/repo, copy session cũ, idempotent');
+console.log('✓ migration: 1 project/repo, copy old sessions, idempotent');
 
-// 4. requireRepo — chặn chạy trong process cwd khi chưa có repo (lỗi theo locale)
+// 4. requireRepo — blocks running in process cwd when no repo (locale-aware error)
 setLocale('vi');
 assert.throws(() => requireRepo({ activeRepo: '', repos: [] }), /Chưa chọn repo/);
 assert.throws(() => requireRepo({ activeRepo: path.join(os.tmpdir(), 'orch-khong-ton-tai-xyz'), repos: [] }), /không tồn tại/);
@@ -130,13 +130,13 @@ const rdir = mkdtempSync(path.join(os.tmpdir(), 'orch-repo-'));
 assert.equal(requireRepo({ activeRepo: rdir, repos: [] }), rdir);
 assert.equal(requireRepo({ activeRepo: '', repos: [rdir] }), rdir, 'fallback repos[0]');
 rmSync(rdir, { recursive: true, force: true });
-console.log('✓ requireRepo: rỗng/không tồn tại → throw, dir thật → path');
+console.log('✓ requireRepo: empty/nonexistent → throw, real dir → path');
 
 // 4b. approval inline + permission mode
-for (const c of ['approval:respond', 'approval:pending']) assert.ok(chans.includes(c), `có channel ${c}`);
-for (const e of ['approval:request', 'approval:resolved', 'approval:focus']) assert.ok(evs.includes(e), `có event ${e}`);
+for (const c of ['approval:respond', 'approval:pending']) assert.ok(chans.includes(c), `has channel ${c}`);
+for (const e of ['approval:request', 'approval:resolved', 'approval:focus']) assert.ok(evs.includes(e), `has event ${e}`);
 assert.equal(DEFAULT_SETTINGS.permissionMode, 'ask');
-assert.equal(old.permissionMode, 'ask', 'settings cũ thiếu permissionMode → ask');
+assert.equal(old.permissionMode, 'ask', 'old settings missing permissionMode → ask');
 for (const m of ['plan', 'ask', 'auto', 'full']) assert.equal(validateSettings({ permissionMode: m }).permissionMode, m);
 for (const junk of ['yolo', 1, null, 'FULL']) assert.equal(validateSettings({ permissionMode: junk }).permissionMode, 'ask', `permissionMode ${JSON.stringify(junk)} → ask`);
 const { createApprovalBroker, parseApprovalUrl, approvalToastXml } = await import('../out/desktop/src/main/approvals.js');
@@ -148,20 +148,20 @@ const p1 = req();
 assert.equal(sent.length, 1);
 assert.match(sent[0].id, /^[0-9a-f-]{36}$/);
 assert.deepEqual(br.pending().map((r) => r.id), [sent[0].id]);
-assert.equal(br.respond('nope', true), false, 'id lạ → bỏ qua');
-assert.equal(br.respond(sent[0].id, 'yes'), false, 'approve không phải boolean → bỏ qua');
+assert.equal(br.respond('nope', true), false, 'unknown id → ignored');
+assert.equal(br.respond(sent[0].id, 'yes'), false, 'non-boolean approve → ignored');
 assert.equal(br.respond(sent[0].id, true), true);
 assert.equal(await p1, true);
-assert.equal(br.respond(sent[0].id, false), false, 'trả lời lần 2 → bỏ qua');
+assert.equal(br.respond(sent[0].id, false), false, 'second answer → ignored');
 assert.deepEqual(resolved, [[sent[0].id, true]]);
 const ac = new AbortController();
 const p2 = req({ signal: ac.signal });
 ac.abort();
-assert.equal(await p2, false, 'Dừng (abort) → false');
-assert.equal(await req({ signal: ac.signal }), false, 'signal đã abort → false ngay');
+assert.equal(await p2, false, 'Stop (abort) → false');
+assert.equal(await req({ signal: ac.signal }), false, 'already-aborted signal → false immediately');
 const p3 = req();
 br.cancelAll();
-assert.equal(await p3, false, 'đóng cửa sổ → false');
+assert.equal(await p3, false, 'window closed → false');
 assert.deepEqual(br.pending(), []);
 const id = sent[0].id;
 assert.deepEqual(parseApprovalUrl(`orchestra://approval/${id}/approve`), { id, approve: true });
@@ -172,7 +172,7 @@ assert.ok(xml.includes('a &lt;b&gt; &amp; &quot;c&quot;') && !xml.includes('line
 console.log('✓ approval: channel/event, broker request/respond/abort/cancelAll, URL parse strict, toast xml escape; permissionMode validate + default');
 
 // 5. pages
-assert.ok(PAGES.includes('chat') && PAGES.includes('wizard'), 'pages đủ');
+assert.ok(PAGES.includes('chat') && PAGES.includes('wizard'), 'pages complete');
 console.log(`✓ pages: ${PAGES.join(', ')}`);
 
 console.log('DESKTOP CONTRACT TEST PASS ✓');

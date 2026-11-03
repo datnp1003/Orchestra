@@ -1,4 +1,4 @@
-// IPC wiring — bọc logic.ts (API duy nhất) vào ipcMain. Không viết logic mới ở đây.
+// IPC wiring — wraps logic.ts (the only API) into ipcMain. No new logic here.
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
 import { app, shell, dialog } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
@@ -33,7 +33,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
-// R2a: 1 provider store + 1 router cho cả app — brain, dispatch, pipeline đều đi qua đây
+// R2a: 1 provider store + 1 router for the whole app — brain, dispatch, pipeline all go through here
 const store = createProviderStore();
 let router: RouterHandle | null = null;
 let routerSettingsFile = '';
@@ -45,16 +45,16 @@ export async function startOrchestraRouter(settingsFile: string): Promise<void> 
   routerSettingsFile = settingsFile;
   router = await startRouter({ store, defaultModel: routerDefault, onLog: (l) => console.log('[router]', l) });
   console.log(`[router] 127.0.0.1:${router.port}`);
-  // làm ấm cache /v1/models của router (upstream ~3s) — models:list/brain:models đầu tiên không phải chờ
+  // warm the router's /v1/models cache (upstream ~3s) — first models:list/brain:models doesn't wait
   void listBrainModels(routerCreds()!);
 }
 export const stopOrchestraRouter = (): Promise<void> => router?.close() ?? Promise.resolve();
 const routerCreds = (): BrainCreds | null => (router ? { baseUrl: `http://127.0.0.1:${router.port}`, apiKey: router.token } : null);
 const oauthOf = (p: ProviderConfig) => oauthStatus(store.getKey(p.id));
-/** provider + needsLogin (oauth chưa đăng nhập / refresh chết) cho routerModelOk */
+/** provider + needsLogin (oauth not logged in / refresh dead) for routerModelOk */
 const providersWithLogin = () =>
   store.listProviders().map((p) => (isOAuth(p.kind) && ['none', 'needsLogin'].includes(oauthOf(p).oauthStatus) ? { ...p, needsLogin: true } : p));
-/** chưa có provider bật nào → undefined: CLI dùng auth riêng như trước (không phá máy mới cài) */
+/** no enabled provider → undefined: CLI uses its own auth as before (doesn't break fresh installs) */
 const routerInfo = (): RouterInfo | undefined => {
   const c = routerCreds();
   const providers = providersWithLogin();
@@ -67,21 +67,21 @@ export interface IpcContext {
   settingsFile: string;
   notify: (title: string, body: string) => void;
   protoDir: string;
-  /** settings đổi language → main dựng lại phần tĩnh (tray menu) */
+  /** settings language changed → main rebuilds static parts (tray menu) */
   onLocaleChange?: () => void;
-  /** có approval mới — main hiện notification khi cửa sổ không focus */
+  /** new approval — main shows a notification when the window is unfocused */
   notifyApproval?: (r: ApprovalRequest) => void;
 }
 
 let broker: ApprovalBroker | null = null;
-/** toast action orchestra://approval/<id>/… (main.ts) — id phải đang chờ */
+/** toast action orchestra://approval/<id>/… (main.ts) — id must be pending */
 export const respondApproval = (id: string, approve: boolean): boolean => broker?.respond(id, approve) ?? false;
-/** cửa sổ đóng → không ai trả lời được: từ chối mọi approval đang chờ */
+/** window closed → nobody can answer: reject all pending approvals */
 export const cancelApprovals = (): void => broker?.cancelAll();
 
 export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const settings = () => loadSettings(ctx.settingsFile);
-  // chạy fn với repo hợp lệ; không có repo → fallback(lỗi) thay vì chạy trong process cwd
+  // run fn with a valid repo; no repo → fallback(error) instead of running in process cwd
   const withRepo = <T, F>(fn: (repo: string) => T, fallback: (err: string) => F): T | F => {
     let repo: string;
     try {
@@ -94,7 +94,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const send = (channel: string, data: unknown) => ctx.win()?.webContents.send(channel, data);
   reflectSettingsFile = ctx.settingsFile;
   reflectStep = (text) => send(EVENTS.CHAT_STEP, { kind: 'memory', text });
-  // hỏi user bằng approval card trong chat (không modal) — pipeline plan approval + tool T2 của brain + repo_attach
+  // ask the user via an approval card in chat (no modal) — pipeline plan approval + brain T2 tools + repo_attach
   broker = createApprovalBroker({
     onRequest: (r) => {
       send(EVENTS.APPROVAL_REQUEST, r);
@@ -117,12 +117,12 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   }));
 
   ipcMain.handle(IPC.SETTINGS_GET, () => settings());
-  // renderer chỉ cần desktop.* — lỗi từ main đã dịch sẵn trước khi gửi
+  // renderer only needs desktop.* — main errors are translated before sending
   ipcMain.handle(IPC.I18N_GET, () => ({ locale: settings().language, dict: messages('desktop.') }));
   ipcMain.handle(IPC.SETTINGS_SET, (_e, s: AppSettings) => {
     const prev = settings();
     const saved = saveSettings(ctx.settingsFile, s);
-    if (prev.brainModel !== saved.brainModel) resetChat(); // đổi model brain → hội thoại mới
+    if (prev.brainModel !== saved.brainModel) resetChat(); // brain model changed → new conversation
     if (prev.language !== saved.language) {
       setLocale(saved.language);
       ctx.onLocaleChange?.();
@@ -135,13 +135,13 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return modelsList(models, providersWithLogin());
   });
 
-  // ---- R2a Providers: key chỉ đi vào vault, KHÔNG bao giờ trả về renderer ----
+  // ---- R2a Providers: keys only go into the vault, NEVER returned to the renderer ----
   ipcMain.handle(IPC.PROVIDERS_LIST, () =>
     store.listProviders().map((p) => ({
       id: p.id, kind: p.kind, baseUrl: p.baseUrl, formats: p.formats, enabled: p.enabled, hasKey: !!store.getKey(p.id),
       models: p.models ?? [], riskAcknowledged: !!p.riskAcknowledged, ...(isOAuth(p.kind) ? oauthOf(p) : {}),
     })));
-  // R3 OAuth: token chỉ vào vault; anthropic = user dán code#state, openai = callback 127.0.0.1:1455
+  // R3 OAuth: tokens only go into the vault; anthropic = user pastes code#state, openai = callback 127.0.0.1:1455
   const oauthProvider = (id: unknown) => {
     const p = store.listProviders().find((x) => x.id === id);
     if (!p || !isOAuth(p.kind)) throw new Error(t('desktop.err.noOAuthProvider', { id: String(id) }));
@@ -180,14 +180,14 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
   ipcMain.handle(IPC.PROVIDERS_SAVE, (_e, p: { cfg: Partial<ProviderConfig>; key?: string }) => {
     try {
-      const key = typeof p?.key === 'string' && p.key.trim() ? p.key.trim() : undefined; // trống = giữ key cũ
+      const key = typeof p?.key === 'string' && p.key.trim() ? p.key.trim() : undefined; // empty = keep old key
       return { ok: true, id: store.saveProvider(p?.cfg ?? {}, key).id };
     } catch (err) {
       return { ok: false, error: errMsg(err) };
     }
   });
   ipcMain.handle(IPC.PROVIDERS_DELETE, (_e, id: string) => ({ ok: store.deleteProvider(String(id)) }));
-  // gọi thẳng upstream đúng như router làm (header auth giống hệt) — bỏ qua cache 5' của router để thấy lỗi thật
+  // call upstream directly, exactly as the router does (identical auth headers) — bypass the router's 5' cache to see real errors
   ipcMain.handle(IPC.PROVIDERS_TEST, async (_e, id: string) => {
     const p = store.listProviders().find((x) => x.id === id);
     if (!p) return { ok: false, count: 0, error: t('desktop.err.noProvider', { id }) };
@@ -203,7 +203,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
   ipcMain.handle(IPC.ROUTER_STATUS, () => ({ running: !!router, port: router?.port ?? null, providers: store.listProviders().length }));
 
-  // ---- Projects: nhóm repo (microservices) + session + memory riêng; xoá project KHÔNG đụng repo ----
+  // ---- Projects: repo group (microservices) + own sessions + memory; deleting a project does NOT touch repos ----
   const projectOf = (id: unknown) => {
     const f = findProject(settings().projects, id);
     if ('error' in f) throw new Error(f.error);
@@ -215,7 +215,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!n || n.length > 80) throw new Error(t('desktop.project.badName'));
     return n;
   };
-  // sửa project id rồi lưu; activeRepo được validateSettings kéo về repo còn tồn tại
+  // edit project by id then save; validateSettings pulls activeRepo back to an existing repo
   const updateProject = (id: unknown, fn: (p: { id: string; name: string; repos: string[] }) => void) => {
     const s = settings();
     const p = projectOf(id);
@@ -241,7 +241,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     saveSettings(ctx.settingsFile, { ...s, projects: [...s.projects, project] });
     return { project };
   }));
-  // path do main chọn qua dialog — renderer không gửi path
+  // path chosen by main via dialog — renderer sends no path
   ipcMain.handle(IPC.PROJECT_ADD_REPO, (_e, p: { id: string }) => guard(async () => {
     projectOf(p?.id);
     const w = ctx.win();
@@ -264,7 +264,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     }
     const s = settings();
     saveSettings(ctx.settingsFile, { ...s, projects: s.projects.filter((x) => x.id !== project.id) });
-    deleteProjectData(project.id); // chỉ ~/.orchestra/projects/<id>
+    deleteProjectData(project.id); // only ~/.orchestra/projects/<id>
     return {};
   }));
   ipcMain.handle(IPC.MEMORY_GET, (_e, p: { projectId: string | null }) => guard(() => {
@@ -280,7 +280,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { text: r.text, used: r.used, budget: r.budget };
   }));
 
-  // fleet: probe CLI (where/--version/login status) async + cache — fleet:list không spawn gì khi đã có cache
+  // fleet: probe CLI (where/--version/login status) async + cache — fleet:list spawns nothing once cached
   const fleet = createFleetCache(fleetSnapshotAsync, {
     onChange: (v) => send(EVENTS.FLEET_CHANGED, v),
     onError: (err) => console.log('[fleet] probe failed:', errMsg(err)),
@@ -331,7 +331,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       model: p.model || undefined,
       router: routerInfo(),
       onLog: (line) => send(EVENTS.PIPELINE_LOG, line),
-      // D1: approval qua modal của Desktop — không có stdin
+      // D1: approval via Desktop modal — no stdin
       askUser: async (q) => {
         send(EVENTS.PIPELINE_LOG, `⏸ ${q}`);
         return askContinue(q);
@@ -341,11 +341,11 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     return { ok: r.ok, runId: r.runId, merged: r.merged, nodes: r.nodes };
   }, (error) => ({ ok: false, error })));
 
-  // M1: user chỉ nói chuyện với Orchestra (brain = LLM API + tool); CLI chỉ là worker qua fleet_* tool
+  // M1: user only talks to Orchestra (brain = LLM API + tools); CLIs are just workers via fleet_* tools
   ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string }) => {
     const notify = (m: unknown) => send(EVENTS.CHAT_MESSAGE, m);
     const fail = (error: string) => {
-      // báo lỗi thành message — không để bubble '…đang xử lý' treo
+      // report errors as a message — don't leave the '…processing' bubble hanging
       notify({ kind: 'result', text: `✗ ${error}` });
       return { error };
     };
@@ -357,8 +357,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     chatBusy = true;
     const ac = new AbortController();
     chatAbort = ac;
-    const conv = chat; // reset giữa lượt → kết quả lượt này không ghi đè hội thoại mới
-    // tiến độ worker → chat: tool_use/message luôn gửi, dòng khác tối đa 1 lần / 2s
+    const conv = chat; // reset mid-turn → this turn's result won't overwrite the new conversation
+    // worker progress → chat: tool_use/message always sent, other lines at most once / 2s
     let lastProgress = 0;
     const progress = (line: string) => {
       send(EVENTS.PIPELINE_LOG, line);
@@ -369,15 +369,15 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     };
     try {
       const s = settings();
-      // project cố định theo session (null = chat ngoài project: chỉ global memory, không repo tool)
+      // project fixed per session (null = chat outside a project: global memory only, no repo tools)
       const project = conv.projectId ? projectOf(conv.projectId) : null;
       const refs = project ? repoRefs(project.repos) : null;
-      // chat ngoài project vẫn gọi worker được → repo scratch; git lỗi → chỉ còn memory tool
+      // chats outside a project can still call workers → scratch repo; git error → memory tools only
       let ws: { name: string; path: string } | undefined;
       if (!project) {
         try { ws = { name: 'workspace', path: ensureWorkspace() }; } catch (err) { console.log('[chat] workspace:', err instanceof Error ? err.message : err); }
       }
-      // ngoài project: repo đã attach (giữ cả session) + workspace; mảng sống → repo_attach thêm được giữa lượt
+      // outside a project: attached repos (kept for the session) + workspace; live array → repo_attach can add mid-turn
       const toolRefs = refs ?? (ws ? [ws, ...repoRefs(conv.attached).map((r) => ({ ...r, name: r.name === 'workspace' ? 'workspace-2' : r.name }))] : null);
       const attach = async (raw: string) => {
         const dir = path.resolve(raw);
@@ -437,7 +437,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       conv.history = r.history;
       conv.userTurns++;
       notify({ kind: 'orch', text: r.text || t('desktop.chat.noReply') });
-      // reflection nền: sau lượt có dispatch/pipeline/merge hoặc mỗi 4 lượt user — không chặn chat
+      // background reflection: after a turn with dispatch/pipeline/merge or every 4 user turns — doesn't block chat
       const heavy = fresh.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use' && HEAVY_TOOLS.has(b.name)));
       if (heavy || conv.userTurns >= 4) void reflect(conv);
       return { ok: true };
@@ -452,9 +452,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     chatAbort?.abort();
     return { ok: !!chatAbort };
   });
-  // session = 1 file jsonl; mở lại → lượt sau append tiếp vào file đó
+  // session = 1 jsonl file; reopened → later turns append to that file
   ipcMain.handle(IPC.CHAT_SESSIONS, () => chatSessionsView(settings().projects, { projectId: chat.projectId, id: chat.startedAt }));
-  // Dashboard/Settings theo session: activeRepo = repo đầu của project đang mở
+  // Dashboard/Settings follow the session: activeRepo = first repo of the open project
   const followProject = (project: { repos: string[] } | null) => {
     const s = settings();
     if (project?.repos[0] && project.repos[0] !== s.activeRepo) saveSettings(ctx.settingsFile, { ...s, activeRepo: project.repos[0] });
@@ -466,8 +466,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!existsSync(sf.file)) return { ok: false, error: t('desktop.chat.err.noSession', { id: String(p.id) }) };
     const { history, messages } = parseChatSession(readFileSync(sf.file, 'utf8'));
     const projectId = sf.project?.id ?? null;
-    if (chat.startedAt !== p.id || chat.projectId !== projectId) void reflect(chat); // flush session cũ
-    // ponytail: reflectedUpTo chỉ trong RAM — mở lại session cũ coi như đã reflect hết (không quét lại lịch sử)
+    if (chat.startedAt !== p.id || chat.projectId !== projectId) void reflect(chat); // flush old session
+    // ponytail: reflectedUpTo is RAM-only — reopened old sessions count as fully reflected (history not rescanned)
     chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0, attached: [] };
     chat.attached = loadAttached(chat);
     followProject(sf.project);
@@ -508,7 +508,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!m) return { badge: 'fail', cases: [], detail: `unknown worker ${id}` };
     return withRepo((repo) => runConformance(m, { repo, withSmoke: true }), (detail) => ({ badge: 'fail', cases: [], detail }));
   });
-  // Skills — renderer chỉ gửi tên/scope/projectId/previewId; path luôn do main tính (skills.ts validate tên)
+  // Skills — renderer only sends name/scope/projectId/previewId; path is always computed by main (skills.ts validates names)
   const skillScope = (p: { scope?: unknown; projectId?: unknown } | undefined): [SkillScope, string | null] => {
     if (p?.scope === 'global') return ['global', null];
     if (p?.scope === 'project') return ['project', projectOf(p.projectId).id];
@@ -528,7 +528,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     removeSkill(scope, id, strOf(p?.name));
     return {};
   }));
-  // ponytail: clone đồng bộ (spawnSync, timeout 60s) chặn main trong lúc clone — chuyển sang spawn async nếu UI đơ khó chịu
+  // ponytail: synchronous clone (spawnSync, 60s timeout) blocks main while cloning — switch to async spawn if UI freezes become annoying
   ipcMain.handle(IPC.SKILLS_PREVIEW_GITHUB, (_e, p: { url: string }) => guard(() => previewGithub(strOf(p?.url))));
   ipcMain.handle(IPC.SKILLS_PREVIEW_LOCAL, () => guard(() => previewLocal()));
   ipcMain.handle(IPC.SKILLS_INSTALL, (_e, p: { previewId: string; names: string[]; scope: string; projectId?: string }) => guard(() => {
@@ -547,7 +547,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     cancelPreview(strOf(p?.previewId));
     return {};
   }));
-  // P-D3: update check — autoUpdater đã wired ở setupAutoUpdater; channel này trigger lại
+  // P-D3: update check — autoUpdater is wired in setupAutoUpdater; this channel re-triggers it
   ipcMain.handle(IPC.UPDATE_CHECK, async () => {
     if (!app.isPackaged) return { status: 'skipped-dev' };
     try {
@@ -560,17 +560,17 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   });
 }
 
-// PKCE đang chờ user dán code (anthropic) — theo provider id, chỉ trong RAM
+// PKCE awaiting user-pasted code (anthropic) — keyed by provider id, RAM only
 const oauthPending = new Map<string, { verifier: string; state: string }>();
 
-// hội thoại brain — in-memory theo phiên app (1 user 1 hội thoại); reset khi đổi model / chat mới
-// projectId: cố định cho cả session (null = chat ngoài project)
-// reflectedUpTo/userTurns: memory reflection — history[reflectedUpTo..] chưa reflect, userTurns = lượt user từ lần reflect trước
-// attached: repo user nhắc tới trong chat ngoài project (repo_attach, đã duyệt) — lưu kèm session (<id>.repos.json)
+// brain conversation — in-memory per app run (1 user, 1 conversation); reset on model change / new chat
+// projectId: fixed for the whole session (null = chat outside a project)
+// reflectedUpTo/userTurns: memory reflection — history[reflectedUpTo..] not yet reflected, userTurns = user turns since last reflect
+// attached: repos the user mentioned in a chat outside a project (repo_attach, approved) — saved with the session (<id>.repos.json)
 interface Conv { history: Msg[]; startedAt: string; projectId: string | null; reflectedUpTo: number; userTurns: number; attached: string[] }
 let chat: Conv = { history: [], startedAt: '', projectId: null, reflectedUpTo: 0, userTurns: 0, attached: [] };
 let chatBusy = false;
-let chatAbort: AbortController | null = null; // lượt đang chạy — chat:cancel abort
+let chatAbort: AbortController | null = null; // running turn — chat:cancel aborts it
 const resetChat = (projectId: string | null = chat.projectId) => {
   chat = { history: [], startedAt: '', projectId, reflectedUpTo: 0, userTurns: 0, attached: [] };
 };
@@ -588,7 +588,7 @@ const HEAVY_TOOLS = new Set(['fleet_dispatch', 'fleet_pipeline', 'fleet_merge'])
 const modelCaller = (creds: BrainCreds, model: string): CallModel => (system, user) => callBrainText({ ...creds, model }, system, user);
 let reflectSettingsFile = '';
 let reflectStep: (text: string) => void = () => {};
-/** memory reflection nền cho phần hội thoại chưa reflect — lỗi chỉ log; step chỉ hiện nếu session còn đang mở */
+/** background memory reflection for the unreflected part of the conversation — errors only logged; step shown only if the session is still open */
 async function reflect(conv: Conv): Promise<void> {
   const from = conv.reflectedUpTo;
   const msgs = conv.history.slice(from);
@@ -599,7 +599,7 @@ async function reflect(conv: Conv): Promise<void> {
   conv.userTurns = 0;
   try {
     const project = conv.projectId ? s.projects.find((p) => p.id === conv.projectId) : undefined;
-    if (conv.projectId && !project) return; // project đã bị xoá
+    if (conv.projectId && !project) return; // project was deleted
     const callModel = modelCaller(creds, s.brainModel);
     const ops = await reflectMemory({
       callModel,
@@ -611,12 +611,12 @@ async function reflect(conv: Conv): Promise<void> {
     if (r.errors.length) console.log('[memory] reflection ops skipped:', r.errors.join('; '));
     if (r.applied.length && chat === conv) reflectStep(t('desktop.memory.step', { summary: summarizeOps(r.applied) }));
   } catch (err) {
-    conv.reflectedUpTo = Math.min(conv.reflectedUpTo, from); // lần sau thử lại
+    conv.reflectedUpTo = Math.min(conv.reflectedUpTo, from); // retry next time
     console.log('[memory] reflection failed:', errMsg(err));
   }
 }
 
-/** append message mới vào ~/.orchestra/{projects/<id>/chat,chats}/<startedAt>.jsonl — chỉ nội dung hội thoại, không có key */
+/** append new messages to ~/.orchestra/{projects/<id>/chat,chats}/<startedAt>.jsonl — conversation content only, no keys */
 function persistChat(conv: Conv, msgs: Msg[]): void {
   try {
     conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
@@ -629,10 +629,10 @@ function persistChat(conv: Conv, msgs: Msg[]): void {
   }
 }
 
-// giữ import MANIFESTS cho wizard (đếm worker chưa cài)
+// keep MANIFESTS import for the wizard (counts uninstalled workers)
 void MANIFESTS;
 
-// ---------- P-D3: Terminal nhúng (@lydell/node-pty prebuilt N-API — không cần electron-rebuild) ----------
+// ---------- P-D3: Embedded terminal (@lydell/node-pty prebuilt N-API — no electron-rebuild needed) ----------
 type PtyProc = {
   write: (d: string) => void;
   resize: (c: number, r: number) => void;
@@ -648,7 +648,7 @@ export function killAllTerminals(): void {
     try {
       t.kill();
     } catch {
-      /* đã chết */
+      /* already dead */
     }
     terminals.delete(id);
   }
@@ -660,7 +660,7 @@ export function wireTerminals(ipcMain: IpcMain, ctx: IpcContext): void {
     try {
       return requireRepo(loadSettings(ctx.settingsFile));
     } catch {
-      return os.homedir(); // không có repo → home, không phải process cwd
+      return os.homedir(); // no repo → home, not process cwd
     }
   };
   ipcMain.handle(IPC.TERMINAL_CREATE, (_e, p: { id: string; cwd?: string; cols?: number; rows?: number }) => {
@@ -697,7 +697,7 @@ export function wireTerminals(ipcMain: IpcMain, ctx: IpcContext): void {
   });
 }
 
-// ---------- P-D3: Auto-update (electron-updater) — wired,guarded: chỉ hoạt động khi có GitHub Releases ----------
+// ---------- P-D3: Auto-update (electron-updater) — wired,guarded: only active once GitHub Releases exist ----------
 export function setupAutoUpdater(getWin: () => BrowserWindow | null, notify: (t: string, b: string) => void): void {
   if (!app.isPackaged) {
     console.log('[updater] dev mode — skip auto-update');

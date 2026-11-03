@@ -1,4 +1,4 @@
-// M1: tool executor của Orchestra brain — temp dir + temp git repo, không CLI/mạng thật
+// M1: Orchestra brain tool executor — temp dir + temp git repo, no real CLI/network
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -17,7 +17,7 @@ const tmp = (t) => {
 };
 const exec = (repo, approve = async () => true) => brainToolExecutor(repo, { approve, hooksEnabled: false });
 
-test('tool defs: tên unique, có schema; sync_skills/skills_sync đã bỏ', () => {
+test('tool defs: unique names, have schema; sync_skills/skills_sync removed', () => {
   const names = BRAIN_TOOLS.map((t) => t.name);
   assert.equal(new Set(names).size, names.length);
   assert.ok(BRAIN_TOOLS.every((t) => t.input_schema.type === 'object'));
@@ -25,7 +25,7 @@ test('tool defs: tên unique, có schema; sync_skills/skills_sync đã bỏ', ()
   for (const n of ['fleet_dispatch', 'fleet_pipeline']) assert.equal(BRAIN_TOOLS.find((d) => d.name === n).input_schema.properties.skills.type, 'array');
 });
 
-test('skills: fleet_dispatch truyền skills + projectId; tên lạ → lỗi kèm danh sách hợp lệ; system prompt liệt kê skill', async (t) => {
+test('skills: fleet_dispatch passes skills + projectId; unknown name → error with valid list; system prompt lists skills', async (t) => {
   setOrchestraHome(tmp(t));
   saveSkill('global', null, { name: 'lint', description: 'run the linter', body: 'x' });
   saveSkill('project', 'p-1', { name: 'deploy', description: 'deploy steps', body: 'y' });
@@ -38,9 +38,9 @@ test('skills: fleet_dispatch truyền skills + projectId; tên lạ → lỗi k�
   assert.equal(bad.ok, false);
   assert.match(bad.content, /unknown skill\(s\): nope — available: deploy, lint/);
   assert.equal((await x('fleet_pipeline', { template: 'feature-dev', goal: 'g', scope: ['a'], skills: ['nope'] })).ok, false);
-  assert.equal(calls.length, 1, 'skill lạ → không dispatch');
+  assert.equal(calls.length, 1, 'unknown skill → no dispatch');
   const noProj = brainToolExecutor(tmp(t), { approve: async () => true, dispatch });
-  assert.match((await noProj('fleet_dispatch', { goal: 'g', scope: ['a'], skills: ['deploy'] })).content, /available: lint/, 'không project → chỉ global');
+  assert.match((await noProj('fleet_dispatch', { goal: 'g', scope: ['a'], skills: ['deploy'] })).content, /available: lint/, 'no project → global only');
   const skills = [{ name: 'lint', description: 'run the linter' }];
   assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', skills }), /SKILLS \(attach[^\n]*relevant[^\n]*\n- lint — run the linter/);
   assert.match(brainSystemPrompt({ globalMemory: '', skills }), /SKILLS installed \(informational[^\n]*\n- lint — run the linter/);
@@ -49,7 +49,7 @@ test('skills: fleet_dispatch truyền skills + projectId; tên lạ → lỗi k�
   assert.ok(sys.includes('- s39 — d') && !sys.includes('- s40 — d') && sys.includes('+5 more'));
 });
 
-test('repo_read chặn thoát repo', async (t) => {
+test('repo_read blocks escaping the repo', async (t) => {
   const repo = tmp(t);
   writeFileSync(path.join(repo, 'a.txt'), 'l1\nl2\nl3');
   const x = exec(repo);
@@ -63,7 +63,7 @@ test('repo_read chặn thoát repo', async (t) => {
   assert.match(r.content, /^2\tl2\n\(3 lines total\)$/);
 });
 
-test('repo_glob / repo_grep trên temp dir, bỏ .git/node_modules', async (t) => {
+test('repo_glob / repo_grep on temp dir, skip .git/node_modules', async (t) => {
   const repo = tmp(t);
   for (const d of ['src/x', 'node_modules/p', '.git']) mkdirSync(path.join(repo, d), { recursive: true });
   writeFileSync(path.join(repo, 'src/a.ts'), 'const pay = 1;\n// TODO pay');
@@ -79,7 +79,7 @@ test('repo_glob / repo_grep trên temp dir, bỏ .git/node_modules', async (t) =
   assert.equal((await x('repo_grep', { pattern: '(' })).ok, false);
 });
 
-test('fleet_dispatch / fleet_pipeline validate input, không throw', async (t) => {
+test('fleet_dispatch / fleet_pipeline validate input, no throw', async (t) => {
   const x = exec(tmp(t));
   for (const input of [{ goal: 'g', scope: [] }, { goal: 'g' }, { goal: '', scope: ['src/**'] }, { goal: 'g', scope: [1] }, null]) {
     const r = await x('fleet_dispatch', input);
@@ -90,7 +90,7 @@ test('fleet_dispatch / fleet_pipeline validate input, không throw', async (t) =
   assert.equal((await x('nope', {})).ok, false);
 });
 
-test('fleet_dispatch readonly → node plan/planner, kèm câu trả lời worker; mặc định implement/coder', async (t) => {
+test('fleet_dispatch readonly → plan/planner node, with worker answer; default implement/coder', async (t) => {
   const repo = tmp(t);
   const calls = [];
   const dispatch = async (_repo, o) => (calls.push(o), {
@@ -105,14 +105,14 @@ test('fleet_dispatch readonly → node plan/planner, kèm câu trả lời worke
   await x('fleet_dispatch', { goal: 'fix', scope: ['src/**'] });
   assert.deepEqual([calls[1].node, calls[1].role, calls[1].promptOverride], ['implement', 'coder', undefined]);
   assert.equal((await x('fleet_dispatch', { goal: 'g', scope: ['a'], readonly: 'yes' })).ok, false);
-  assert.equal(calls.length, 2, 'readonly sai kiểu → không dispatch');
+  assert.equal(calls.length, 2, 'readonly wrong type → no dispatch');
   assert.ok(BRAIN_TOOLS.find((d) => d.name === 'fleet_dispatch').input_schema.properties.readonly.type === 'boolean');
   const sys = brainSystemPrompt({ project: { name: 'P', repos: repoRefs([repo]) }, globalMemory: '' });
-  assert.ok(sys.includes(`- ${path.basename(repo)}: ${path.resolve(repo)}`), 'system prompt có REPOS');
+  assert.ok(sys.includes(`- ${path.basename(repo)}: ${path.resolve(repo)}`), 'system prompt has REPOS');
   assert.match(sys, /readonly:true for tasks that only read/);
 });
 
-test('permission mode: plan chặn dispatch ghi/pipeline/merge/promote (không hỏi), readonly vẫn chạy; ask hỏi; auto không hỏi dispatch; prompt có PERMISSION MODE', async (t) => {
+test('permission mode: plan blocks write dispatch/pipeline/merge/promote (no prompt), readonly still runs; ask prompts; auto does not prompt for dispatch; prompt has PERMISSION MODE', async (t) => {
   const repo = tmp(t);
   const calls = [];
   const asked = [];
@@ -127,20 +127,20 @@ test('permission mode: plan chặn dispatch ghi/pipeline/merge/promote (không h
   assert.ok((await plan('fleet_dispatch', { goal: 'list', scope: ['a'], readonly: true })).ok, 'readonly ok trong plan mode');
   assert.equal(calls.length, 1);
   assert.equal((await mk('ask', false)('fleet_dispatch', { goal: 'fix', scope: ['a'] })).content, 'user declined');
-  assert.equal(calls.length, 1, 'từ chối → không dispatch');
+  assert.equal(calls.length, 1, 'rejected → no dispatch');
   assert.ok((await mk('auto')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
   assert.ok((await mk('full')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
-  assert.deepEqual(asked, [['ask', 'risk']], 'chỉ ask hỏi (kind risk); plan/auto/full không hỏi');
+  assert.deepEqual(asked, [['ask', 'risk']], 'only ask prompts (kind risk); plan/auto/full do not');
   assert.equal(calls.length, 3);
   assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', mode: 'plan' }), /\nPERMISSION MODE: plan — plan before editing/);
-  assert.match(brainSystemPrompt({ workspace: { name: 'workspace', path: repo }, globalMemory: '' }), /\nPERMISSION MODE: ask — /, 'thiếu mode → ask');
+  assert.match(brainSystemPrompt({ workspace: { name: 'workspace', path: repo }, globalMemory: '' }), /\nPERMISSION MODE: ask — /, 'missing mode → ask');
 });
 
-test('repoRefs: basename, trùng tên → -2', () => {
+test('repoRefs: basename, duplicate name → -2', () => {
   assert.deepEqual(repoRefs(['/a/api', '/b/api', '/c/web']).map((r) => r.name), ['api', 'api-2', 'web']);
 });
 
-test('projectToolExecutor: route theo repo; >1 repo bắt buộc repo; 1 repo mặc định', async (t) => {
+test('projectToolExecutor: routes by repo; >1 repo requires repo; 1 repo is default', async (t) => {
   const A = tmp(t);
   const B = tmp(t);
   writeFileSync(path.join(A, 'a.txt'), 'from A');
@@ -155,18 +155,18 @@ test('projectToolExecutor: route theo repo; >1 repo bắt buộc repo; 1 repo m�
   assert.ok(miss.content.includes(refs[1].name));
   assert.match((await x('repo_read', { path: 'a.txt', repo: 'nope' })).content, /unknown repo "nope"/);
   const one = projectToolExecutor([refs[0]], { approve: async () => true, projectId: 'p-1' });
-  assert.match((await one('repo_read', { path: 'a.txt' })).content, /from A/, '1 repo → mặc định');
+  assert.match((await one('repo_read', { path: 'a.txt' })).content, /from A/, '1 repo → default');
   const none = projectToolExecutor([], { approve: async () => true, projectId: null });
-  assert.equal((await none('repo_read', { path: 'a.txt' })).ok, false, 'chat global không có repo tool');
+  assert.equal((await none('repo_read', { path: 'a.txt' })).ok, false, 'global chat has no repo tools');
   assert.equal((await x('nope', {})).ok, false);
-  // schema: repo tool có `repo` enum; global chỉ có memory_update
+  // schema: repo tools have `repo` enum; global has only memory_update
   const tools = brainTools(refs);
   assert.deepEqual(tools.find((d) => d.name === 'repo_read').input_schema.properties.repo.enum, refs.map((r) => r.name));
   assert.ok(tools.some((d) => d.name === 'memory_update'));
   assert.deepEqual(brainTools(null).map((d) => d.name), ['memory_update']);
 });
 
-test('memory_update: global vs project; project bị chặn ngoài project', async (t) => {
+test('memory_update: global vs project; project blocked outside a project', async (t) => {
   setOrchestraHome(tmp(t));
   const inProj = projectToolExecutor([], { approve: async () => true, projectId: 'p-1' });
   const global = projectToolExecutor([], { approve: async () => true, projectId: null });
@@ -174,17 +174,17 @@ test('memory_update: global vs project; project bị chặn ngoài project', asy
   assert.ok((await inProj('memory_update', { scope: 'global', action: 'add', text: 'likes short answers' })).ok);
   assert.match((await inProj('memory_update', { scope: 'global', action: 'add', text: 'likes short answers' })).content, /no change/);
   const blocked = await global('memory_update', { scope: 'project', action: 'add', text: 'leak' });
-  assert.equal(blocked.ok, false, 'chat global không ghi project memory');
+  assert.equal(blocked.ok, false, 'global chat does not write project memory');
   assert.equal((await global('memory_update', { scope: 'x', action: 'add', text: 'y' })).ok, false);
   assert.match(loadMemory('p-1'), /uses pnpm/);
   assert.match(loadMemory(null), /likes short answers/);
   assert.ok(!loadMemory(null).includes('pnpm') && !loadMemory('p-1').includes('leak'));
 });
 
-test('system prompt: chat global chỉ thấy global memory; project thấy cả hai + PROJECT/REPOS', () => {
+test('system prompt: global chat sees only global memory; project sees both + PROJECT/REPOS', () => {
   const g = brainSystemPrompt({ globalMemory: '- G1', projectMemory: '- P1' });
   assert.match(g, /USER\/GLOBAL MEMORY:\n- G1/);
-  assert.ok(!g.includes('P1') && !g.includes('PROJECT MEMORY') && !g.includes('REPOS:'), 'global không thấy project');
+  assert.ok(!g.includes('P1') && !g.includes('PROJECT MEMORY') && !g.includes('REPOS:'), 'global does not see project');
   assert.match(g, /open a chat inside a project/);
   const p = brainSystemPrompt({ project: { name: 'Shop', repos: repoRefs(['/x/api', '/x/web']) }, globalMemory: '- G1', projectMemory: '- P1' });
   assert.match(p, /PROJECT: Shop\nREPOS:\n- api: .*api\n- web: .*web/);
@@ -194,7 +194,7 @@ test('system prompt: chat global chỉ thấy global memory; project thấy cả
   assert.match(p, /memory_update/);
 });
 
-test('T2 fleet_merge: approve=false → không merge; true → merge', async (t) => {
+test('T2 fleet_merge: approve=false → no merge; true → merge', async (t) => {
   const repo = tmp(t);
   const git = (...a) => assert.equal(spawnSync('git', a, { cwd: repo }).status, 0, a.join(' '));
   git('init', '-q', '-b', 'main');
@@ -216,9 +216,9 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
   const no = await exec(repo, async (q) => (asked.push(q), false))('fleet_merge', { taskId: 't-1' });
   assert.deepEqual(no, { ok: false, content: 'user declined' });
   assert.equal(asked.length, 1);
-  assert.equal(merged(), false, 'không được merge khi user từ chối');
+  assert.equal(merged(), false, 'must not merge when user rejects');
 
-  const bad = await exec(repo, async () => assert.fail('không hỏi khi input sai'))('fleet_merge', {});
+  const bad = await exec(repo, async () => assert.fail('no prompt on invalid input'))('fleet_merge', {});
   assert.equal(bad.ok, false);
 
   const yes = await exec(repo)('fleet_merge', { taskId: 't-1' });
@@ -229,7 +229,7 @@ test('T2 fleet_merge: approve=false → không merge; true → merge', async (t)
   assert.deepEqual(pr, { ok: false, content: 'user declined' });
 });
 
-// repo main + branch orchestra/task-<id> đổi feature.ts + record (+ patch file) + "worktree" có package.json tuỳ chọn
+// repo main + branch orchestra/task-<id> changing feature.ts + record (+ patch file) + "worktree" with optional package.json
 function taskRepo(t, { id = 't-ab1', record = {}, testScript, patchFile = true } = {}) {
   const repo = tmp(t);
   const git = (...a) => {
@@ -264,7 +264,7 @@ function taskRepo(t, { id = 't-ab1', record = {}, testScript, patchFile = true }
   return { repo, id, merged };
 }
 
-test('task_diff: patch_ref → patch; không có patch file → git diff nhánh; git_diff ref=taskId delegate', async (t) => {
+test('task_diff: patch_ref → patch; no patch file → git branch diff; git_diff ref=taskId delegates', async (t) => {
   const { repo, id } = taskRepo(t);
   const r = await exec(repo)('task_diff', { taskId: id });
   assert.ok(r.ok, r.content);
@@ -280,19 +280,19 @@ test('task_diff: patch_ref → patch; không có patch file → git diff nhánh;
   assert.match(r2.content, /feature\.ts \| 1 \+/);
 });
 
-test('fleet_merge gate: no_change / không file / scope fail → từ chối, không hỏi', async (t) => {
+test('fleet_merge gate: no_change / no files / scope fail → rejected, no prompt', async (t) => {
   for (const record of [{ outcome: 'no_change' }, { artifacts: { files_changed: [] } }, { scope_check: { ok: false, violations: [{ file: 'x' }] } }]) {
     const { repo, id, merged } = taskRepo(t, { record });
-    const r = await exec(repo, async () => assert.fail('không được hỏi approve'))('fleet_merge', { taskId: id });
+    const r = await exec(repo, async () => assert.fail('must not prompt for approve'))('fleet_merge', { taskId: id });
     assert.equal(r.ok, false, JSON.stringify(record));
     assert.match(r.content, /^not merging/);
     assert.equal(merged(), false);
   }
 });
 
-test('fleet_merge: test fail → từ chối không hỏi; test pass → hỏi (file + test) rồi merge', async (t) => {
+test('fleet_merge: test fail → rejected without prompt; test pass → prompt (files + test) then merge', async (t) => {
   const red = taskRepo(t, { testScript: 'node -e "process.exit(1)"' });
-  const r = await exec(red.repo, async () => assert.fail('không được hỏi approve'))('fleet_merge', { taskId: red.id });
+  const r = await exec(red.repo, async () => assert.fail('must not prompt for approve'))('fleet_merge', { taskId: red.id });
   assert.equal(r.ok, false);
   assert.match(r.content, /^test fail/);
   assert.equal(red.merged(), false);
@@ -307,7 +307,7 @@ test('fleet_merge: test fail → từ chối không hỏi; test pass → hỏi (
   assert.equal(green.merged(), true);
 });
 
-test('chat ngoài project có workspace: thấy tool worker + WORKSPACE, không có project memory', async () => {
+test('chat outside a project with workspace: sees worker tools + WORKSPACE, no project memory', async () => {
   const { brainSystemPrompt, brainTools, repoRefs } = await import('../out/extension/src/logic.js');
   const ws = { name: 'workspace', path: '/home/u/.orchestra/workspace' };
   const sys = brainSystemPrompt({ workspace: ws, globalMemory: '- G1', projectMemory: '- P1' });
@@ -318,7 +318,7 @@ test('chat ngoài project có workspace: thấy tool worker + WORKSPACE, không 
   void repoRefs;
 });
 
-test('repo_attach: findRepos tìm repo con (microservice), chỉ có ở chat ngoài project', async () => {
+test('repo_attach: findRepos finds child repos (microservice), only in chat outside a project', async () => {
   const { findRepos, brainTools, projectToolExecutor } = await import('../out/extension/src/logic.js');
   const { mkdtempSync, mkdirSync } = await import('node:fs');
   const os = await import('node:os'); const path = await import('node:path');
@@ -327,10 +327,10 @@ test('repo_attach: findRepos tìm repo con (microservice), chỉ có ở chat ng
   mkdirSync(path.join(root, 'plans'), { recursive: true });
   const found = findRepos(root).map((p) => path.relative(root, p).split(path.sep).join('/'));
   assert.deepEqual(found, ['api/a', 'api/b', 'ui/web']);
-  assert.deepEqual(findRepos(path.join(root, 'api/a')).map((p) => path.relative(root, p).split(path.sep).join('/')), ['api/a'], 'path là repo → chính nó');
+  assert.deepEqual(findRepos(path.join(root, 'api/a')).map((p) => path.relative(root, p).split(path.sep).join('/')), ['api/a'], 'path is a repo → itself');
   const ws = { name: 'workspace', path: root };
   assert.ok(brainTools([ws], { attach: true }).some((d) => d.name === 'repo_attach'));
-  assert.ok(!brainTools([ws]).some((d) => d.name === 'repo_attach'), 'project không có repo_attach');
+  assert.ok(!brainTools([ws]).some((d) => d.name === 'repo_attach'), 'project has no repo_attach');
   const noAttach = projectToolExecutor([ws], { approve: async () => true, projectId: 'p1' });
   assert.equal((await noAttach('repo_attach', { path: root })).ok, false);
   let got = '';

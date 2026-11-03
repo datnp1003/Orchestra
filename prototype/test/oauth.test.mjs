@@ -1,4 +1,4 @@
-// Router R3 — OAuth: fake token server + fake upstream 127.0.0.1, không mạng ngoài, không DPAPI (keyFor/saveKey inject)
+// Router R3 — OAuth: fake token server + fake upstream 127.0.0.1, no external network, no DPAPI (keyFor/saveKey injected)
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -43,7 +43,7 @@ test('PKCE S256: RFC 7636 appendix B', () => {
   assert.equal(p.challenge, pkceChallenge(p.verifier));
 });
 
-test('authorize URL đủ param', () => {
+test('authorize URL has all params', () => {
   const a = new URL(anthropicAuthUrl({ challenge: 'CH', state: 'ST' }));
   assert.equal(a.origin + a.pathname, 'https://claude.com/cai/oauth/authorize');
   for (const [k, v] of Object.entries({ code: 'true', client_id: ANTHROPIC.clientId, response_type: 'code', redirect_uri: ANTHROPIC.redirectUri, scope: 'org:create_api_key user:profile user:inference', code_challenge: 'CH', code_challenge_method: 'S256', state: 'ST' })) {
@@ -55,10 +55,10 @@ test('authorize URL đủ param', () => {
     assert.equal(o.searchParams.get(k), v, k);
   }
   assert.equal(accountIdFromJwt(ID_TOKEN), 'acct-42');
-  assert.equal(accountIdFromJwt('rác'), undefined);
+  assert.equal(accountIdFromJwt('garbage'), undefined);
 });
 
-test('exchange anthropic: JSON body, state phải khớp', async () => {
+test('exchange anthropic: JSON body, state must match', async () => {
   const tok = await fake((req, res) => json(res, 200, { access_token: 'A1', refresh_token: 'R1', expires_in: 3600 }));
   try {
     await assert.rejects(exchangeAnthropic('CODE#sai', { verifier: 'V', state: 'ST' }, `${tok.url}/t`), { message: t('router.oauth.badCodeState') });
@@ -74,7 +74,7 @@ test('exchange anthropic: JSON body, state phải khớp', async () => {
   }
 });
 
-test('openai login: callback state sai → 400, đúng → form exchange + accountId; cổng bận → lỗi rõ', async () => {
+test('openai login: wrong callback state → 400, right → form exchange + accountId; port busy → clear error', async () => {
   const tok = await fake((req, res) => json(res, 200, { access_token: 'A', refresh_token: 'R', id_token: ID_TOKEN, expires_in: 3600 }));
   try {
     let authUrl;
@@ -83,7 +83,7 @@ test('openai login: callback state sai → 400, đúng → form exchange + accou
     const cb = new URL(authUrl.searchParams.get('redirect_uri'));
     const bad = await fetch(`http://127.0.0.1:${cb.port}/auth/callback?code=C&state=sai`);
     assert.equal(bad.status, 400);
-    assert.equal(tok.seen.length, 0, 'state sai không được đổi code');
+    assert.equal(tok.seen.length, 0, 'wrong state must not exchange code');
     const ok = await fetch(`http://127.0.0.1:${cb.port}/auth/callback?code=C&state=${authUrl.searchParams.get('state')}`);
     assert.equal(ok.status, 200);
     const c = await done;
@@ -92,7 +92,7 @@ test('openai login: callback state sai → 400, đúng → form exchange + accou
     const form = Object.fromEntries(new URLSearchParams(tok.seen[0].raw));
     assert.deepEqual(form, { grant_type: 'authorization_code', code: 'C', redirect_uri: cb.href, client_id: OPENAI.clientId, code_verifier: form.code_verifier });
     assert.equal(pkceChallenge(form.code_verifier), authUrl.searchParams.get('code_challenge'));
-    await assert.rejects(fetch(cb.href), 'server callback phải đóng sau khi xong');
+    await assert.rejects(fetch(cb.href), 'callback server must close when done');
 
     const busy = http.createServer();
     await new Promise((r) => busy.listen(0, '127.0.0.1', r));
@@ -103,7 +103,7 @@ test('openai login: callback state sai → 400, đúng → form exchange + accou
   }
 });
 
-test('refresh: single-flight, refresh token mới lưu vault, encoding đúng; 400 → needsLogin', async () => {
+test('refresh: single-flight, new refresh token saved to vault, correct encoding; 400 → needsLogin', async () => {
   let n = 0;
   const tok = await fake((req, res) => {
     n++;
@@ -117,14 +117,14 @@ test('refresh: single-flight, refresh token mới lưu vault, encoding đúng; 4
       const m = memStore({ p: old });
       const store = createProviderStore({ file: path.join(mkdtempSync(path.join(os.tmpdir(), 'orch-oa-')), 'r.json'), ...m });
       const [a, b] = await Promise.all([getAccessToken(store, { id: 'p', kind }, `${tok.url}/t`), getAccessToken(store, { id: 'p', kind }, `${tok.url}/t`)]);
-      assert.equal(tok.seen.length, 1, `${kind}: 2 lời gọi đồng thời → 1 refresh`);
+      assert.equal(tok.seen.length, 1, `${kind}: 2 concurrent calls → 1 refresh`);
       assert.equal(a.access, 'A1');
       assert.equal(b.access, 'A1');
-      assert.equal(JSON.parse(m.vault.get('p')).refresh, 'R1', 'refresh token xoay vòng đã lưu vault');
+      assert.equal(JSON.parse(m.vault.get('p')).refresh, 'R1', 'rotated refresh token saved to vault');
       const s = tok.seen[0];
       if (kind === 'oauth-anthropic') assert.deepEqual(JSON.parse(s.raw), { grant_type: 'refresh_token', refresh_token: 'R0', client_id: ANTHROPIC.clientId });
       else assert.deepEqual(Object.fromEntries(new URLSearchParams(s.raw)), { grant_type: 'refresh_token', refresh_token: 'R0', client_id: OPENAI.clientId, scope: OPENAI.scope });
-      // còn hạn → không refresh
+      // still valid → no refresh
       await getAccessToken(store, { id: 'p', kind }, `${tok.url}/t`);
       assert.equal(tok.seen.length, 1);
     }
@@ -143,7 +143,7 @@ test('refresh: single-flight, refresh token mới lưu vault, encoding đúng; 4
   }
 });
 
-test('riskAcknowledged: thiếu → không bật, save bị từ chối; key không nhận', () => {
+test('riskAcknowledged: missing → not enabled, save rejected; key not accepted', () => {
   const p = normalizeProvider({ id: 'cc', kind: 'oauth-anthropic' });
   assert.equal(p.enabled, false);
   assert.equal(p.baseUrl, 'https://api.anthropic.com');
@@ -156,7 +156,7 @@ test('riskAcknowledged: thiếu → không bật, save bị từ chối; key kh�
   assert.equal(store.listProviders().length, 1);
 });
 
-test('routerModelOk với oauth', () => {
+test('routerModelOk with oauth', () => {
   const ant = normalizeProvider({ id: 'cc', kind: 'oauth-anthropic', riskAcknowledged: true });
   const oai = normalizeProvider({ id: 'cx', kind: 'oauth-openai', riskAcknowledged: true });
   const ps = [ant, oai];
@@ -168,7 +168,7 @@ test('routerModelOk với oauth', () => {
   assert.equal(routerModelOk('claude', 'cc/x', [normalizeProvider({ id: 'cc', kind: 'oauth-anthropic' })]).reason, t('router.providers.riskNotAck', { id: 'cc' }));
 });
 
-// ───── server: upstream nhận đúng header/body ─────
+// ───── server: upstream receives the right headers/body ─────
 let up, router, vault, logs;
 const TOKEN = 'b'.repeat(64);
 const fresh = (extra = {}) => JSON.stringify({ access: 'ACC', refresh: 'REF', expiresAt: Date.now() + 3600_000, ...extra });
@@ -186,7 +186,7 @@ before(async () => {
     { id: 'cc', kind: 'oauth-anthropic', baseUrl: up.url, riskAcknowledged: true },
     { id: 'cx', kind: 'oauth-openai', baseUrl: `${up.url}/codex`, riskAcknowledged: true },
     { id: 'dead', kind: 'oauth-anthropic', baseUrl: up.url, riskAcknowledged: true },
-    { id: 'raw', kind: 'oauth-anthropic', baseUrl: up.url }, // chưa xác nhận rủi ro → tắt
+    { id: 'raw', kind: 'oauth-anthropic', baseUrl: up.url }, // risk not acknowledged → disabled
   ] }));
   const m = memStore({ cc: fresh(), cx: fresh({ accountId: 'acct-42' }), dead: JSON.stringify({ needsLogin: true }) });
   vault = m.vault;
@@ -201,13 +201,13 @@ const call = (p, body) =>
   fetch(`http://127.0.0.1:${router.port}${p}`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', 'anthropic-beta': 'fine-grained-tool-streaming-2025-05-14' }, body: JSON.stringify(body) });
 const lastUp = () => up.seen.at(-1);
 
-test('router: cảnh báo 1 lần cho mỗi provider OAuth bật, không log token', () => {
+test('router: warns once per enabled OAuth provider, no token logged', () => {
   const warns = (id) => logs.filter((l) => l === `[router] ${t('router.server.oauthWarn', { id })}`).length;
   assert.deepEqual(['cc', 'cx', 'dead', 'raw'].map(warns), [1, 1, 1, 0]);
   assert.ok(!logs.join('\n').includes('ACC'));
 });
 
-test('oauth-anthropic: Bearer + beta gộp + system prefix thêm 1 lần', async () => {
+test('oauth-anthropic: Bearer + merged beta + system prefix added once', async () => {
   const r = await call('/v1/messages', { model: 'cc/claude-sonnet-5-5', max_tokens: 10, system: 'Hãy ngắn gọn', messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(r.status, 200);
   const s = lastUp();
@@ -219,7 +219,7 @@ test('oauth-anthropic: Bearer + beta gộp + system prefix thêm 1 lần', async
   const b = JSON.parse(s.raw);
   assert.equal(b.model, 'claude-sonnet-5-5');
   assert.deepEqual(b.system, [{ type: 'text', text: ANTHROPIC.systemPrefix }, { type: 'text', text: 'Hãy ngắn gọn' }]);
-  // claude CLI đã gửi prefix → không lặp
+  // claude CLI already sent the prefix → no duplicate
   const sys = [{ type: 'text', text: ANTHROPIC.systemPrefix }, { type: 'text', text: 'rest' }];
   await call('/v1/messages', { model: 'cc/claude-sonnet-5-5', max_tokens: 10, system: sys, messages: [{ role: 'user', content: 'hi' }] });
   assert.deepEqual(JSON.parse(lastUp().raw).system, sys);
@@ -237,7 +237,7 @@ test('codex (responses) → oauth-anthropic qua chain Chat→Messages', async ()
   assert.match(b.system[1].text, /You are a coding agent/);
 });
 
-test('oauth-openai: originator/account/session, stream+store ép; non-stream → JSON gom', async () => {
+test('oauth-openai: originator/account/session, stream+store forced; non-stream → collected JSON', async () => {
   const r = await call('/v1/responses', { ...CODEX, model: 'cx/gpt-6-sol', stream: false, store: true });
   assert.equal(r.status, 200);
   assert.match(r.headers.get('content-type'), /json/);
@@ -252,12 +252,12 @@ test('oauth-openai: originator/account/session, stream+store ép; non-stream →
   assert.match(s.headers.session_id, /^[0-9a-f-]{36}$/);
   const b = JSON.parse(s.raw);
   assert.deepEqual([b.stream, b.store, b.model], [true, false, 'gpt-6-sol']);
-  // client stream → passthrough SSE nguyên vẹn
+  // streaming client → SSE passed through untouched
   const r2 = await call('/v1/responses', { ...CODEX, model: 'cx/gpt-6-sol', stream: true });
   assert.equal(await r2.text(), REAL_SSE);
 });
 
-test('needsLogin → 401 rõ ràng, không gọi upstream; provider chưa xác nhận rủi ro không route', async () => {
+test('needsLogin → clear 401, upstream not called; risk-unacknowledged provider not routed', async () => {
   const n = up.seen.length;
   const r = await call('/v1/messages', { model: 'dead/claude-sonnet-5-5', max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(r.status, 401);

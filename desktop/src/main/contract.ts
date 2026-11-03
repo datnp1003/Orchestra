@@ -1,5 +1,5 @@
-// IPC contract — thuần, KHÔNG import electron (unit test được bằng node thường)
-// Mỗi channel map 1:1 vào 1 hàm của logic.ts — Desktop không viết logic mới (plan §5)
+// IPC contract — pure, NO electron import (unit-testable with plain node)
+// Each channel maps 1:1 to a logic.ts function — Desktop writes no new logic (plan §5)
 import { existsSync } from 'node:fs';
 import { t, type Locale } from '../../../prototype/src/i18n/index.js';
 import { PROJECT_ID_RE } from '../../../prototype/src/home.js';
@@ -75,12 +75,12 @@ export const EVENTS = {
   TERMINAL_EXIT: 'terminal:exit',
   UPDATE_STATUS: 'update:status',
   CHAT_STEP: 'chat:step',
-  /** approval card inline trong chat (thay modal native) */
+  /** approval card inline in chat (replaces native modal) */
   APPROVAL_REQUEST: 'approval:request',
   APPROVAL_RESOLVED: 'approval:resolved',
   /** click notification → Chat + focus card */
   APPROVAL_FOCUS: 'approval:focus',
-  /** fleet probe nền xong (startup / refresh / sau install) → snapshot mới */
+  /** background fleet probe done (startup / refresh / after install) → new snapshot */
   FLEET_CHANGED: 'fleet:changed',
 } as const;
 
@@ -88,28 +88,28 @@ export const PAGES = ['dashboard', 'chat', 'transcript', 'settings', 'wizard'] a
 export type Page = (typeof PAGES)[number];
 
 export interface Project {
-  /** slug(name)-xxxx, /^[\w-]+$/ — tên thư mục ~/.orchestra/projects/<id> */
+  /** slug(name)-xxxx, /^[\w-]+$/ — dir name ~/.orchestra/projects/<id> */
   id: string;
   name: string;
   repos: string[];
 }
 
 export interface AppSettings {
-  /** project = nhóm repo (microservices); session + memory theo project */
+  /** project = group of repos (microservices); sessions + memory per project */
   projects: Project[];
-  /** = hợp các repo của mọi project (dẫn xuất khi validate) — giữ cho code cũ đọc repos */
+  /** = union of all projects' repos (derived on validate) — kept for old code reading repos */
   repos: string[];
   activeRepo: string;
-  /** model của Orchestra brain — id router `<provider>/<model>`; '' = chưa chọn */
+  /** Orchestra brain model — router id `<provider>/<model>`; '' = not chosen */
   brainModel: string;
-  /** model mặc định của router (CLI gửi model không prefix); '' = dùng brainModel */
+  /** router default model (CLI sends unprefixed model); '' = use brainModel */
   routerDefaultModel: string;
   autoApprovePlan: boolean;
   hooksEnabled: boolean;
   templatesDir: string;
-  /** ngôn ngữ UI; thiếu (settings cũ / lần đầu) → fallbackLang (main: detectLocale(app.getLocale())) */
+  /** UI language; missing (old settings / first run) → fallbackLang (main: detectLocale(app.getLocale())) */
   language: Locale;
-  /** chat: plan | ask | auto | full — enforce ở tool layer (needsApproval) */
+  /** chat: plan | ask | auto | full — enforced at the tool layer (needsApproval) */
   permissionMode: PermissionMode;
 }
 
@@ -129,15 +129,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SETTINGS.language): AppSettings {
   const r = (raw ?? {}) as Partial<AppSettings>;
   const projects = Array.isArray(r.projects) ? validProjects(r.projects) : null;
-  // có projects → repos = hợp repo của project; settings cũ (chưa migrate) → giữ repos cũ
+  // has projects → repos = union of project repos; old settings (not migrated) → keep old repos
   const repos = projects ? [...new Set(projects.flatMap((p) => p.repos))] : strList(r.repos);
   const active = typeof r.activeRepo === 'string' ? r.activeRepo : '';
   return {
     projects: projects ?? [],
     repos,
     activeRepo: !projects || repos.includes(active) ? active : repos[0] ?? '',
-    // orchestratorWorker/orchestratorModel (CLI brain cũ) trong settings file cũ: bỏ qua, không lỗi
-    // phải là id router `<provider>/<model>` — giá trị cũ kiểu 'worker-claude' → '' (bắt chọn lại)
+    // orchestratorWorker/orchestratorModel (old CLI brain) in old settings files: ignored, no error
+    // must be a router id `<provider>/<model>` — old values like 'worker-claude' → '' (forces re-pick)
     brainModel: typeof r.brainModel === 'string' && r.brainModel.includes('/') ? r.brainModel.trim() : '',
     routerDefaultModel: typeof r.routerDefaultModel === 'string' ? r.routerDefaultModel.trim() : '',
     autoApprovePlan: r.autoApprovePlan === true,
@@ -159,7 +159,7 @@ function validProjects(raw: unknown[]): Project[] {
   });
 }
 
-/** repo active (hoặc repos[0]) — throw nếu trống/không tồn tại, tránh chạy trong process cwd */
+/** active repo (or repos[0]) — throws if empty/missing, avoids running in process cwd */
 export function requireRepo(s: Pick<AppSettings, 'activeRepo' | 'repos'>): string {
   const repo = s.activeRepo || s.repos[0] || '';
   if (!repo) throw new Error(t('desktop.err.noRepo'));
@@ -167,7 +167,7 @@ export function requireRepo(s: Pick<AppSettings, 'activeRepo' | 'repos'>): strin
   return repo;
 }
 
-/** payload types — renderer gửi đúng shape, main validate lại */
+/** payload types — renderer sends the right shape, main re-validates */
 export interface DispatchPayload {
   goal: string;
   scope?: string[];

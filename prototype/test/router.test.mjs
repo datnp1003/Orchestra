@@ -1,4 +1,4 @@
-// Router R1 — fake upstream 127.0.0.1, không mạng ngoài, không DPAPI (keyFor inject)
+// Router R1 — fake upstream 127.0.0.1, no external network, no DPAPI (keyFor inject)
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -102,7 +102,7 @@ function call(p, { method = 'POST', body, headers = {}, r = router } = {}) {
 const sseEvents = (text) => text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
 const MSG = { max_tokens: 100, messages: [{ role: 'user', content: 'hi' }] };
 
-test('auth: thiếu/sai token → 401, x-api-key đúng → qua; Host lạ → 403', async () => {
+test('auth: missing/wrong token → 401, correct x-api-key → passes; unknown Host → 403', async () => {
   assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: '' } })).status, 401);
   assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: 'Bearer nope' } })).status, 401);
   assert.equal((await call('/v1/models', { method: 'GET', headers: { authorization: '', 'x-api-key': TOKEN } })).status, 200);
@@ -111,7 +111,7 @@ test('auth: thiếu/sai token → 401, x-api-key đúng → qua; Host lạ → 4
   assert.notEqual(router2.token, TOKEN);
 });
 
-test('/v1/models: union có prefix, provider chết → header lỗi, disabled bị bỏ', async () => {
+test('/v1/models: prefixed union, dead provider → error header, disabled skipped', async () => {
   const r = await call('/v1/models', { method: 'GET' });
   assert.equal(r.status, 200);
   const ids = r.json().data.map((m) => m.id).sort();
@@ -120,7 +120,7 @@ test('/v1/models: union có prefix, provider chết → header lỗi, disabled b
   assert.equal(r.headers['x-orchestra-model-errors'], '1');
 });
 
-test('passthrough messages → anthropic: giữ ?beta=true, rewrite model, x-api-key, không lộ token', async () => {
+test('passthrough messages → anthropic: keeps ?beta=true, rewrites model, x-api-key, token not leaked', async () => {
   const r = await call('/v1/messages?beta=true', { body: { ...MSG, model: 'ant/claude-x' }, headers: { 'anthropic-beta': 'b1', 'x-api-key': TOKEN } });
   assert.equal(r.status, 200);
   assert.equal(r.json().content[0].text, 'ok');
@@ -139,14 +139,14 @@ test('passthrough messages → anthropic: giữ ?beta=true, rewrite model, x-api
   assert.ok(!JSON.stringify(last(ant).headers).includes(TOKEN));
 });
 
-test('passthrough stream: bytes y hệt upstream', async () => {
+test('passthrough stream: bytes identical to upstream', async () => {
   const r = await call('/v1/messages', { body: { ...MSG, model: 'ant/claude-x', stream: true } });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /event-stream/);
   assert.equal(r.text, ANT_SSE);
 });
 
-test('model không prefix → defaultModel; không có default → 400 model_not_found', async () => {
+test('unprefixed model → defaultModel; no default → 400 model_not_found', async () => {
   const r = await call('/v1/messages', { body: { ...MSG, model: 'claude-haiku-4-5' } });
   assert.equal(r.status, 200);
   assert.equal(last(ant).body.model, 'claude-x');
@@ -155,7 +155,7 @@ test('model không prefix → defaultModel; không có default → 400 model_not
   assert.equal(r2.json().error.type, 'model_not_found');
 });
 
-test('model upstream chứa "/" — tách ở "/" đầu', async () => {
+test('upstream model containing "/" — split at the first "/"', async () => {
   await call('/v1/chat/completions', { body: { model: 'oai/org/m', messages: [{ role: 'user', content: 'x' }] } });
   assert.equal(last(oai).body.model, 'org/m');
 });
@@ -222,7 +222,7 @@ test('chat client → anthropic, non-stream', async () => {
   assert.equal(j.usage.total_tokens, 5);
 });
 
-test('chat client → anthropic, STREAM kết thúc bằng [DONE]', async () => {
+test('chat client → anthropic, STREAM ends with [DONE]', async () => {
   const r = await call('/v1/chat/completions', { body: { model: 'ant/claude-x', stream: true, messages: [{ role: 'user', content: 'hi' }] } });
   assert.equal(r.status, 200);
   assert.ok(r.text.endsWith('data: [DONE]\n\n'));
@@ -235,7 +235,7 @@ test('chat client → anthropic, STREAM kết thúc bằng [DONE]', async () => 
   assert.deepEqual(ch.at(-1).usage, { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 });
 });
 
-test('count_tokens không native → 404', async () => {
+test('count_tokens not native → 404', async () => {
   assert.equal((await call('/v1/messages/count_tokens', { body: { model: 'oai/gpt-x', messages: [] } })).status, 404);
 });
 
@@ -243,7 +243,7 @@ test('count_tokens không native → 404', async () => {
 const CODEX = JSON.parse(readFileSync(new URL('./fixtures/codex-responses-request.json', import.meta.url), 'utf8'));
 const REAL_SSE = readFileSync(new URL('./fixtures/codex-responses-stream.txt', import.meta.url), 'utf8');
 const evNames = (text) => text.split(/\r?\n/).filter((l) => l.startsWith('event: ')).map((l) => l.slice(7));
-const collapse = (names) => names.filter((n, i) => n !== names[i - 1]); // gộp delta liên tiếp
+const collapse = (names) => names.filter((n, i) => n !== names[i - 1]); // collapse consecutive deltas
 function checkResponsesStream(text) {
   assert.ok(text.endsWith('data: [DONE]\n\n'));
   const ev = sseEvents(text);
@@ -254,7 +254,7 @@ function checkResponsesStream(text) {
   return ev;
 }
 
-test('responsesToChatRequest: fixture codex thật', () => {
+test('responsesToChatRequest: real codex fixture', () => {
   const { req, names } = responsesToChatRequest(CODEX, 'm');
   assert.equal(req.model, 'm');
   assert.equal(req.messages.filter((m) => m.role === 'system').length, 1);
@@ -264,12 +264,12 @@ test('responsesToChatRequest: fixture codex thật', () => {
   assert.deepEqual(req.messages.slice(1).map((m) => m.role), ['user', 'user', 'assistant', 'tool']);
   const fc = CODEX.input.find((i) => i.type === 'function_call');
   const a = req.messages[3];
-  assert.match(a.content, /a\.txt/); // text assistant ngay trước gộp cùng tool_calls
+  assert.match(a.content, /a\.txt/); // preceding assistant text merged with tool_calls
   assert.deepEqual(a.tool_calls, [{ id: fc.call_id, type: 'function', function: { name: 'exec_command', arguments: fc.arguments } }]);
   assert.equal(req.messages[4].tool_call_id, fc.call_id);
   assert.match(req.messages[4].content, /Process exited with code 0/);
   const tn = req.tools.map((t) => t.function.name);
-  assert.deepEqual(tn, ['exec_command', 'write_stdin', 'multi_agent_v1__close_agent']); // web_search bỏ
+  assert.deepEqual(tn, ['exec_command', 'write_stdin', 'multi_agent_v1__close_agent']); // web_search dropped
   assert.deepEqual(names.get('multi_agent_v1__close_agent'), { name: 'close_agent', namespace: 'multi_agent_v1' });
   assert.equal(req.tool_choice, 'auto');
   assert.equal(req.parallel_tool_calls, true);
@@ -281,12 +281,12 @@ test('responsesToChatRequest: fixture codex thật', () => {
   assert.deepEqual(s.messages, [{ role: 'system', content: 'be nice' }, { role: 'user', content: 'hi' }]);
   assert.equal(s.max_tokens, 5);
   assert.equal(s.stream, false);
-  // function_call có namespace (lượt sau) → tên dẹt cho upstream
+  // namespaced function_call (next turn) → flattened name for upstream
   const n = responsesToChatRequest({ input: [{ type: 'function_call', call_id: 'c', namespace: 'ns', name: 'f', arguments: '{}' }] }, 'm').req;
   assert.equal(n.messages[0].tool_calls[0].function.name, 'ns__f');
 });
 
-test('ChatToResponsesStream: text + 2 tool call (args cắt mảnh) + usage, chuỗi event như fixture thật', () => {
+test('ChatToResponsesStream: text + 2 tool calls (fragmented args) + usage, event sequence as the real fixture', () => {
   const sse = OAI_SSE.replace('"name":"echo"', '"name":"multi_agent_v1__close_agent"');
   const names = responsesToChatRequest(CODEX, 'm').names;
   const t = new ChatToResponsesStream(names);
@@ -294,7 +294,7 @@ test('ChatToResponsesStream: text + 2 tool call (args cắt mảnh) + usage, chu
   for (let i = 0; i < sse.length; i += 7) out += t.push(sse.slice(i, i + 7));
   out += t.end();
   const ev = checkResponsesStream(out);
-  // mẫu event giống fixture thật (fixture có text rồi 1 function_call; ở đây thêm function_call thứ 2)
+  // event pattern matches the real fixture (fixture has text then 1 function_call; here a 2nd function_call is added)
   const fcPattern = ['response.output_item.added', 'response.function_call_arguments.delta', 'response.function_call_arguments.done', 'response.output_item.done'];
   const real = collapse(evNames(REAL_SSE)).filter((n) => n !== 'response.function_call_arguments.delta');
   const mine = collapse(ev.map((e) => e.type));
@@ -303,7 +303,7 @@ test('ChatToResponsesStream: text + 2 tool call (args cắt mảnh) + usage, chu
   // text
   assert.equal(ev.filter((e) => e.type === 'response.output_text.delta').map((e) => e.delta).join(''), 'Hi there');
   assert.equal(ev.find((e) => e.type === 'response.output_text.done').text, 'Hi there');
-  // args: done = nối delta, JSON hợp lệ
+  // args: done = concatenated deltas, valid JSON
   const argsDone = ev.filter((e) => e.type === 'response.function_call_arguments.done');
   assert.equal(argsDone.length, 2);
   for (const d of argsDone) {
@@ -327,7 +327,7 @@ test('ChatToResponsesStream: text + 2 tool call (args cắt mảnh) + usage, chu
 });
 
 for (const [label, model, up, route] of [['chat', 'oai/gpt-x', () => oai, '/v1/chat/completions'], ['messages', 'ant/claude-x', () => ant, '/v1/messages']]) {
-  test(`responses client → upstream chỉ ${label}: stream + non-stream + tool round trip`, async () => {
+  test(`responses client → ${label}-only upstream: stream + non-stream + tool round trip`, async () => {
     const r = await call('/v1/responses', { body: { ...CODEX, model } });
     assert.equal(r.status, 200);
     assert.match(r.headers['content-type'], /event-stream/);
@@ -391,7 +391,7 @@ test('normalizeProvider + authHeaders', () => {
   assert.deepEqual(authHeaders('openai', 'k'), { authorization: 'Bearer k' });
 });
 
-test('messagesToChatRequest: system blocks, ảnh, tool_result is_error, tool_choice, thinking bỏ', () => {
+test('messagesToChatRequest: system blocks, images, tool_result is_error, tool_choice, thinking dropped', () => {
   const out = messagesToChatRequest({
     system: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }],
     stop_sequences: ['END'], temperature: 0.2, max_tokens: 9, tool_choice: { type: 'any' },
@@ -416,7 +416,7 @@ test('messagesToChatRequest: system blocks, ảnh, tool_result is_error, tool_ch
   assert.equal(out.max_tokens, 9);
 });
 
-test('chatToMessagesRequest: data URL → base64, tool → tool_result gộp user, args hỏng → {}', () => {
+test('chatToMessagesRequest: data URL → base64, tool → tool_result merged into user, broken args → {}', () => {
   const out = chatToMessagesRequest({
     messages: [
       { role: 'system', content: 's' },
@@ -436,7 +436,7 @@ test('chatToMessagesRequest: data URL → base64, tool → tool_result gộp use
   assert.deepEqual(out.tool_choice, { type: 'tool', name: 'f' });
 });
 
-test('stream transformer chịu chunk cắt giữa dòng (CRLF) + end() tự đóng khi thiếu [DONE]', () => {
+test('stream transformer handles chunks split mid-line (CRLF) + end() auto-closes when [DONE] is missing', () => {
   const t = new ChatToMessagesStream();
   const src = OAI_SSE.replace(/\n/g, '\r\n');
   let out = '';
@@ -451,14 +451,14 @@ test('stream transformer chịu chunk cắt giữa dòng (CRLF) + end() tự đ�
   assert.equal(sseEvents(out2).at(-1).choices[0].finish_reason, 'stop');
 });
 
-test('request đã dịch luôn có stream tường minh (upstream compat mặc định stream khi thiếu)', async () => {
+test('translated request always has explicit stream (compat upstreams default to streaming when missing)', async () => {
   const { messagesToChatRequest, chatToMessagesRequest } = await import('../dist/router/translate.js');
   assert.equal(messagesToChatRequest({ messages: [{ role: 'user', content: 'x' }] }, 'm').stream, false);
   assert.equal(chatToMessagesRequest({ messages: [{ role: 'user', content: 'x' }] }, 'm').stream, false);
   assert.equal(messagesToChatRequest({ stream: true, messages: [{ role: 'user', content: 'x' }] }, 'm').stream, true);
 });
 
-test('passthrough non-stream: upstream trả chat.completion cho /v1/messages → chuẩn hoá về Messages', async () => {
+test('passthrough non-stream: upstream returns chat.completion for /v1/messages → normalized to Messages', async () => {
   const http = await import('node:http');
   const up = http.createServer((q, r) => { q.resume(); q.on('end', () => { r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ id: 'x', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: 'Hi.' }, finish_reason: 'stop' }], usage: {} })); }); });
   await new Promise((ok) => up.listen(0, '127.0.0.1', ok));

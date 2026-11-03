@@ -1,4 +1,4 @@
-// Tìm asset của prototype (policy.yml, templates/, hooks/) bất kể đang chạy từ layout nào:
+// Locate prototype assets (policy.yml, templates/, hooks/) regardless of which layout we run from:
 //   prototype/dist/*.js                → prototype/<rel>
 //   <pkg>/out/prototype/src/*.js       → repo/prototype/<rel> (extension/desktop dev)
 //   resources/app.asar/out/prototype/src → resources/prototype/<rel> (desktop packaged, extraResources)

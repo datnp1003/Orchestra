@@ -2,8 +2,8 @@ import { spawnSync, spawn, execFile, type ChildProcess } from 'node:child_proces
 import { t } from './i18n/index.js';
 
 // ---------- P6.3: installer — Worker Protocol §3/§4 ----------
-// npm là kênh chuẩn phân phối agent CLI (claude/codex/opencode đều có package npm).
-// Auth KHÔNG tự động được (OAuth trình duyệt) — sau install, hướng dẫn user login bằng tay.
+// npm is the standard distribution channel for agent CLIs (claude/codex/opencode all ship npm packages).
+// Auth can NOT be automated (browser OAuth) — after install, guide the user to log in manually.
 
 export function installWorker(
   m: import('./types.js').Manifest,
@@ -23,7 +23,7 @@ export function installWorker(
     log(`npm install -g ${m.install.npm} …`);
     const child: ChildProcess = spawn('npm', ['install', '-g', m.install.npm], {
       windowsHide: true,
-      shell: true, // npm.cmd trên Windows
+      shell: true, // npm.cmd on Windows
     });
     let tail = '';
     child.stdout?.on('data', (d: Buffer) => {
@@ -91,7 +91,7 @@ export function checkStatus(m: import('./types.js').Manifest): WorkerStatus {
   return statusOf(m, binPath, binPath ? tryRun(m.versionCmd) : undefined, binPath && m.authCmd ? tryRun(m.authCmd) : undefined);
 }
 
-/** như tryRun nhưng không chặn event loop — cùng timeout + windowsHide; lỗi/ENOENT/timeout → ok:false */
+/** like tryRun but non-blocking — same timeout + windowsHide; error/ENOENT/timeout → ok:false */
 function tryRunAsync(spec: { cmd: string; args: string[] }, timeoutMs = 15000): Promise<{ ok: boolean; out: string }> {
   return new Promise((resolve) => {
     try {
@@ -103,7 +103,7 @@ function tryRunAsync(spec: { cmd: string; args: string[] }, timeoutMs = 15000): 
   });
 }
 
-/** checkStatus không chặn event loop (Desktop main) — where/which rồi version + auth song song */
+/** non-blocking checkStatus (Desktop main) — where/which, then version + auth in parallel */
 export async function checkStatusAsync(m: import('./types.js').Manifest): Promise<WorkerStatus> {
   const w = await tryRunAsync({ cmd: process.platform === 'win32' ? 'where' : 'which', args: [m.bin] });
   const binPath = w.ok ? w.out.split(/\r?\n/).map((s) => s.trim()).find(Boolean) : undefined;
@@ -127,8 +127,8 @@ function statusOf(m: import('./types.js').Manifest, binPath: string | undefined,
     base.version = match ? (match[1] ?? v.out.split(/\r?\n/)[0]) : v.out.split(/\r?\n/)[0];
   }
   if (a) {
-    // codex login status exit 0 = logged in; nhưng một số version in trạng thái mà exit 0
-    // kể cả khi chưa login → coi text là tín hiệu phụ
+    // codex login status exit 0 = logged in; but some versions print the status and exit 0
+    // even when not logged in → treat the text as a secondary signal
     const text = a.out.toLowerCase();
     if (!a.ok || text.includes('not logged in')) base.auth = 'failed';
     else if (text.includes('logged in')) base.auth = 'ok';

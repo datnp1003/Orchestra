@@ -1,5 +1,5 @@
 // Orchestra VS Code extension — P5 slice 1
-// Fleet panel · Tasks panel · Dispatch với live transcript · Policy matrix webview
+// Fleet panel · Tasks panel · Dispatch with live transcript · Policy matrix webview
 import * as vscode from 'vscode';
 import { MANIFESTS, getManifest } from '../../prototype/src/manifests.js';
 import { checkStatus, installWorker } from '../../prototype/src/registry.js';
@@ -32,7 +32,7 @@ class FleetItem extends vscode.TreeItem {
     this.description = `${s.version ?? '-'} · auth=${s.auth}${s.experimental ? ' · [experimental]' : ''}`;
     this.tooltip = s.notes.join('\n');
     this.contextValue = 'worker';
-    // P6.3: chưa cài → click item = cài qua npm
+    // P6.3: not installed → click item = install via npm
     if (!s.installed) {
       this.command = { command: 'orchestra.installWorker', title: 'Install worker', arguments: [s.id] };
       this.tooltip += `\n\n${t('ext.fleet.notInstalledTip')}`;
@@ -202,7 +202,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           const summary = `[orchestra-runner] Action results:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
           void view.webview.postMessage({ kind: 'result', text: summary });
-          // feedback kết quả vào session — orchestrator biết chuyện gì vừa xảy ra
+          // feed the result back into the session — orchestrator knows what just happened
           const follow = await orchestratorTurn(repo, summary, this.sessionId, cfg<string>('orchestratorWorker', 'claude'));
           this.sessionId = follow.session;
           if (follow.text.trim()) void view.webview.postMessage({ kind: 'orch', text: follow.text });
@@ -370,7 +370,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Install worker (P6.3): npm -g với progress + log ra Output channel
+  // Install worker (P6.3): npm -g with progress + log to Output channel
   const installChannel = vscode.window.createOutputChannel('Orchestra — install');
   context.subscriptions.push(installChannel);
   context.subscriptions.push(
@@ -417,15 +417,15 @@ export function activate(context: vscode.ExtensionContext): void {
         return pick ? MANIFESTS.find((x) => x.id === pick.id) : undefined;
       })());
       if (!m) return;
-      // R2a: key/provider khác → Orchestra router (Providers trong desktop); ở đây chỉ còn OAuth của chính CLI
+      // R2a: other keys/providers → Orchestra router (Providers in desktop); only the CLI's own OAuth remains here
       const term = vscode.window.createTerminal({ name: `Orchestra — login ${m.id}` });
       term.show();
-      term.sendText(m.id === 'codex' ? 'codex login' : m.bin!, true); // claude: interactive TUI → /login trong đó
+      term.sendText(m.id === 'codex' ? 'codex login' : m.bin!, true); // claude: interactive TUI → /login inside it
       vscode.window.showInformationMessage(t('ext.auth.oauthDone', { provider: m.oauthProvider ?? t('ext.common.none') }));
     }),
   );
 
-  // Internal snapshot commands — integration test dùng, không hiện palette
+  // Internal snapshot commands — used by integration tests, hidden from palette
   context.subscriptions.push(
     vscode.commands.registerCommand('orchestra._fleetSnapshot', () => fleetSnapshot()),
     vscode.commands.registerCommand('orchestra._tasksSnapshot', () => tasksSnapshot(repoRoot()).length),
@@ -437,5 +437,5 @@ export function deactivate(): void {
   /* nothing */
 }
 
-// re-export để integration test import trực tiếp nếu cần
+// re-export so integration tests can import directly if needed
 export { getManifest };

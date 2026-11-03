@@ -17,7 +17,7 @@ $p = Start-Process -FilePath $Exe -ArgumentList "--page=$Page" -PassThru
 Start-Sleep -Seconds $WaitSec
 $p.Refresh()
 
-# tìm window "Orchestra*" của process — kể cả bị che (PrintWindow không cần foreground)
+# find the process's "Orchestra*" window — even if covered (PrintWindow doesn't need foreground)
 Add-Type @"
 using System;
 using System.Text;
@@ -58,7 +58,7 @@ if ($w -le 0 -or $ht -le 0) { Write-Output 'BAD_RECT'; Stop-Process -Id $p.Id -F
 $bmp = New-Object System.Drawing.Bitmap($w, $ht)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $hdc = $g.GetHdc()
-# PW_RENDERFULLCONTENT (2) — chụp cả window GPU-rendered (Electron)
+# PW_RENDERFULLCONTENT (2) — captures GPU-rendered windows too (Electron)
 [WE2]::PrintWindow($target, $hdc, 2) | Out-Null
 $g.ReleaseHdc($hdc)
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)

@@ -1,4 +1,4 @@
-// Preload — contextBridge an toàn (nodeIntegration OFF)
+// Preload — safe contextBridge (nodeIntegration OFF)
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('orchestra', {

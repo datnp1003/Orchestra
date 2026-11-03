@@ -1,4 +1,4 @@
-// Regression: guard hook resolve (path có dấu cách) + guard path-escape + fixer commit trên worktree tái dùng
+// Regression: guard hook resolve (path with spaces) + guard path-escape + fixer commit on a reused worktree
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -16,9 +16,9 @@ import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '
 const here = path.dirname(fileURLToPath(import.meta.url));
 const guard = path.join(here, '..', 'hooks', 'guard.cjs');
 
-test('resolveGuardHook tìm thấy guard.cjs từ prototype/dist', () => {
+test('resolveGuardHook finds guard.cjs from prototype/dist', () => {
   const p = resolveGuardHook();
-  assert.ok(p && existsSync(p), `không thấy: ${p}`);
+  assert.ok(p && existsSync(p), `not found: ${p}`);
 });
 
 function runGuard(tool, tool_input, root) {
@@ -41,7 +41,7 @@ test('guard path-escape + git push', () => {
   assert.equal(runGuard('Bash', { command: 'git push origin main' }, root), 'deny');
 });
 
-test('guard apply_patch envelope (codex): path ngoài worktree → deny', () => {
+test('guard apply_patch envelope (codex): path outside worktree → deny', () => {
   const root = path.join(tmpdir(), 'wt', 't-abc');
   const patch = (...files) => `*** Begin Patch\n${files.map((f) => `*** Add File: ${f}\n+hello`).join('\n')}\n*** End Patch`;
   const viaBash = (p) => ({ command: `apply_patch <<'PATCH'\n${p}\nPATCH` });
@@ -49,12 +49,12 @@ test('guard apply_patch envelope (codex): path ngoài worktree → deny', () => 
     assert.equal(runGuard(tool, input(patch('../evil.txt')), root), 'deny', `${tool} ../evil.txt`);
     assert.equal(runGuard(tool, input(patch('src/ok.ts')), root), 'allow', `${tool} src/ok.ts`);
     assert.equal(runGuard(tool, input(patch(path.join(tmpdir(), 'outside.txt'))), root), 'deny', `${tool} absolute`);
-    assert.equal(runGuard(tool, input(patch('src/ok.ts', '../../x.ts')), root), 'deny', `${tool} file thứ 2 thoát`);
+    assert.equal(runGuard(tool, input(patch('src/ok.ts', '../../x.ts')), root), 'deny', `${tool} 2nd file escapes`);
     assert.equal(runGuard(tool, input('*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../b.ts\n*** End Patch'), root), 'deny', `${tool} move`);
   }
 });
 
-test('codex hook args: -c hooks.PreToolUse + bypass trust, trước prompt', () => {
+test('codex hook args: -c hooks.PreToolUse + bypass trust, before prompt', () => {
   const m = getManifest('codex');
   assert.equal(m.hooksSupport, true);
   const spec = m.headless('PROMPT', { sandbox: 'worktree-write' });
@@ -64,17 +64,17 @@ test('codex hook args: -c hooks.PreToolUse + bypass trust, trước prompt', () 
   const c = args.indexOf('-c');
   assert.equal(args[c + 1], 'hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command="node \\"C:/a b/hooks/guard.cjs\\"",timeout=30}]}]');
   assert.ok(args.indexOf('--dangerously-bypass-hook-trust') > c && args.indexOf('--dangerously-bypass-hook-trust') < args.length - 1);
-  // claude không router: giữ --settings <file>
+  // claude without router: keep --settings <file>
   const cl = spawnArgs(getManifest('claude'), ['-p', 'P'], { hookScript: 'x.cjs', rawDir: mkdtempSync(path.join(tmpdir(), 'orch-hk-')) });
   assert.deepEqual([cl.args[0], cl.args[1], cl.args.at(-1)], ['-p', '--settings', 'P']);
   assert.ok(existsSync(cl.args[2]));
-  // không hook, không router → args nguyên vẹn
+  // no hook, no router → args unchanged
   assert.deepEqual(spawnArgs(getManifest('claude'), ['-p', 'P'], { rawDir: tmpdir() }), { args: ['-p', 'P'], env: {} });
 });
 
 const router = { baseUrl: 'http://127.0.0.1:4567', token: 'TOK', defaultModel: 'gw/def' };
 
-test('router claude: đúng 1 --settings inline có env + hooks, prompt cuối', () => {
+test('router claude: exactly 1 inline --settings with env + hooks, prompt last', () => {
   const m = getManifest('claude');
   const spec = m.headless('PROMPT', { sandbox: 'worktree-write', model: 'gw/sonnet' });
   const { args, env } = spawnArgs(m, spec.args, { hookScript: 'x.cjs', rawDir: tmpdir(), router, model: 'gw/sonnet' });
@@ -86,14 +86,14 @@ test('router claude: đúng 1 --settings inline có env + hooks, prompt cuối',
   for (const k of ['HAIKU', 'SONNET', 'OPUS']) assert.equal(s.env[`ANTHROPIC_DEFAULT_${k}_MODEL`], 'gw/sonnet');
   assert.ok(s.hooks.PreToolUse[0].hooks[0].command.includes('x.cjs'));
   assert.deepEqual(env, {});
-  // không model → defaultModel router; không hook → không có hooks
+  // no model → router defaultModel; no hook → no hooks
   const d = spawnArgs(m, ['-p', 'P'], { rawDir: tmpdir(), router });
   const sd = JSON.parse(d.args[d.args.indexOf('--settings') + 1]);
   assert.equal(sd.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'gw/def');
   assert.equal(sd.hooks, undefined);
 });
 
-test('router codex: -c model_provider orch + env ORCH_ROUTER_TOKEN, prompt cuối', () => {
+test('router codex: -c model_provider orch + env ORCH_ROUTER_TOKEN, prompt last', () => {
   const m = getManifest('codex');
   const spec = m.headless('PROMPT', { sandbox: 'worktree-write', model: 'gw/gpt' });
   const { args, env } = spawnArgs(m, spec.args, { rawDir: tmpdir(), router, model: 'gw/gpt' });
@@ -104,8 +104,8 @@ test('router codex: -c model_provider orch + env ORCH_ROUTER_TOKEN, prompt cuố
   }
   assert.equal(args.filter((a) => a.startsWith('model=')).length, 1);
   assert.deepEqual(env, { ORCH_ROUTER_TOKEN: 'TOK' });
-  assert.ok(!args.includes('TOK'), 'token không nằm trong args');
-  // không model → model = defaultModel router
+  assert.ok(!args.includes('TOK'), 'token not in args');
+  // no model → model = router defaultModel
   const d = spawnArgs(m, m.headless('P', { sandbox: 'worktree-write' }).args, { rawDir: tmpdir(), router });
   assert.ok(d.args.includes('model="gw/def"'));
 });
@@ -144,12 +144,12 @@ test('runHeadless: abort → kill_reason aborted', async (t) => {
   assert.ok(Date.now() - started < 20_000);
 });
 
-test('shouldCommit: chỉ node ghi code', () => {
+test('shouldCommit: only code-writing nodes', () => {
   assert.equal(shouldCommit('implement'), true);
   for (const n of ['plan', 'verify', 'review']) assert.equal(shouldCommit(n), false);
 });
 
-test('fix trên worktree tái dùng được merge vào main', (t) => {
+test('fix on a reused worktree is merged into main', (t) => {
   const repo = mkdtempSync(path.join(tmpdir(), 'orch fix-'));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
   const git = (...a) => assert.equal(spawnSync('git', a, { cwd: repo }).status, 0, a.join(' '));
@@ -161,27 +161,27 @@ test('fix trên worktree tái dùng được merge vào main', (t) => {
   git('commit', '-qm', 'init');
 
   const wt = createWorktree(repo, 't-1');
-  // implement → commit lần 1
+  // implement → commit #1
   writeFileSync(path.join(wt.path, 'impl.txt'), 'impl');
   stageAll(wt.path);
   if (shouldCommit('implement')) commitAll(wt.path, 'impl');
-  // fixer (node implement, reuseWorktree) → files_changed chỉ chứa fix, rồi commit
+  // fixer (implement node, reuseWorktree) → files_changed holds only the fix, then commit
   writeFileSync(path.join(wt.path, 'fix.txt'), 'fix');
   stageAll(wt.path);
   assert.deepEqual(changedFiles(wt.path), ['fix.txt']);
   if (shouldCommit('implement')) commitAll(wt.path, 'fix');
 
   assert.ok(mergeBranch(repo, wt.branch).ok);
-  assert.ok(existsSync(path.join(repo, 'fix.txt')), 'fix không lên main');
+  assert.ok(existsSync(path.join(repo, 'fix.txt')), 'fix not on main');
   assert.ok(existsSync(path.join(repo, 'impl.txt')));
 });
 
-test('globToRegex: brace {a,b} + giữ ngữ nghĩa ** / *', async () => {
+test('globToRegex: brace {a,b} + keeps ** / * semantics', async () => {
   const { globToRegex } = await import('../dist/dispatch.js');
   const m = (p, f) => globToRegex(p).test(f);
   assert.ok(m('{*.sln,*.csproj,package.json}', 'Api.sln') && m('{*.sln,*.csproj,package.json}', 'package.json'));
-  assert.ok(!m('{*.sln,*.csproj}', 'src/Api.csproj'), '* không qua /');
+  assert.ok(!m('{*.sln,*.csproj}', 'src/Api.csproj'), '* does not cross /');
   assert.ok(m('**/*.{sln,slnx,csproj}', 'a/b/X.slnx'));
   assert.ok(m('src/payment/**', 'src/payment/gateways/stripe.ts') && !m('src/payment/**', 'src/other.ts'));
-  assert.ok(m('a.b', 'a.b') && !m('a.b', 'axb'), 'dấu . vẫn literal');
+  assert.ok(m('a.b', 'a.b') && !m('a.b', 'axb'), '. stays literal');
 });

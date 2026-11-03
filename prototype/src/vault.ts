@@ -1,5 +1,5 @@
-// Credential Vault — Worker Protocol §5: OS-level DPAPI (CurrentUser), key không qua LLM,
-// không plaintext trên đĩa, không trong repo. Lưu ~/.orchestra-vault/<provider>.bin
+// Credential Vault — Worker Protocol §5: OS-level DPAPI (CurrentUser), key never passes through the LLM,
+// never plaintext on disk, never in the repo. Stored at ~/.orchestra-vault/<provider>.bin
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -37,11 +37,11 @@ export function vaultSet(provider: string, secret: string, baseUrl?: string): bo
     `[IO.File]::WriteAllBytes('${file}',$p)`,
     "'OK'",
   ].join('; ');
-  // P6.4: entry JSON {v:2, secret, base_url?} — vault không chỉ là key nữa mà là provider config
-  // base_url không truyền → GIỮ nguyên của entry cũ (set key riêng không được xoá custom provider)
+  // P6.4: entry JSON {v:2, secret, base_url?} — the vault now holds provider config, not just a key
+  // base_url omitted → KEEP the old entry's value (setting only the key must not wipe a custom provider)
   const existing = readRaw(provider);
   const effectiveBaseUrl = baseUrl !== undefined ? baseUrl : existing?.base_url ?? null;
-  // secret đi qua stdin — không nằm trong command line (task manager không thấy)
+  // secret goes via stdin — not on the command line (invisible to task manager)
   const payload = JSON.stringify({ v: 2, secret, base_url: effectiveBaseUrl });
   const r = ps(script, payload);
   return r.ok && r.out.includes('OK');
@@ -66,7 +66,7 @@ function readRaw(provider: string): { secret: string; base_url: string | null } 
       return { secret: parsed.secret, base_url: parsed.base_url ?? null };
     }
   } catch {
-    /* legacy: raw secret không phải JSON */
+    /* legacy: raw secret, not JSON */
   }
   return { secret: r.out, base_url: null };
 }
@@ -92,7 +92,7 @@ export function vaultDelete(provider: string): boolean {
   return true;
 }
 
-/** Trạng thái cho UI — không bao giờ trả giá trị key */
+/** Status for the UI — never returns the key value */
 export function vaultStatus(provider: string): { configured: boolean } {
   return { configured: existsSync(credPath(provider)) };
 }

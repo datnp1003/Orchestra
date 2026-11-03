@@ -1,12 +1,12 @@
-// Event chuẩn hoá theo Worker Protocol spec v0.1 §8
+// Normalized events per Worker Protocol spec v0.1 §8
 import type { ProviderConfig } from './router/providers.js';
 
-/** R2a: Orchestra router local — auth "sync xuống" CLI lúc spawn, không đụng config của user */
+/** R2a: local Orchestra router — auth "synced down" to the CLI at spawn, user config untouched */
 export interface RouterInfo {
-  baseUrl: string; // http://127.0.0.1:<port>, không '/v1'
+  baseUrl: string; // http://127.0.0.1:<port>, without '/v1'
   token: string;
   defaultModel?: string;
-  /** có → model của policy binding được kiểm bằng routerModelOk */
+  /** present → policy binding models are checked with routerModelOk */
   providers?: ProviderConfig[];
 }
 
@@ -35,18 +35,18 @@ export interface SpawnSpec {
 export interface HeadlessOpts {
   sandbox?: 'read-only' | 'worktree-write';
   model?: string;
-  /** P6: files_in_scope — CLI hỗ trợ (claude) sẽ map thành allowedTools Edit/Write(pattern) */
+  /** P6: files_in_scope — supporting CLIs (claude) map it to allowedTools Edit/Write(pattern) */
   scope?: string[];
-  /** P6.2: session resume — tiếp tục hội thoại cũ thay vì phiên mới */
+  /** P6.2: session resume — continue the previous conversation instead of a new session */
   resume?: string;
-  /** P5.6: system prompt bổ sung (--append-system-prompt) — cho orchestrator chat */
+  /** P5.6: extra system prompt (--append-system-prompt) — for orchestrator chat */
   systemPrompt?: string;
 }
 
-/** Kết quả map 1 dòng raw JSONL */
+/** Result of mapping 1 raw JSONL line */
 export interface MapResult {
   events: FleetEvent[];
-  /** raw line có thuộc format đã biết không — conformance signal */
+  /** whether the raw line belongs to a known format — conformance signal */
   known: boolean;
 }
 
@@ -57,31 +57,31 @@ export interface Manifest {
   versionCmd: SpawnSpec;
   versionRegex: RegExp;
   authCmd?: SpawnSpec;
-  /** build headless invocation; prompt luôn là args cuối, không qua shell */
+  /** build headless invocation; prompt is always the last arg, no shell */
   headless: (prompt: string, opts: HeadlessOpts) => SpawnSpec;
-  /** map 1 raw JSONL line → 0..n event chuẩn */
+  /** map 1 raw JSONL line → 0..n normalized events */
   mapEvent: (raw: unknown, worker: string) => MapResult;
-  /** event bắt buộc phải xuất hiện trong smoke test (Worker Protocol §10 case 2) */
+  /** events that must appear in the smoke test (Worker Protocol §10 case 2) */
   requiredEvents: EventType[];
   /**
-   * P6.5 — Auth domain rule: OAuth của CLI chỉ áp dụng cho provider này.
-   * Model của provider khác → CHỈ qua vault API key + custom provider (gateway dịch API).
+   * P6.5 — Auth domain rule: the CLI's OAuth applies only to this provider.
+   * Other providers' models → ONLY via vault API key + custom provider (API-translating gateway).
    * claude: anthropic · codex: openai · antigravity: google
    */
   oauthProvider?: string;
-  /** P6.6: CLI có nhận custom endpoint (base_url + key) không — antigravity: false */
+  /** P6.6: whether the CLI accepts a custom endpoint (base_url + key) — antigravity: false */
   custom_provider?: boolean;
-  /** P6.6: slot model CLI hỗ trợ (Role Policy §mức 3) */
+  /** P6.6: model slots the CLI supports (Role Policy §level 3) */
   model_slots?: { main: boolean; fast: boolean; plan: boolean };
-  /** P6.3: cài đặt — npm là kênh chuẩn của agent CLI (Worker Protocol §3); winget fallback Windows */
+  /** P6.3: install — npm is the standard channel for agent CLIs (Worker Protocol §3); winget as Windows fallback */
   install?: { npm?: string; winget?: string };
-  /** P6: CLI hỗ trợ path-level permission rules (conformance case 4 chạy được) */
+  /** P6: CLI supports path-level permission rules (conformance case 4 runnable) */
   scopeRules?: boolean;
-  /** P6.2: CLI hỗ trợ PreToolUse hooks (conformance case 8 chạy được) */
+  /** P6.2: CLI supports PreToolUse hooks (conformance case 8 runnable) */
   hooksSupport?: boolean;
-  /** P6.2: args gắn PreToolUse hook (runner chèn trước prompt) — không có = claude `--settings <file>` */
+  /** P6.2: args attaching the PreToolUse hook (runner inserts before prompt) — absent = claude `--settings <file>` */
   hookArgs?: (hookCommand: string) => string[];
-  /** R2a: trỏ CLI vào Orchestra router — args + env; settingsEnv (claude) gộp với hooks vào 1 `--settings` JSON */
+  /** R2a: point the CLI at the Orchestra router — args + env; settingsEnv (claude) merged with hooks into 1 `--settings` JSON */
   routerArgs?: (r: RouterInfo, model?: string) => { args?: string[]; env?: Record<string, string>; settingsEnv?: Record<string, string> };
   experimental?: boolean;
   notes: string[];

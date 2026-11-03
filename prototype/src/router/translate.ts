@@ -1,8 +1,8 @@
-// Router R1 — dịch Anthropic Messages ⇄ OpenAI Chat Completions (request, response, SSE stream).
-// Hàm thuần, input là JSON client gửi (đã parse) — không validate sâu, upstream sẽ báo lỗi schema.
-// Lossy có chủ ý: thinking/redacted_thinking/reasoning bị bỏ; ảnh trong tool_result bị bỏ;
-// cache_control, metadata, top_k, logprobs, n>1 không map.
-// R2b: Responses (codex) → Chat (→ Messages qua chatToMessagesRequest, 2 bước — lossy cộng dồn), response/stream dịch ngược.
+// Router R1 — translate Anthropic Messages ⇄ OpenAI Chat Completions (request, response, SSE stream).
+// Pure functions, input is the client's (parsed) JSON — no deep validation, upstream reports schema errors.
+// Lossy on purpose: thinking/redacted_thinking/reasoning dropped; images in tool_result dropped;
+// cache_control, metadata, top_k, logprobs, n>1 not mapped.
+// R2b: Responses (codex) → Chat (→ Messages via chatToMessagesRequest, 2 steps — lossiness compounds), response/stream translated back.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { randomUUID } from 'node:crypto';
 
@@ -42,16 +42,16 @@ export function messagesToChatRequest(body: any, model: string): any {
       } else if (b.type === 'tool_use') {
         toolCalls.push({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } });
       } else if (b.type === 'tool_result') {
-        // tool message phải đứng ngay sau assistant tool_calls → push trước phần text của user
+        // tool message must directly follow assistant tool_calls → push before the user's text
         messages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: `${b.is_error ? 'ERROR: ' : ''}${textOf(b.content)}` });
       }
-      // thinking / redacted_thinking: bỏ (Chat không có chỗ chứa)
+      // thinking / redacted_thinking: dropped (Chat has nowhere to put them)
     }
     if (m.role === 'assistant') {
       const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
       if (text || toolCalls.length) messages.push({ role: 'assistant', content: text || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
     } else if (parts.length) {
-      // toàn text → string (nhiều server OpenAI-compatible không nhận mảng parts)
+      // all text → string (many OpenAI-compatible servers don't accept a parts array)
       messages.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => p.text).join('\n') : parts });
     }
   }
@@ -60,7 +60,7 @@ export function messagesToChatRequest(body: any, model: string): any {
   if (body.stop_sequences?.length) out.stop = body.stop_sequences;
   if (body.temperature !== undefined) out.temperature = body.temperature;
   if (body.top_p !== undefined) out.top_p = body.top_p;
-  // stream LUÔN tường minh: nhiều upstream compat mặc định stream khi thiếu field (gặp thật với gateway 9router)
+  // stream ALWAYS explicit: many compat upstreams default to streaming when the field is missing (seen with the 9router gateway)
   out.stream = !!body.stream;
   if (body.stream) {
     out.stream_options = { include_usage: true };
@@ -85,7 +85,7 @@ function imagePart(url: string): any {
 export function chatToMessagesRequest(body: any, model: string): any {
   const system: string[] = [];
   const messages: any[] = [];
-  // Anthropic bắt buộc user/assistant xen kẽ → gộp message liền kề cùng role
+  // Anthropic requires alternating user/assistant → merge adjacent same-role messages
   const push = (role: string, blocks: any[]) => {
     if (!blocks.length) return;
     const last = messages.at(-1);
@@ -113,13 +113,13 @@ export function chatToMessagesRequest(body: any, model: string): any {
       push(m.role === 'assistant' ? 'assistant' : 'user', blocks);
     }
   }
-  // Anthropic bắt buộc max_tokens; client OpenAI hay bỏ trống → mặc định 4096 (lossy)
+  // Anthropic requires max_tokens; OpenAI clients often omit it → default 4096 (lossy)
   const out: any = { model, messages, max_tokens: body.max_completion_tokens ?? body.max_tokens ?? 4096 };
   if (system.length) out.system = system.join('\n');
   if (body.stop) out.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
   if (body.temperature !== undefined) out.temperature = body.temperature;
   if (body.top_p !== undefined) out.top_p = body.top_p;
-  out.stream = !!body.stream; // tường minh — xem messagesToChatRequest
+  out.stream = !!body.stream; // explicit — see messagesToChatRequest
   if (body.tools?.length) {
     out.tools = body.tools.map((t: any) => ({ name: t.function?.name, description: t.function?.description, input_schema: t.function?.parameters ?? { type: 'object' } }));
   }
@@ -132,9 +132,9 @@ export function chatToMessagesRequest(body: any, model: string): any {
 }
 
 // ───────────── request: Responses → Chat ─────────────
-// Lossy: reasoning/include/store/prompt_cache_key/client_metadata bỏ; item reasoning/custom_tool_call bỏ;
-// tool hosted (web_search, file_search…) và custom bỏ; developer/system gộp thành 1 system đầu (mất vị trí giữa hội thoại);
-// tool trong namespace (MCP) dẹt thành `${ns}__${fn}` — names map ngược khi trả function_call (name gốc + namespace).
+// Lossy: reasoning/include/store/prompt_cache_key/client_metadata dropped; reasoning/custom_tool_call items dropped;
+// hosted tools (web_search, file_search…) and custom dropped; developer/system merged into 1 leading system (mid-conversation position lost);
+// namespaced tools (MCP) flattened to `${ns}__${fn}` — names maps back when returning function_call (original name + namespace).
 export type ToolNames = Map<string, { name: string; namespace: string }>;
 const partsText = (c: unknown): string =>
   typeof c === 'string' ? c : Array.isArray(c) ? c.filter((p) => typeof p?.text === 'string').map((p) => p.text).join('\n') : '';
@@ -145,7 +145,7 @@ export function responsesToChatRequest(body: any, model: string): { req: any; na
   const messages: any[] = [];
   const input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : Array.isArray(body.input) ? body.input : [];
   for (const it of input) {
-    const type = it?.type ?? 'message'; // EasyInputMessage không bắt buộc type
+    const type = it?.type ?? 'message'; // EasyInputMessage doesn't require type
     if (type === 'message') {
       if (it.role === 'system' || it.role === 'developer') system.push(partsText(it.content));
       else if (it.role === 'assistant') {
@@ -157,7 +157,7 @@ export function responsesToChatRequest(body: any, model: string): { req: any; na
         if (parts.length) messages.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => p.text).join('\n') : parts });
       }
     } else if (type === 'function_call') {
-      // function_call liên tiếp (+ text assistant ngay trước) → 1 assistant message
+      // consecutive function_calls (+ assistant text right before) → 1 assistant message
       const call = { id: it.call_id, type: 'function', function: { name: it.namespace ? `${it.namespace}__${it.name}` : it.name, arguments: it.arguments || '{}' } };
       const last = messages.at(-1);
       if (last?.role === 'assistant') (last.tool_calls ??= []).push(call);
@@ -182,14 +182,14 @@ export function responsesToChatRequest(body: any, model: string): { req: any; na
   if (body.max_output_tokens !== undefined) req.max_tokens = body.max_output_tokens;
   if (body.temperature !== undefined) req.temperature = body.temperature;
   if (body.top_p !== undefined) req.top_p = body.top_p;
-  req.stream = !!body.stream; // tường minh — xem messagesToChatRequest
+  req.stream = !!body.stream; // explicit — see messagesToChatRequest
   if (body.stream) req.stream_options = { include_usage: true };
   if (tools.length) {
     req.tools = tools;
     const tc = body.tool_choice;
     if (typeof tc === 'string') req.tool_choice = tc; // auto | none | required
     else if (tc?.type === 'function' && tc.name) req.tool_choice = { type: 'function', function: { name: tc.name } };
-    if (typeof body.parallel_tool_calls === 'boolean') req.parallel_tool_calls = body.parallel_tool_calls; // OpenAI từ chối field này khi không có tools
+    if (typeof body.parallel_tool_calls === 'boolean') req.parallel_tool_calls = body.parallel_tool_calls; // OpenAI rejects this field when there are no tools
   }
   return { req, names };
 }
@@ -208,7 +208,7 @@ const resUsage = (u: any) => {
   return { input_tokens: i, output_tokens: o, total_tokens: i + o };
 };
 
-/** Chat completion → Responses object (upstream messages: đi qua messagesToChatResponse trước) */
+/** Chat completion → Responses object (upstream messages: go through messagesToChatResponse first) */
 export function chatToResponsesResponse(r: any, names: ToolNames = new Map()): any {
   const msg = r.choices?.[0]?.message ?? {};
   const output: any[] = [];
@@ -258,7 +258,7 @@ export function messagesToChatResponse(r: any): any {
 }
 
 // ───────────── stream: line-based SSE transformers ─────────────
-// push(text) nhận chunk thô (có thể cắt giữa dòng), trả SSE output; end() flush + đóng nếu upstream không gửi kết thúc.
+// push(text) takes raw chunks (may split mid-line), returns SSE output; end() flushes + closes if upstream sent no terminator.
 abstract class SseLines {
   private buf = '';
   protected done = false;
@@ -274,7 +274,7 @@ abstract class SseLines {
     return rest + (this.done ? '' : this.finish());
   }
   private line(l: string): string {
-    if (this.done || !l.startsWith('data:')) return ''; // bỏ 'event:', comment, dòng trống
+    if (this.done || !l.startsWith('data:')) return ''; // skip 'event:', comments, blank lines
     const data = l.slice(5).trim();
     if (data === '[DONE]') return this.finish();
     try {
@@ -290,7 +290,7 @@ abstract class SseLines {
 const sse = (type: string, data: object) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 
 /** upstream Chat SSE → client Messages SSE.
- *  Giả định tool_calls stream tuần tự theo index (OpenAI và đa số compat làm vậy). */
+ *  Assumes tool_calls stream sequentially by index (OpenAI and most compat servers do). */
 export class ChatToMessagesStream extends SseLines {
   private started = false;
   private open: { kind: 'text' } | { kind: 'tool'; index: number } | null = null;
@@ -350,8 +350,8 @@ export class ChatToMessagesStream extends SseLines {
   }
 }
 
-/** upstream Chat SSE → client Responses SSE (chuỗi event như OpenAI thật — xem test/fixtures/codex-responses-stream.txt).
- *  Upstream Messages: xích MessagesToChatStream → class này. Cùng giả định tool_calls tuần tự theo index. */
+/** upstream Chat SSE → client Responses SSE (event sequence as real OpenAI — see test/fixtures/codex-responses-stream.txt).
+ *  Upstream Messages: chain MessagesToChatStream → this class. Same sequential-by-index tool_calls assumption. */
 export class ChatToResponsesStream extends SseLines {
   private id = rid('resp');
   private model = '';
@@ -401,7 +401,7 @@ export class ChatToResponsesStream extends SseLines {
     const choice = j.choices?.[0];
     if (!choice) return out;
     const d = choice.delta ?? {};
-    // output_index = output.length sau close() (item vừa đóng đã nằm trong output)
+    // output_index = output.length after close() (the just-closed item is already in output)
     if (typeof d.content === 'string' && d.content) {
       if (this.open?.kind !== 'msg') {
         out += this.close();
@@ -439,7 +439,7 @@ export class ChatToResponsesStream extends SseLines {
   }
 }
 
-/** upstream Messages SSE → client Chat SSE (kết thúc bằng `data: [DONE]`) */
+/** upstream Messages SSE → client Chat SSE (ends with `data: [DONE]`) */
 export class MessagesToChatStream extends SseLines {
   private id = 'chatcmpl-orchestra';
   private model = '';
@@ -473,7 +473,7 @@ export class MessagesToChatStream extends SseLines {
         if (d.type === 'input_json_delta' && this.tools.has(j.index)) {
           return this.chunk({ tool_calls: [{ index: this.tools.get(j.index), function: { arguments: d.partial_json } }] });
         }
-        return ''; // thinking_delta / signature_delta: bỏ
+        return ''; // thinking_delta / signature_delta: dropped
       }
       case 'message_delta':
         this.stop = stopToChat(j.delta?.stop_reason);

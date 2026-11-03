@@ -1,5 +1,5 @@
-// Pipeline Runner v0 — biến DSL thành quy trình tự chạy (P3)
-// State = thư mục file (.orchestra/runs/<runId>/state.json) — không DB (roadmap P3)
+// Pipeline Runner v0 — turns the DSL into a self-running workflow (P3)
+// State = file directory (.orchestra/runs/<runId>/state.json) — no DB (roadmap P3)
 import { mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import * as readline from 'node:readline/promises';
@@ -17,19 +17,19 @@ export interface RunPipelineOptions {
   scope?: string[];
   acceptance?: string[];
   params?: Record<string, unknown>;
-  /** duyệt plan tự động (unattended demo) */
+  /** auto-approve the plan (unattended demo) */
   autoYes?: boolean;
-  /** P5: log hook cho IDE panel */
+  /** P5: log hook for the IDE panel */
   onLog?: (line: string) => void;
-  /** D1: callback hỏi user — Desktop/Extension inject (GUI không có stdin); mặc định readline */
+  /** D1: ask-user callback — injected by Desktop/Extension (GUI has no stdin); defaults to readline */
   askUser?: (q: string) => Promise<string>;
-  /** model override cho implement + fixer — plan/verify/review giữ policy (cross-review độc lập) */
+  /** model override for implement + fixer — plan/verify/review keep policy (independent cross-review) */
   model?: string;
-  /** user bấm Dừng → kill worker đang chạy */
+  /** user clicks Stop → kill the running worker */
   signal?: AbortSignal;
-  /** R2a: Orchestra router cho mọi node */
+  /** R2a: Orchestra router for every node */
   router?: import('./types.js').RouterInfo;
-  /** skill giao cho mọi node (dispatch lọc theo worker) */
+  /** skills delivered to every node (dispatch filters by worker) */
   skills?: string[];
   projectId?: string | null;
 }
@@ -123,7 +123,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
     console.log(`[run ${runId}] ${s}`);
     o.onLog?.(`[run ${runId}] ${s}`);
   };
-  const ask = o.askUser ?? askUser; // D1: GUI inject IPC-dialog; CLI dùng readline
+  const ask = o.askUser ?? askUser; // D1: GUI injects IPC dialog; CLI uses readline
 
   const baseCtx = (): GateContext => ({
     repo: o.repo,
@@ -133,7 +133,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
     lastMessage: (id) => (id === '__current__' ? undefined : lastMsgOf[id]),
   });
 
-  // ----- thực thi 1 lần một node (không tính retry) -----
+  // ----- execute a node once (excluding retries) -----
   const execNode = async (node: NodeDef): Promise<{ ok: boolean; reason?: string }> => {
     const st = nodeState[node.id]!;
     const distinct = node.distinct_worker_from ?? [];
@@ -169,7 +169,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
           constraints: [], acceptance: o.acceptance ?? [],
           excludeWorkers: exclude, model: o.model,
           wallMs: node.budget?.minutes ? node.budget.minutes * 60_000 : 300_000,
-          resumeSession: lastSessionByNode[node.id], // P6.2 — retry tiếp tục session cũ
+          resumeSession: lastSessionByNode[node.id], // P6.2 — retry resumes the previous session
         });
         if (!d.ok || !d.record) return fail(d);
         workerOf[node.id] = pickWorker(d) ?? '';
@@ -231,7 +231,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       }
 
       case 'merge_gate': {
-        // gate dùng record của node implement (files_changed toàn nhánh, không phải incremental review)
+        // gate uses the implement node's record (files_changed for the whole branch, not the incremental review)
         const implNode = def.nodes.find((n) => n.type === 'implement');
         const ctx: GateContext = {
           ...baseCtx(),
@@ -261,20 +261,20 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
   };
 
   function lastMsgFromEvents(d: DispatchResult): string | undefined {
-    // dispatch không trả events chi tiết — đọc usage/message đã được tổng hợp trong record
+    // dispatch returns no detailed events — read the usage/message aggregated into the record
     const rec = d.record as Record<string, unknown> | undefined;
     if (!rec) return undefined;
-    // events không lưu trong record (chỉ counts) → message lấy từ run riêng: fallback ''
+    // events aren't stored in the record (counts only) → message comes from a separate run: fallback ''
     return typeof rec['last_message'] === 'string' ? (rec['last_message'] as string) : undefined;
   }
 
-  // ----- vòng lặp chính theo topo, có on_fail -----
+  // ----- main loop in topo order, with on_fail -----
   for (const nodeId of order) {
     const node = def.nodes.find((n) => n.id === nodeId)!;
     const st = nodeState[nodeId]!;
     if (aborted) { st.status = 'aborted'; persist(); continue; }
 
-    // skip propagation theo when.paths (đối chiếu run scope)
+    // skip propagation by when.paths (matched against run scope)
     if (node.when?.paths && o.scope && o.scope.length) {
       const overlap = node.when.paths.some((p) => o.scope!.includes(p));
       if (!overlap) { st.status = 'skipped'; log(t('core.orchestrator.skip', { id: nodeId })); persist(); continue; }
@@ -293,7 +293,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       st.attempts = attempt;
       const res = await execNode(node);
 
-      // Gate deterministic chấm SAU khi node chạy xong (merge_gate tự chấm trong execNode)
+      // Deterministic gate evaluated AFTER the node finishes (merge_gate evaluates itself in execNode)
       if (res.ok && node.gate && node.type !== 'merge_gate') {
         const gctx: GateContext = {
           ...baseCtx(),
@@ -334,7 +334,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
       if (of.action === 'spawn_fix') {
         if (fixAttempts >= (of.max_retries ?? 0)) { await thenAction(of.then); break; }
         fixAttempts++;
-        log(`spawn fix #${fixAttempts} cho ${nodeId}`);
+        log(`spawn fix #${fixAttempts} for ${nodeId}`);
         const fix = await dispatch({
           repo: o.repo, signal: o.signal, router: o.router, skills: o.skills, projectId: o.projectId, node:'implement', role: 'fixer',
           goal: `Fix according to feedback: ${res.reason ?? ''}`,
@@ -347,7 +347,7 @@ export async function runPipeline(o: RunPipelineOptions): Promise<RunSummary> {
           ].join('\n'),
         });
         if (!fix.ok) log(t('core.orchestrator.fixFailed', { reason: String(fix.reason) }));
-        continue; // chạy lại node (vd review chấm lại)
+        continue; // re-run the node (e.g. review re-evaluates)
       }
 
       if (of.action === 'ask_user') {

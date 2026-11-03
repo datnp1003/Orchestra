@@ -1,11 +1,11 @@
-// Settings store — pure fs, unit-test được (D1)
+// Settings store — pure fs, unit-testable (D1)
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { validateSettings, type AppSettings } from './contract.js';
 import { migrateRepos } from './chatSessions.js';
 import type { Locale } from '../../../prototype/src/i18n/index.js';
 
-/** raw JSON; undefined = chưa có file, null = file hỏng. Settings cũ chưa có projects → migrate 1 lần (ghi lại file). */
+/** raw JSON; undefined = no file yet, null = corrupt file. Old settings without projects → migrate once (rewrites the file). */
 function readRaw(file: string): Record<string, unknown> | null | undefined {
   if (!existsSync(file)) return undefined;
   let raw: Record<string, unknown>;
@@ -32,7 +32,7 @@ export function saveSettings(file: string, s: AppSettings): AppSettings {
   return validated;
 }
 
-/** lần đầu (chưa có file / settings cũ chưa có language) → ghi language = fallback (locale OS); file hỏng → không đụng */
+/** first run (no file / old settings without language) → write language = fallback (OS locale); corrupt file → untouched */
 export function initLanguage(file: string, fallback: Locale): AppSettings {
   const raw = readRaw(file);
   if (raw === null) return loadSettings(file);

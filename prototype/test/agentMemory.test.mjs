@@ -1,4 +1,4 @@
-// Long-term memory: ops, redact, budget, reflection (callModel giả) — temp home, không mạng
+// Long-term memory: ops, redact, budget, reflection (fake callModel) — temp home, no network
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, rmSync, existsSync } from 'node:fs';
@@ -17,9 +17,9 @@ const home = (t) => {
   return d;
 };
 
-test('applyMemoryOps: add / dedupe / replace / remove; mơ hồ hoặc không khớp → lỗi', () => {
+test('applyMemoryOps: add / dedupe / replace / remove; ambiguous or no match → error', () => {
   let r = applyMemoryOps('- uses pnpm\n- api in Go', [{ action: 'add', text: 'uses pnpm' }]);
-  assert.deepEqual([r.ok, r.changed], [true, false], 'add trùng = no-op');
+  assert.deepEqual([r.ok, r.changed], [true, false], 'duplicate add = no-op');
   r = applyMemoryOps(r.text, [{ action: 'add', text: '  deploys   on fly ' }]);
   assert.equal(r.text, '- uses pnpm\n- api in Go\n- deploys on fly');
   r = applyMemoryOps(r.text, [{ action: 'replace', old_text: 'pnpm', text: 'uses bun' }, { action: 'remove', old_text: 'fly' }]);
@@ -38,11 +38,11 @@ test('redactSecrets', () => {
     'API_KEY=hunter2', 'token = abc123', 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8', 'Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MEFCQ0RFRg==',
   ].join(' | ');
   const out = redactSecrets(s);
-  for (const leak of ['AAAAbbbb', 'abcdefgh1234', 'eyJhbGciOi', 'hunter2', 'abc123', 'a1b2c3d4e5f6', 'Zm9vYmFy']) assert.ok(!out.includes(leak), `lọt ${leak}: ${out}`);
-  assert.equal(redactSecrets('uses some-really-long-kebab-case-service-name-here'), 'uses some-really-long-kebab-case-service-name-here', 'tên dài không bị che');
+  for (const leak of ['AAAAbbbb', 'abcdefgh1234', 'eyJhbGciOi', 'hunter2', 'abc123', 'a1b2c3d4e5f6', 'Zm9vYmFy']) assert.ok(!out.includes(leak), `leaked ${leak}: ${out}`);
+  assert.equal(redactSecrets('uses some-really-long-kebab-case-service-name-here'), 'uses some-really-long-kebab-case-service-name-here', 'long name not masked');
 });
 
-test('setMemoryText: redact, normalize, quá budget → lỗi không ghi; ghi atomic (không còn .tmp)', (t) => {
+test('setMemoryText: redact, normalize, over budget → error, no write; atomic write (no leftover .tmp)', (t) => {
   home(t);
   const r = setMemoryText('p-1', 'likes tea\n\n- key=sk-abcdefghijk\n');
   assert.ok(r.ok);
@@ -50,12 +50,12 @@ test('setMemoryText: redact, normalize, quá budget → lỗi không ghi; ghi at
   assert.equal(loadMemory('p-1'), r.text + '\n');
   const over = setMemoryText('p-1', '- ' + 'x'.repeat(BUDGET.project));
   assert.equal(over.ok, false);
-  assert.equal(loadMemory('p-1'), r.text + '\n', 'không ghi');
+  assert.equal(loadMemory('p-1'), r.text + '\n', 'not written');
   assert.deepEqual(readdirSync(path.dirname(memoryFile('p-1'))).filter((f) => f.endsWith('.tmp')), []);
   assert.throws(() => projectDir('../x'), /invalid project id/);
 });
 
-test('renderMemoryBlock: global riêng; project kèm tên; cắt theo budget giữ entry mới', () => {
+test('renderMemoryBlock: global alone; project with name; budget cut keeps newest entries', () => {
   assert.equal(renderMemoryBlock('- g'), 'USER/GLOBAL MEMORY:\n- g');
   assert.equal(renderMemoryBlock('', { name: 'Shop', text: '- p' }), 'USER/GLOBAL MEMORY:\n(empty)\n\nPROJECT MEMORY (Shop):\n- p');
   const big = Array.from({ length: 400 }, (_, i) => `- entry number ${i}`).join('\n');
@@ -65,7 +65,7 @@ test('renderMemoryBlock: global riêng; project kèm tên; cắt theo budget gi�
   assert.equal(fitNewest('- aaaa\n- bb', 4), '- bb');
 });
 
-test('parseOps / reflectMemory: JSON hỏng → []; op rác bị lọc; project op bị bỏ ngoài project', async () => {
+test('parseOps / reflectMemory: malformed JSON → []; junk ops filtered; project ops dropped outside a project', async () => {
   assert.deepEqual(parseOps('nope'), []);
   assert.deepEqual(parseOps('{"ops":"x"}'), []);
   const raw = 'sure:\n{"ops":[{"scope":"global","action":"add","text":"likes tea"},{"scope":"project","action":"add","text":"api in Go"},{"scope":"x","action":"add","text":"y"},{"scope":"global","action":"add","text":5}]}';
@@ -81,14 +81,14 @@ test('parseOps / reflectMemory: JSON hỏng → []; op rác bị lọc; project 
   assert.match(seen[1].user, /PROJECT MEMORY \(Shop\)/);
 });
 
-test('writeMemoryOps: project ngoài project → lỗi; vượt budget → consolidate (model), lỗi model → giữ mới nhất', async (t) => {
+test('writeMemoryOps: project outside a project → error; over budget → consolidate (model), model error → keep newest', async (t) => {
   home(t);
   const r = await writeMemoryOps(null, [{ scope: 'project', action: 'add', text: 'x' }, { scope: 'global', action: 'add', text: 'g' }]);
   assert.equal(r.errors.length, 1);
   assert.deepEqual(r.applied.map((o) => o.scope), ['global']);
-  assert.ok(!existsSync(path.join(path.dirname(memoryFile(null)), 'projects')), 'không tạo project memory');
+  assert.ok(!existsSync(path.join(path.dirname(memoryFile(null)), 'projects')), 'no project memory created');
 
-  // 111 entry × 27 ký tự − 1 = 2996 ≤ budget; thêm 1 entry → vượt
+  // 111 entries × 27 chars − 1 = 2996 ≤ budget; 1 more entry → over
   const seed = Array.from({ length: 111 }, (_, i) => `- fact ${String(i).padStart(3, '0')} padding padding`).join('\n');
   assert.ok(setMemoryText(null, seed).ok);
   const compact = await writeMemoryOps(null, [{ scope: 'global', action: 'add', text: 'newest fact' }], async () => '- merged summary\n- newest fact');
@@ -102,7 +102,7 @@ test('writeMemoryOps: project ngoài project → lỗi; vượt budget → conso
   assert.equal(await consolidateMemory({ callModel: async () => 'garbage', text: '- a', budget: 10 }), '- a');
 });
 
-test('transcriptOf: chỉ text user/assistant, giữ đuôi; summarizeOps redact', () => {
+test('transcriptOf: user/assistant text only, keeps tail; summarizeOps redacts', () => {
   const msgs = [
     { role: 'user', content: 'add stripe' },
     { role: 'assistant', content: [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: '1', name: 'fleet_dispatch', input: { goal: 'SECRET_INPUT' } }] },

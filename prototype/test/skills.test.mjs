@@ -1,4 +1,4 @@
-// Skills: frontmatter, URL, preview/install/update (bare repo local qua cloneUrlFor — không mạng), delivery vào worktree
+// Skills: frontmatter, URL, preview/install/update (local bare repo via cloneUrlFor — no network), delivery into worktree
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -29,7 +29,7 @@ const put = (root, rel, text) => {
 };
 const md = (name, desc = `does ${name}`, extra = '', body = `Steps for ${name}.`) => `---\nname: ${name}\ndescription: ${desc}\n${extra}---\n${body}\n`;
 
-/** work repo → push vào bare; cloneUrlFor trỏ file:// bare */
+/** work repo → push into bare; cloneUrlFor points to the file:// bare */
 function remote(t) {
   const d = tmp(t, 'orch-sk-gh-');
   const bare = path.join(d, 'bare.git');
@@ -48,11 +48,11 @@ function remote(t) {
     git(work, 'push', '-q', bare, 'main');
   };
   push('init');
-  setCloneUrlFor(() => bare); // path local (file:// trên Windows + tên 8.3 git không đọc được)
+  setCloneUrlFor(() => bare); // local path (git can't read file:// on Windows + 8.3 names)
   return { work, bare, push };
 }
 
-test('parseSkillMd: hợp lệ + mặc định workers; lỗi name/description/workers', () => {
+test('parseSkillMd: valid + default workers; name/description/workers errors', () => {
   const { meta, body } = parseSkillMd(md('my-skill', 'd', 'tags: [a]\n'));
   assert.deepEqual(meta, { name: 'my-skill', description: 'd', tags: ['a'], workers: ['claude', 'codex'] });
   assert.equal(body, 'Steps for my-skill.');
@@ -62,7 +62,7 @@ test('parseSkillMd: hợp lệ + mặc định workers; lỗi name/description/w
   assert.throws(() => parseSkillMd(md('x', 'd', 'workers: [gemini]\n')));
 });
 
-test('parseGithubUrl: chặt — chỉ github.com, không .., không ký tự lạ', () => {
+test('parseGithubUrl: strict — github.com only, no .., no odd characters', () => {
   assert.deepEqual(parseGithubUrl('https://github.com/acme/skills'), { owner: 'acme', repo: 'skills' });
   assert.deepEqual(parseGithubUrl('https://github.com/acme/skills.git'), { owner: 'acme', repo: 'skills' });
   assert.deepEqual(parseGithubUrl('https://github.com/acme/skills/tree/v1.2/pack/web'), { owner: 'acme', repo: 'skills', ref: 'v1.2', subpath: 'pack/web' });
@@ -71,7 +71,7 @@ test('parseGithubUrl: chặt — chỉ github.com, không .., không ký tự l�
     assert.throws(() => parseGithubUrl(bad), String(bad));
 });
 
-test('previewGithub: 2 skill, warnings; install chọn lọc + source json ghim commit; temp dọn', (t) => {
+test('previewGithub: 2 skills, warnings; selective install + source json pins commit; temp cleaned', (t) => {
   home(t);
   remote(t);
   const p = previewGithub('https://github.com/acme/skills/tree/main/skills');
@@ -86,10 +86,10 @@ test('previewGithub: 2 skill, warnings; install chọn lọc + source json ghim 
   const [s] = listSkills();
   assert.equal(s.name, 'alpha');
   assert.deepEqual([s.source.type, s.source.url, s.source.commit, s.source.path], ['github', 'https://github.com/acme/skills', p.source.commit, 'skills/alpha']);
-  assert.throws(() => installSkills({ previewId: p.previewId, names: ['beta'], scope: 'global' }), /preview/, 'preview đã dọn sau install');
+  assert.throws(() => installSkills({ previewId: p.previewId, names: ['beta'], scope: 'global' }), /preview/, 'preview cleaned after install');
 });
 
-test('preview: symlink (git mode 120000) + >5MB bị từ chối; không cài được', (t) => {
+test('preview: symlink (git mode 120000) + >5MB rejected; cannot install', (t) => {
   home(t);
   const { work, bare } = remote(t);
   put(work, 'skills/big/SKILL.md', md('big'));
@@ -98,7 +98,7 @@ test('preview: symlink (git mode 120000) + >5MB bị từ chối; không cài đ
   git(work, 'add', '-A');
   const sha = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: work, input: '../../README.md', encoding: 'utf8' }).stdout.trim();
   git(work, 'update-index', '--add', '--cacheinfo', `120000,${sha},skills/link/ln`);
-  git(work, 'commit', '-q', '-m', 'bad'); // symlink chỉ ở index (mode 120000) — chạy được cả Windows không có quyền symlink
+  git(work, 'commit', '-q', '-m', 'bad'); // symlink only in the index (mode 120000) — works even on Windows without symlink permission
   git(work, 'push', '-q', bare, 'main');
   const p = previewGithub('https://github.com/acme/skills');
   const by = Object.fromEntries(p.skills.map((s) => [s.name, s]));
@@ -109,7 +109,7 @@ test('preview: symlink (git mode 120000) + >5MB bị từ chối; không cài đ
   cancelPreview(p.previewId);
 });
 
-test('saveSkill/project đè global/remove; tên bẩn bị chặn', (t) => {
+test('saveSkill/project overrides global/remove; dirty names blocked', (t) => {
   home(t);
   saveSkill('global', null, { name: 'fmt', description: 'global fmt', body: 'g' });
   saveSkill('project', 'p1', { name: 'fmt', description: 'project fmt', workers: ['claude'], body: 'p' });
@@ -122,7 +122,7 @@ test('saveSkill/project đè global/remove; tên bẩn bị chặn', (t) => {
   assert.equal(availableSkills('p1')[0].description, 'global fmt');
 });
 
-test('checkUpdate: phát hiện commit mới + file đổi, không ghi; updateSkill áp dụng', (t) => {
+test('checkUpdate: detects new commit + changed files, no write; updateSkill applies', (t) => {
   home(t);
   const { work, push } = remote(t);
   let p = previewGithub('https://github.com/acme/skills');
@@ -135,13 +135,13 @@ test('checkUpdate: phát hiện commit mới + file đổi, không ghi; updateSk
   c = checkUpdate('global', null, 'alpha');
   assert.equal(c.upToDate, false);
   assert.deepEqual(c.changed.map((x) => `${x.status}:${x.path}`).sort(), ['added:templates/t.md', 'modified:SKILL.md']);
-  assert.equal(availableSkills()[0].description, 'does alpha', 'check không ghi');
+  assert.equal(availableSkills()[0].description, 'does alpha', 'check does not write');
   updateSkill({ previewId: c.previewId, name: 'alpha', scope: 'global' });
   const s = availableSkills()[0];
   assert.deepEqual([s.description, s.source.commit], ['alpha v2', c.newCommit]);
 });
 
-test('previewLocal: import từ thư mục skills của claude/codex', (t) => {
+test('previewLocal: import from claude/codex skills directories', (t) => {
   home(t);
   const d = tmp(t, 'orch-sk-local-');
   put(d, 'claude/one/SKILL.md', md('one'));
@@ -161,7 +161,7 @@ function worktree(t) {
   return createWorktree(repo, 't1').path;
 }
 
-test('delivery claude: copy vào .claude/skills của worktree, KHÔNG vào files_changed', (t) => {
+test('delivery claude: copied into the worktree .claude/skills, NOT into files_changed', (t) => {
   home(t);
   saveSkill('global', null, { name: 'lint', description: 'lint it', body: 'run lint' });
   saveSkill('global', null, { name: 'cx', description: 'codex only', workers: ['codex'], body: 'x' });
@@ -177,7 +177,7 @@ test('delivery claude: copy vào .claude/skills của worktree, KHÔNG vào file
   assert.deepEqual(changedFiles(wt), ['b.txt']);
 });
 
-test('delivery codex: section SKILLS trong prompt, file phụ trợ ignored, trần 12000 ký tự', (t) => {
+test('delivery codex: SKILLS section in prompt, auxiliary files ignored, 12000-char cap', (t) => {
   home(t);
   saveSkill('global', null, { name: 'aa', description: 'first', body: 'A'.repeat(7000) });
   saveSkill('global', null, { name: 'bb', description: 'second', body: 'B'.repeat(7000) });
@@ -191,7 +191,7 @@ test('delivery codex: section SKILLS trong prompt, file phụ trợ ignored, tr�
   assert.deepEqual(changedFiles(wt), []);
 });
 
-test('delivery codex: file phụ trợ copy sang .orchestra/skills/<name>/ (không có SKILL.md), không vào git', (t) => {
+test('delivery codex: auxiliary files copied to .orchestra/skills/<name>/ (without SKILL.md), not into git', (t) => {
   home(t);
   const d0 = tmp(t, 'orch-sk-src-');
   put(d0, 'claude/ref/SKILL.md', md('ref'));

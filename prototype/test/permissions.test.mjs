@@ -1,9 +1,9 @@
-// needsApproval: bảng permission mode × action (Desktop chat)
+// needsApproval: permission mode × action table (Desktop chat)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { needsApproval, PERMISSION_MODES, MODE_PROMPT, isPermissionMode } from '../dist/permissions.js';
 
-test('needsApproval: bảng mode × action; mode lạ → ask', () => {
+test('needsApproval: mode × action table; unknown mode → ask', () => {
   const actions = ['dispatch_write', 'pipeline', 'merge', 'policy', 'repo_attach', 'plan_approval'];
   const want = {
     plan: ['block', 'block', 'block', 'block', 'ask', 'ask'],

@@ -2,7 +2,7 @@
   "name": "orchestra-desktop",
   "productName": "Orchestra Desktop",
   "version": "0.2.0",
-  "description": "Orchestra Desktop — IDE agent orchestrator độc lập: điều phối agent CLI trong pipeline có gate",
+  "description": "Orchestra Desktop",
   "main": "out/desktop/src/main/main.js",
   "type": "module",
   "private": true,
@@ -78,7 +78,7 @@
       "target": [
         "nsis"
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "nsis": {
       "oneClick": true

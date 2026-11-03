@@ -1,18 +1,18 @@
 // Router R3 — OAuth subscription (Claude Pro/Max, ChatGPT Plus/Pro).
-// ⚠ Client id + endpoint dưới đây là public client id của CLI chính chủ (Claude Code, Codex CLI) — dùng ngoài CLI đó là
-// KHÔNG được document/hỗ trợ, có thể vi phạm điều khoản → bị chặn / khoá tài khoản. Chỉ bật khi user đã riskAcknowledged.
-// Creds {access, refresh, expiresAt, accountId?} chỉ nằm trong vault `router.<id>` (qua store.getKey/setKey), không log, không về renderer.
+// ⚠ The client ids + endpoints below are the public client ids of the official CLIs (Claude Code, Codex CLI) — using them outside those CLIs is
+// NOT documented/supported and may violate the terms → blocked / account locked. Enable only once the user has riskAcknowledged.
+// Creds {access, refresh, expiresAt, accountId?} live only in vault `router.<id>` (via store.getKey/setKey), never logged, never sent to the renderer.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import type { ProviderConfig, ProviderKind } from './providers.js';
 import { t } from '../i18n/index.js';
 
-// Endpoint lấy từ claude.exe đang cài (MANUAL_REDIRECT_URL/TOKEN_URL/CLAUDE_AI_AUTHORIZE_URL) — đổi theo bản CLI.
+// Endpoints taken from the installed claude.exe (MANUAL_REDIRECT_URL/TOKEN_URL/CLAUDE_AI_AUTHORIZE_URL) — change with CLI version.
 export const ANTHROPIC = {
   clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
   authorizeUrl: 'https://claude.com/cai/oauth/authorize',
   tokenUrl: 'https://platform.claude.com/v1/oauth/token',
-  // manual-code flow: trang này hiện `code#state` cho user copy (Claude Code dùng khi không mở được localhost)
+  // manual-code flow: this page shows `code#state` for the user to copy (Claude Code uses it when localhost can't be opened)
   redirectUri: 'https://platform.claude.com/oauth/code/callback',
   scope: 'org:create_api_key user:profile user:inference',
   baseUrl: 'https://api.anthropic.com',
@@ -23,7 +23,7 @@ export const OPENAI = {
   clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
   authorizeUrl: 'https://auth.openai.com/oauth/authorize',
   tokenUrl: 'https://auth.openai.com/oauth/token',
-  port: 1455, // redirect_uri cố định đăng ký cho client id của codex
+  port: 1455, // fixed redirect_uri registered for codex's client id
   scope: 'openid profile email offline_access',
   baseUrl: 'https://chatgpt.com/backend-api/codex',
   originator: 'codex_cli_rs',
@@ -39,7 +39,7 @@ export interface OAuthCreds {
   expiresAt: number;
   accountId?: string;
 }
-/** refresh token chết / chưa login → router trả 401 với message này */
+/** refresh token dead / not logged in → router returns 401 with this message */
 export class OAuthLoginError extends Error {}
 const loginMsg = () => t('router.oauth.loginExpired');
 
@@ -80,7 +80,7 @@ export function openaiAuthUrl(p: { challenge: string; state: string; redirectUri
   return `${OPENAI.authorizeUrl}?${q}`;
 }
 
-/** chỉ DECODE payload id_token (không verify chữ ký) — lấy chatgpt_account_id làm header, không dùng để xác thực gì */
+/** only DECODES the id_token payload (signature not verified) — takes chatgpt_account_id as a header, not used for any authentication */
 export function accountIdFromJwt(jwt: unknown): string | undefined {
   try {
     const payload = JSON.parse(Buffer.from(String(jwt).split('.')[1]!, 'base64url').toString('utf8'));
@@ -114,7 +114,7 @@ const toCreds = (j: any, prev?: Partial<OAuthCreds>): OAuthCreds => {
   };
 };
 
-/** user dán `code#state` từ trang callback của Anthropic */
+/** user pastes `code#state` from Anthropic's callback page */
 export async function exchangeAnthropic(pasted: string, p: { verifier: string; state: string }, tokenUrl = ANTHROPIC.tokenUrl): Promise<OAuthCreds> {
   const [code, state] = String(pasted).trim().split('#');
   if (!code || state !== p.state) throw new Error(t('router.oauth.badCodeState'));
@@ -122,7 +122,7 @@ export async function exchangeAnthropic(pasted: string, p: { verifier: string; s
   return toCreds(j);
 }
 
-/** callback server 1 lần trên 127.0.0.1:1455 — mở trình duyệt, chờ redirect đúng state, đổi code lấy token */
+/** one-shot callback server on 127.0.0.1:1455 — opens the browser, waits for a redirect with the right state, exchanges code for token */
 export function openaiLogin(o: { open: (url: string) => unknown; port?: number; timeoutMs?: number; tokenUrl?: string }): Promise<OAuthCreds> {
   const port = o.port ?? OPENAI.port;
   const { verifier, challenge, state } = pkce();
@@ -168,7 +168,7 @@ export function openaiLogin(o: { open: (url: string) => unknown; port?: number; 
   });
 }
 
-// ───────────── token cho router: refresh single-flight ─────────────
+// ───────────── token for the router: single-flight refresh ─────────────
 interface KeyStore {
   getKey(id: string): string | null;
   setKey(id: string, value: string): void;
@@ -188,7 +188,7 @@ export function oauthStatus(raw: string | null): { oauthStatus: 'none' | 'ok' | 
   return { oauthStatus: (c.expiresAt ?? 0) < Date.now() ? 'expired' : 'ok', expiresAt: c.expiresAt ?? null };
 }
 
-// refresh token XOAY VÒNG: dùng lại token cũ = revoke cả phiên → mỗi provider chỉ 1 refresh đang bay
+// refresh tokens ROTATE: reusing an old token = whole session revoked → at most 1 refresh in flight per provider
 const inflight = new Map<string, Promise<OAuthCreds>>();
 
 export function getAccessToken(store: KeyStore, p: Pick<ProviderConfig, 'id' | 'kind'>, tokenUrl?: string): Promise<OAuthCreds> {
@@ -213,26 +213,26 @@ async function refresh(store: KeyStore, id: string, kind: ProviderKind, c: Parti
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 400 || status === 401) {
-      store.setKey(id, JSON.stringify({ needsLogin: true })); // refresh token đã chết — xoá, bắt login lại
+      store.setKey(id, JSON.stringify({ needsLogin: true })); // refresh token dead — clear it, force re-login
       throw new OAuthLoginError(loginMsg());
     }
-    throw err; // mạng/5xx: giữ token, lần sau thử lại
+    throw err; // network/5xx: keep token, retry next time
   }
   const next = toCreds(j, c);
-  store.setKey(id, JSON.stringify(next)); // lưu refresh token MỚI trước khi dùng access token
+  store.setKey(id, JSON.stringify(next)); // save the NEW refresh token before using the access token
   return next;
 }
 
-// ───────────── upstream: header/body bắt buộc của endpoint subscription ─────────────
-// ⚠ GIẢ DANH CLIENT (rủi ro điều khoản): beta oauth + system prompt Claude Code / originator codex_cli_rs.
-// Chỉ đúng phần tối thiểu endpoint đòi — KHÔNG giả User-Agent/Stainless/OS, KHÔNG đổi tên tool.
-const SESSION_ID = randomUUID(); // ponytail: 1 session_id / process (router chạy 1 lần / app)
+// ───────────── upstream: headers/body required by the subscription endpoints ─────────────
+// ⚠ CLIENT IMPERSONATION (terms risk): oauth beta + Claude Code system prompt / originator codex_cli_rs.
+// Only the minimum the endpoint demands — does NOT fake User-Agent/Stainless/OS, does NOT rename tools.
+const SESSION_ID = randomUUID(); // ponytail: 1 session_id / process (router runs once / app)
 
 export function applyOAuth(kind: ProviderKind, headers: Record<string, string>, body: any, c: OAuthCreds): void {
   if (kind === 'oauth-anthropic') {
     const beta = [...ANTHROPIC.beta, ...(headers['anthropic-beta'] ?? '').split(',')].map((s) => s.trim()).filter(Boolean);
     headers['anthropic-beta'] = [...new Set(beta)].join(',');
-    // Anthropic từ chối OAuth cho model không phải haiku nếu system không mở đầu bằng câu này; claude CLI đã gửi sẵn
+    // Anthropic rejects OAuth for non-haiku models unless system starts with this sentence; claude CLI already sends it
     const sys = body.system;
     const blocks: any[] = typeof sys === 'string' ? (sys ? [{ type: 'text', text: sys }] : []) : Array.isArray(sys) ? sys : [];
     if (!blocks.some((b) => typeof b?.text === 'string' && b.text.startsWith(ANTHROPIC.systemPrefix))) {
@@ -242,12 +242,12 @@ export function applyOAuth(kind: ProviderKind, headers: Record<string, string>, 
     headers.originator = OPENAI.originator;
     headers.session_id = SESSION_ID;
     if (c.accountId) headers['chatgpt-account-id'] = c.accountId;
-    body.stream = true; // backend codex chỉ nhận stream + store:false
+    body.stream = true; // codex backend only accepts stream + store:false
     body.store = false;
   }
 }
 
-/** gom SSE của Responses API → JSON cuối (response.completed) cho client không stream */
+/** collect Responses API SSE → final JSON (response.completed) for non-streaming clients */
 export function completedFromSse(text: string): any | null {
   let out = null;
   for (const l of text.split(/\r?\n/)) {
@@ -256,7 +256,7 @@ export function completedFromSse(text: string): any | null {
       const j = JSON.parse(l.slice(5).trim());
       if (j?.type === 'response.completed' && j.response) out = j.response;
     } catch {
-      /* dòng không phải JSON */
+      /* non-JSON line */
     }
   }
   return out;

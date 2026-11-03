@@ -1,5 +1,5 @@
-// Router R1 — provider config: metadata (không bí mật) ở ~/.orchestra/router.json,
-// key mỗi provider trong vault DPAPI tên `router.<id>` (không dùng ':' — tên file Windows/NTFS ADS).
+// Router R1 — provider config: metadata (non-secret) in ~/.orchestra/router.json,
+// each provider's key in the DPAPI vault named `router.<id>` (no ':' — Windows filename/NTFS ADS).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,19 +7,19 @@ import { vaultDelete, vaultGet, vaultSet } from '../vault.js';
 import { OAUTH_BASE_URL } from './oauth.js';
 import { t } from '../i18n/index.js';
 
-// R3: oauth-* = token subscription (vault giữ JSON creds thay key; router lấy access token qua oauth.ts)
+// R3: oauth-* = subscription token (vault holds JSON creds instead of a key; router gets the access token via oauth.ts)
 export type ProviderKind = 'anthropic' | 'openai' | 'anthropic-compatible' | 'openai-compatible' | 'oauth-anthropic' | 'oauth-openai';
 export type Format = 'messages' | 'chat' | 'responses';
 
 export interface ProviderConfig {
   id: string;
   kind: ProviderKind;
-  baseUrl: string; // không có '/' cuối, không có '/v1'
-  formats: Format[]; // upstream nói native được gì
+  baseUrl: string; // no trailing '/', no '/v1'
+  formats: Format[]; // what upstream speaks natively
   enabled: boolean;
-  models?: string[]; // tĩnh; không có → GET {baseUrl}/v1/models
-  riskAcknowledged?: boolean; // oauth-*: user đã đọc cảnh báo — thiếu → không lưu/bật được
-  needsLogin?: boolean; // runtime (desktop gắn từ vault), không lưu file
+  models?: string[]; // static; absent → GET {baseUrl}/v1/models
+  riskAcknowledged?: boolean; // oauth-*: user has read the warning — missing → can't save/enable
+  needsLogin?: boolean; // runtime (desktop sets it from the vault), not saved to file
 }
 
 export const DEFAULT_FORMATS: Record<ProviderKind, Format[]> = {
@@ -41,7 +41,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
 export const vaultName = (id: string) => `router.${id}`;
 export const defaultRouterFile = () => path.join(os.homedir(), '.orchestra', 'router.json');
 
-/** validate + chuẩn hoá — throw Error nếu sai (input từ UI/file là trust boundary) */
+/** validate + normalize — throws Error if invalid (input from UI/file is a trust boundary) */
 export function normalizeProvider(cfg: Partial<ProviderConfig>): ProviderConfig {
   const { id, kind } = cfg;
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new Error(t('router.providers.badId', { id: String(id) }));
@@ -57,13 +57,13 @@ export function normalizeProvider(cfg: Partial<ProviderConfig>): ProviderConfig 
   const baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, '').replace(/\/v1$/, '');
   const formats = (cfg.formats ?? []).filter((f) => FORMATS.includes(f));
   const listed = cfg.models?.filter((m) => typeof m === 'string' && m);
-  const models = listed?.length ? listed : oauth ? OAUTH_MODELS[kind] : undefined; // oauth không có /v1/models
+  const models = listed?.length ? listed : oauth ? OAUTH_MODELS[kind] : undefined; // oauth has no /v1/models
   const risk = oauth && cfg.riskAcknowledged === true;
   return {
     id,
     kind,
     baseUrl,
-    // oauth: endpoint cố định nói đúng 1 format
+    // oauth: fixed endpoint speaks exactly 1 format
     formats: formats.length && !oauth ? [...new Set(formats)] : [...DEFAULT_FORMATS[kind]],
     enabled: cfg.enabled !== false && (!oauth || risk),
     ...(models?.length ? { models } : {}),
@@ -81,7 +81,7 @@ export function authHeaders(kind: ProviderKind, key: string | null): Record<stri
   return h;
 }
 
-/** R2a: CLI chạy được model `<provider>/<model>` qua router không (theo format provider nói + router dịch được) */
+/** R2a: can the CLI run model `<provider>/<model>` via the router (per formats the provider speaks + router can translate) */
 export function routerModelOk(cli: string, modelId: string, providers: ProviderConfig[]): { ok: boolean; reason: string } {
   if (cli !== 'claude' && cli !== 'codex') return { ok: false, reason: t('router.providers.cliUnsupported', { cli }) };
   const i = modelId.indexOf('/');
@@ -127,7 +127,7 @@ export function createProviderStore(
 
   const load = (): ProviderConfig[] => {
     if (list) return list;
-    // file hỏng → throw, KHÔNG trả [] (save sau đó sẽ ghi đè mất config của user)
+    // corrupt file → throw, do NOT return [] (a later save would overwrite the user's config)
     const raw = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { providers: [] };
     list = ((raw.providers ?? []) as Partial<ProviderConfig>[]).map(normalizeProvider);
     return list;

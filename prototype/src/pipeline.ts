@@ -1,4 +1,4 @@
-// Pipeline DSL loader + validation — theo pipeline-dsl-spec v0.1 (luật V1–V10, phần áp dụng P3)
+// Pipeline DSL loader + validation — per pipeline-dsl-spec v0.1 (rules V1–V10, P3-applicable part)
 import { readFileSync } from 'node:fs';
 import * as yaml from 'js-yaml';
 import type { NodeType } from './brief.js';
@@ -58,33 +58,33 @@ export function validatePipeline(d: PipelineDef): string[] {
   // V10
   if (typeof d.version !== 'number' || d.version < 1) errors.push(t('core.pipeline.v10'));
 
-  // V1: đúng một node verify
+  // V1: exactly one verify node
   const verifyNodes = d.nodes.filter((n) => n.type === 'verify');
   if (verifyNodes.length !== 1) errors.push(t('core.pipeline.v1', { n: verifyNodes.length }));
 
   for (const n of d.nodes) {
     if (!NODE_TYPES.includes(n.type)) errors.push(t('core.pipeline.badType', { id: n.id, type: n.type }));
-    // V2: verify không được có when
+    // V2: verify must not have when
     if (n.type === 'verify' && n.when) errors.push(t('core.pipeline.v2', { id: n.id }));
-    // needs phải trỏ tới node tồn tại
+    // needs must point to existing nodes
     for (const dep of n.needs ?? []) {
       if (!ids.has(dep)) errors.push(t('core.pipeline.needsMissing', { id: n.id, dep }));
     }
-    // V5: distinct_worker_from phải trỏ tới node trong pipeline
+    // V5: distinct_worker_from must point to a node in the pipeline
     for (const ref of n.distinct_worker_from ?? []) {
       if (!ids.has(ref)) errors.push(t('core.pipeline.v5', { id: n.id, ref }));
     }
-    // V6: spawn_fix bắt buộc max_retries + then
+    // V6: spawn_fix requires max_retries + then
     if (n.on_fail?.action === 'spawn_fix' && (n.on_fail.max_retries === undefined || !n.on_fail.then)) {
       errors.push(t('core.pipeline.v6', { id: n.id }));
     }
-    // V7: merge_gate cần policy; auto_if cần conditions
+    // V7: merge_gate needs policy; auto_if needs conditions
     if (n.type === 'merge_gate' && !n.gate) errors.push(t('core.pipeline.v7', { id: n.id }));
-    // V9: budget (warning-format nhưng đưa vào errors list riêng sẽ chặt hơn — P3: warning)
+    // V9: budget (warning format; a separate errors list would be stricter — P3: warning)
     if (n.type === 'implement' && !n.budget) errors.push(t('core.pipeline.v9', { id: n.id }));
   }
 
-  // V3: DAG phi chu trình — topoSort sẽ throw; thử trước để báo lỗi rõ
+  // V3: acyclic DAG — topoSort throws; try it first to report a clear error
   try {
     topoSort(d.nodes);
   } catch (err) {
@@ -94,7 +94,7 @@ export function validatePipeline(d: PipelineDef): string[] {
   return errors;
 }
 
-/** Kahn topo sort — throw nếu có chu trình (V3) */
+/** Kahn topo sort — throws on a cycle (V3) */
 export function topoSort(nodes: NodeDef[]): string[] {
   const indeg = new Map<string, number>();
   const adj = new Map<string, string[]>();

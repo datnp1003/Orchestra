@@ -1,5 +1,5 @@
-// Role Policy — role-policy-spec v0.1, phần P4: policy.yml từ file + track record scoring
-// Nguyên tắc giữ nguyên: router deterministic, log pick + reason (§1), agent đề xuất user chốt (§6)
+// Role Policy — role-policy-spec v0.1, P4 part: policy.yml from file + track record scoring
+// Principles unchanged: deterministic router, log pick + reason (§1), agent proposes, user decides (§6)
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
@@ -30,7 +30,7 @@ export interface PolicyFile {
   fleet_constraints?: { cross_review?: 'required' | 'optional'; max_parallel_tasks?: number };
 }
 
-/** binding mặc định khi không có policy.yml (fallback nguyên trạng P2/P3) */
+/** default binding when there is no policy.yml (P2/P3 fallback as-is) */
 export const DEFAULT_BINDINGS: Record<string, string[]> = {
   coder: ['codex', 'claude'],
   planner: ['claude', 'codex'],
@@ -63,7 +63,7 @@ export function loadPolicy(repo?: string): LoadedPolicy {
   return { policy: null, source: 'none', errors: [] };
 }
 
-/** Luật P1–P8 (role-policy-spec §7) — phần áp dụng được ở P4 */
+/** Rules P1–P8 (role-policy-spec §7) — the part applicable in P4 */
 export function validatePolicyFile(p: PolicyFile): string[] {
   const errors: string[] = [];
   if (typeof p.version !== 'number' || p.version < 1) errors.push(t('core.policy.noVersion'));
@@ -83,7 +83,7 @@ export function validatePolicyFile(p: PolicyFile): string[] {
 
 export interface RoutingDecision {
   pick?: string;
-  /** model từ binding của worker được chọn — undefined = CLI dùng model mặc định của nó */
+  /** model from the chosen worker's binding — undefined = CLI uses its default model */
   model?: string;
   reason: string;
   candidates: string[];
@@ -113,13 +113,13 @@ export function resolveWorker(
     return { reason: t('core.policy.pinUnavailable', { pin: opts.pin }), candidates: [] };
   }
 
-  // min_sample & decay từ policy hoặc mặc định
+  // min_sample & decay from policy or defaults
   const minSample = opts.policy?.routing?.min_sample ?? 10;
   const decayDays = opts.policy?.routing?.decay_days ?? 30;
   const stats = opts.stats ?? (opts.tasksDir ? buildFleetStats(opts.tasksDir, decayDays) : undefined);
 
-  // danh sách ứng viên theo thứ tự binding (kèm model nếu binding khai)
-  // P6.6: ứng viên mà model không phân phối được cho CLI → SKIP (luật capability-based distribution)
+  // candidate list in binding order (with model if the binding declares one)
+  // P6.6: candidate whose model can't be distributed to the CLI → SKIP (capability-based distribution rule)
   const binding = opts.policy?.bindings?.[role];
   const candidates: { cli: string; model?: string; base: number; boost: number }[] = [];
   const skipped: string[] = [];
@@ -128,7 +128,7 @@ export function resolveWorker(
       const boost = (b.boost_when?.tags ?? []).some((t) => tags.includes(t)) ? 2 : 0;
       const model = b.worker.model;
       const cliManifest = getManifest(b.worker.cli);
-      // không có router info → model binding chấp nhận nguyên trạng (CLI tự lo auth)
+      // no router info → binding model accepted as-is (CLI handles its own auth)
       if (model && cliManifest && opts.router?.providers) {
         const res = routerModelOk(b.worker.cli, model, opts.router.providers);
         if (!res.ok) {
@@ -143,11 +143,11 @@ export function resolveWorker(
     ids.forEach((cli, i) => candidates.push({ cli, base: ids.length - i, boost: 0 }));
   }
   if (skipped.length) {
-    // log lý do skip — dispatch thấy được vì sao ứng viên bị loại
+    // log skip reason — dispatch can see why a candidate was dropped
     opts.onSkip?.(skipped);
   }
 
-  // chấm điểm: thứ tự binding + tag boost + track record (khi đủ sample — P5 luật §5)
+  // scoring: binding order + tag boost + track record (once enough samples — P5 rule §5)
   const scored = candidates
     .filter((c) => !exclude.includes(c.cli))
     .filter((c) => getManifest(c.cli) && checkStatus(getManifest(c.cli)!).installed)

@@ -1,6 +1,6 @@
-// M1 — Orchestra brain: agent loop riêng gọi LLM API (Anthropic Messages, tool calling).
-// CLI chỉ là worker, chỉ chạm được qua tool fleet_dispatch / fleet_pipeline.
-// R2a: gọi qua Orchestra router (baseUrl router, apiKey = token router) — key không log, không vào prompt/record/lỗi.
+// M1 — Orchestra brain: own agent loop calling the LLM API (Anthropic Messages, tool calling).
+// CLIs are only workers, reachable only via the fleet_dispatch / fleet_pipeline tools.
+// R2a: calls go through the Orchestra router (baseUrl = router, apiKey = router token) — key never logged, never in prompt/record/errors.
 import { t } from './i18n/index.js';
 
 export type Block =
@@ -32,7 +32,7 @@ export interface BrainCreds {
 }
 type FetchFn = typeof fetch;
 
-// chấp nhận cả "https://gw" lẫn "https://gw/v1/"
+// accepts both "https://gw" and "https://gw/v1/"
 const apiUrl = (baseUrl: string, p: string) => `${baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/${p}`;
 const headers = (apiKey: string) => ({
   authorization: `Bearer ${apiKey}`,
@@ -61,7 +61,7 @@ export async function listBrainModels(c: BrainCreds, fetchImpl: FetchFn = fetch)
   }
 }
 
-/** 1 lượt không tool (system + 1 user message) → text — dùng cho memory reflection/consolidate */
+/** single tool-less turn (system + 1 user message) → text — used for memory reflection/consolidate */
 export async function callBrainText(c: BrainCreds & { model: string; fetchImpl?: FetchFn }, system: string, user: string, maxTokens = 2048): Promise<string> {
   const r = await callJson(
     c.fetchImpl ?? fetch,
@@ -90,7 +90,7 @@ export interface BrainTurnOpts extends BrainCreds {
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
   const history: Msg[] = [...o.history, { role: 'user', content: o.userText }];
   const maxTurns = o.maxTurns ?? 12;
-  // dừng giữa chừng: history luôn kết thúc bằng assistant, mọi tool_use đều có tool_result
+  // stopped midway: history always ends with assistant, every tool_use has a tool_result
   const stopped = () => {
     const text = t('brain.aborted');
     history.push({ role: 'assistant', content: [{ type: 'text', text }] });
@@ -114,18 +114,18 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
       if (o.signal?.aborted) return stopped();
       throw err;
     }
-    // không có content[] = không phải phản hồi Messages API → báo lỗi rõ thay vì im lặng trả "(empty)"
+    // no content[] = not a Messages API response → fail clearly instead of silently returning "(empty)"
     if (!Array.isArray(r?.content)) throw new Error(t('brain.badResponse', { model: o.model, body: JSON.stringify(r ?? null).slice(0, 200) }));
     const content: Block[] = r.content;
     const text = content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
     const uses = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     if (r?.stop_reason !== 'tool_use' || !uses.length) {
-      // tool_use mồ côi (vd. max_tokens) không được nằm lại history — lượt sau API sẽ từ chối
+      // orphan tool_use (e.g. max_tokens) must not stay in history — the API would reject the next turn
       history.push({ role: 'assistant', content: [{ type: 'text', text: text || '(empty)' }] });
       return { text, history };
     }
     history.push({ role: 'assistant', content });
-    if (text) o.onStep?.({ kind: 'text', text }); // text giữa các tool call; text cuối do caller hiển thị
+    if (text) o.onStep?.({ kind: 'text', text }); // text between tool calls; final text is shown by the caller
 
     const results: Block[] = [];
     for (const u of uses) {
@@ -149,6 +149,6 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
   }
   const text = t('brain.turnCap', { n: maxTurns });
   o.onStep?.({ kind: 'error', text });
-  history.push({ role: 'assistant', content: [{ type: 'text', text }] }); // giữ user/assistant xen kẽ cho lượt sau
+  history.push({ role: 'assistant', content: [{ type: 'text', text }] }); // keep user/assistant alternating for the next turn
   return { text, history };
 }

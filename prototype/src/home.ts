@@ -1,5 +1,5 @@
-// Thư mục dữ liệu Orchestra (~/.orchestra — cùng chỗ router.json): project, chat ngoài project, memory dài hạn.
-// Override bằng ORCHESTRA_HOME hoặc setOrchestraHome (test dùng temp dir).
+// Orchestra data dir (~/.orchestra — alongside router.json): projects, non-project chats, long-term memory.
+// Override via ORCHESTRA_HOME or setOrchestraHome (tests use a temp dir).
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -13,13 +13,13 @@ export const orchestraHome = (): string => base || path.join(os.homedir(), '.orc
 
 export const PROJECT_ID_RE = /^[\w-]+$/;
 export function projectDir(id: string): string {
-  if (!PROJECT_ID_RE.test(id)) throw new Error(`invalid project id: ${id}`); // id đi vào path — chặn traversal
+  if (!PROJECT_ID_RE.test(id)) throw new Error(`invalid project id: ${id}`); // id goes into a path — block traversal
   return path.join(orchestraHome(), 'projects', id);
 }
-/** null = chat ngoài project */
+/** null = non-project chat */
 export const chatDir = (projectId: string | null): string =>
   projectId ? path.join(projectDir(projectId), 'chat') : path.join(orchestraHome(), 'chats');
-/** repo scratch cho chat ngoài project — worker cần 1 git repo để tạo worktree; tạo lần đầu dùng (idempotent) */
+/** scratch repo for non-project chats — workers need a git repo to create worktrees; created on first use (idempotent) */
 export function ensureWorkspace(): string {
   const dir = path.join(orchestraHome(), 'workspace');
   if (existsSync(path.join(dir, '.git'))) return dir;

@@ -1,5 +1,5 @@
-// Session chat — parse ~/.orchestra/{projects/<id>/chat,chats}/<sessionId>.jsonl để resume hội thoại brain.
-// Mỗi session thuộc 1 project (nhiều repo) hoặc là chat ngoài project (projectId null).
+// Session chat — parse ~/.orchestra/{projects/<id>/chat,chats}/<sessionId>.jsonl to resume brain conversations.
+// Each session belongs to 1 project (many repos) or is a chat outside any project (projectId null).
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -23,21 +23,21 @@ export const SESSION_ID_RE = /^[\w.-]+$/;
 
 const legacyChatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
 
-/** session trong 1 thư mục chat, mới nhất trước, top `limit` */
+/** sessions in 1 chat dir, newest first, top `limit` */
 export function listChatSessions(dir: string, limit = 30) {
   if (!existsSync(dir)) return [];
   const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
     const file = path.join(dir, f);
     return { file, id: f.slice(0, -'.jsonl'.length), updatedAt: statSync(file).mtime.toISOString() };
   }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
-  // ponytail: parse cả file của top `limit` mỗi lần list — chậm khi session rất dài → cache theo mtime
+  // ponytail: parses whole files of top `limit` on every list — slow for very long sessions → cache by mtime
   return files.map(({ file, id, updatedAt }) => {
     const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
     return { id, title, turns, updatedAt };
   });
 }
 
-/** chat:sessions — nhóm theo project + chat ngoài project; active = session đang mở */
+/** chat:sessions — grouped by project + chats outside projects; active = currently open session */
 export function chatSessionsView(projects: Project[], active: { projectId: string | null; id: string }) {
   const mark = (projectId: string | null) => (x: ReturnType<typeof listChatSessions>[number]) => ({ ...x, active: !!active.id && x.id === active.id && projectId === active.projectId });
   return {
@@ -46,14 +46,14 @@ export function chatSessionsView(projects: Project[], active: { projectId: strin
   };
 }
 
-/** projectId null/undefined = chat ngoài project; chuỗi phải là project có thật */
+/** projectId null/undefined = chat outside a project; a string must be an existing project */
 export function findProject(projects: Project[], projectId: unknown): { project: Project | null } | { error: string } {
   if (projectId === null || projectId === undefined) return { project: null };
   const p = projects.find((x) => x.id === projectId);
   return p ? { project: p } : { error: t('desktop.project.notFound', { id: String(projectId) }) };
 }
 
-/** trust boundary chat:open — project phải tồn tại, id không chứa path */
+/** trust boundary chat:open — project must exist, id must not contain a path */
 export function sessionFile(projects: Project[], projectId: unknown, id: unknown): { file: string; project: Project | null } | { error: string } {
   const f = findProject(projects, projectId);
   if ('error' in f) return f;
@@ -69,7 +69,7 @@ export function newProjectId(name: string, taken: string[] = []): string {
   }
 }
 
-/** settings cũ chưa có projects → 1 project / repo; COPY (không move) session cũ <repo>/.orchestra/chat → project. Lặp lại an toàn. */
+/** old settings without projects → 1 project / repo; COPY (not move) old sessions <repo>/.orchestra/chat → project. Idempotent. */
 export function migrateRepos(repos: string[]): Project[] {
   const projects: Project[] = [];
   for (const repo of repos) {
@@ -93,7 +93,7 @@ export function copyLegacySessions(repo: string, projectId: string): number {
   return n;
 }
 
-/** xoá dữ liệu Orchestra của project (session + memory) — KHÔNG bao giờ đụng repo */
+/** delete the project's Orchestra data (sessions + memory) — NEVER touches the repo */
 export function deleteProjectData(id: string): void {
   rmSync(projectDir(id), { recursive: true, force: true });
 }
@@ -102,7 +102,7 @@ const repoKey = (p: string) => {
   const n = p.replace(/\\/g, '/').replace(/\/+$/, '');
   return process.platform === 'win32' ? n.toLowerCase() : n;
 };
-/** repo:add — chỉ nhận thư mục có .git; lưu dạng '/' như các entry khác; trùng → trả entry cũ */
+/** repo:add — only accepts dirs with .git; stored with '/' like other entries; duplicate → returns the existing entry */
 export function addRepoDir(repos: string[], dir: string): { ok: true; repo: string; repos: string[] } | { ok: false; error: string } {
   if (!dir || !existsSync(path.join(dir, '.git'))) return { ok: false, error: t('desktop.repo.notGit', { dir }) };
   const hit = repos.find((r) => repoKey(r) === repoKey(dir));
@@ -122,25 +122,25 @@ export function parseChatSession(text: string): ChatSession {
     try {
       raw = JSON.parse(line);
     } catch {
-      continue; // dòng hỏng (ghi dở) — bỏ
+      continue; // corrupt line (partial write) — skip
     }
     if ((raw.role !== 'user' && raw.role !== 'assistant') || (typeof raw.content !== 'string' && !Array.isArray(raw.content))) continue;
-    // thinking có signature theo model — đổi model sau khi resume sẽ không validate được → bỏ
+    // thinking carries a per-model signature — switching model after resume fails validation → drop
     const content = typeof raw.content === 'string'
       ? raw.content
       : (raw.content as { type?: string }[]).filter((b) => b && b.type !== 'thinking' && b.type !== 'redacted_thinking') as Block[];
     if (Array.isArray(content) && !content.length) continue;
     history.push({ role: raw.role, content });
   }
-  // history phải kết thúc bằng assistant trả lời xong — bỏ tool_use treo ở cuối / user chưa có phản hồi
-  // ponytail: chỉ xử lý treo ở cuối file (persistChat chỉ ghi lượt đã xong); treo giữa file → cần lọc theo tool_use_id
+  // history must end with a finished assistant reply — drop trailing dangling tool_use / unanswered user
+  // ponytail: only handles dangling turns at end of file (persistChat only writes finished turns); mid-file → filter by tool_use_id
   while (history.length && (history.at(-1)!.role === 'user' || hasToolUse(history.at(-1)!))) history.pop();
 
   const messages: ChatView[] = [];
   for (const m of history) {
     if (m.role === 'user') {
       const t = userText(m);
-      if (t.trim()) messages.push({ role: 'user', text: t }); // lượt chỉ có tool_result → bỏ
+      if (t.trim()) messages.push({ role: 'user', text: t }); // tool_result-only turn → skip
       continue;
     }
     const t = userText(m);

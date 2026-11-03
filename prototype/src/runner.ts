@@ -8,9 +8,9 @@ import { protoAsset } from './paths.js';
 import { t } from './i18n/index.js';
 import { changedFiles as gitChangedFiles, isGitRepo } from './worktree.js';
 
-// ---------- Supervisor Lớp 3 helpers (Worker Protocol §9b) ----------
+// ---------- Supervisor Layer 3 helpers (Worker Protocol §9b) ----------
 
-/** Livestock: cùng tool_use lặp ≥ N lần cùng kết quả → stuck (§9b tín hiệu 3) */
+/** Livestock: same tool_use repeated ≥ N times with the same result → stuck (§9b signal 3) */
 export class LivelockDetector {
   private lastKey = '';
   private count = 0;
@@ -27,26 +27,26 @@ export class LivelockDetector {
 }
 
 /**
- * Cross-check Observed vs Reported (§9b): file đổi trong worktree (Observed — fs.watch)
- * mà không có tool_use nào nhắc tới (Reported) = bất thường.
- * Heuristic khớp: basename của file đổi xuất hiện trong target của tool_use nào đó.
- * Bash có thể ghi file mà target không chứa tên file → có thể false-positive; dùng làm
- * tín hiệu đánh dấu (không auto-kill) — đúng spec: "đánh dấu ngay, không chờ gate".
+ * Cross-check Observed vs Reported (§9b): a file changed in the worktree (Observed — fs.watch)
+ * that no tool_use mentions (Reported) = anomaly.
+ * Match heuristic: the changed file's basename appears in some tool_use target.
+ * Bash can write files whose name isn't in the target → possible false positives; used as
+ * a flag signal (no auto-kill) — per spec: "flag immediately, don't wait for the gate".
  */
 export function computeFsCrossCheck(changed: string[], targets: string[]): { ok: boolean; unreported: string[] } {
   const baselines = targets.map((t) => t.replace(/\\/g, '/').toLowerCase());
   const unreported = changed.filter((f) => {
     const norm = f.replace(/\\/g, '/');
     const base = path.basename(norm).toLowerCase();
-    if (!base.includes('.')) return false; // thư mục / path không đuôi file — event settle, không phải file ghi
+    if (!base.includes('.')) return false; // directory / path without extension — settle event, not a written file
     return !baselines.some((t) => t.includes(base));
   });
   return { ok: unreported.length === 0, unreported };
 }
 
 /**
- * fs.watch bắn cả cho file git vừa checkout khi tạo worktree → chỉ giữ file git thấy thực sự đổi
- * (porcelain trước stageAll: modified + untracked; untracked dir hiện dạng `dir/`). Không phải git → giữ nguyên.
+ * fs.watch also fires for files git just checked out when creating the worktree → keep only files git sees as really changed
+ * (porcelain before stageAll: modified + untracked; untracked dirs show as `dir/`). Not git → unchanged.
  */
 export function filterRealChanges(watchDir: string, fsChanged: string[]): string[] {
   if (!isGitRepo(watchDir)) return fsChanged;
@@ -55,9 +55,9 @@ export function filterRealChanges(watchDir: string, fsChanged: string[]): string
 }
 
 /**
- * Tìm guard.cjs: prototype/dist → prototype/hooks; <pkg>/out/prototype/src → repo/prototype/hooks
- * (extension/desktop dev) — cùng đường đó cho desktop packaged: resources/app.asar/out/prototype/src
- * → resources/prototype/hooks (extraResources, ngoài asar vì hook do `node` ngoài chạy).
+ * Find guard.cjs: prototype/dist → prototype/hooks; <pkg>/out/prototype/src → repo/prototype/hooks
+ * (extension/desktop dev) — same path for packaged desktop: resources/app.asar/out/prototype/src
+ * → resources/prototype/hooks (extraResources, outside asar since the hook is run by an external `node`).
  */
 export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): string | undefined {
   return protoAsset(path.join('hooks', 'guard.cjs'), fromFile);
@@ -65,8 +65,8 @@ export function resolveGuardHook(fromFile = fileURLToPath(import.meta.url)): str
 
 /**
  * args + env spawn: PreToolUse hook (manifest.hookArgs codex -c | claude --settings) + router (manifest.routerArgs).
- * claude: hooks + router env gộp vào ĐÚNG 1 `--settings`; có router → JSON inline (token không ghi ra đĩa),
- * chỉ hooks → file như cũ. Prompt luôn là arg cuối — chèn trước nó.
+ * claude: hooks + router env merged into EXACTLY 1 `--settings`; with router → inline JSON (token never written to disk),
+ * hooks only → file as before. Prompt is always the last arg — insert before it.
  */
 export function spawnArgs(
   m: Manifest,
@@ -98,22 +98,22 @@ export function spawnArgs(
 export interface RunOptions {
   cwd: string;
   rawDir: string;
-  silenceMs?: number; // mặc định 120s — không có dòng nào từ CLI
-  wallMs?: number; // mặc định 300s — tổng thời gian
+  silenceMs?: number; // default 120s — no line from the CLI
+  wallMs?: number; // default 300s — total time
   headless?: HeadlessOpts;
-  /** P5: callback từng event chuẩn hoá — dùng cho live transcript trong IDE */
+  /** P5: callback per normalized event — used for the live transcript in the IDE */
   onEvent?: (e: FleetEvent) => void;
-  /** P6: thư mục để fs.watch (Observed) — thường là worktree */
+  /** P6: directory to fs.watch (Observed) — usually the worktree */
   watchDir?: string;
-  /** P6.2: net off → guard hook chặn pattern network (case 8) */
+  /** P6.2: net off → guard hook blocks network patterns (case 8) */
   netOff?: boolean;
-  /** P6.2: resume session của CLI */
+  /** P6.2: resume a CLI session */
   resumeSession?: string;
-  /** P5.4: tắt guard hook (setting orchestra.hooksEnabled) */
+  /** P5.4: disable the guard hook (setting orchestra.hooksEnabled) */
   hooksEnabled?: boolean;
-  /** abort (user bấm Dừng) → kill cây tiến trình, kill_reason 'aborted' */
+  /** abort (user clicks Stop) → kill the process tree, kill_reason 'aborted' */
   signal?: AbortSignal;
-  /** R2a: có → CLI chạy qua Orchestra router; không → CLI dùng auth riêng của nó */
+  /** R2a: set → CLI runs through the Orchestra router; unset → CLI uses its own auth */
   router?: RouterInfo;
 }
 
@@ -125,19 +125,19 @@ export interface RunResult {
   events: FleetEvent[];
   rawPath: string;
   rawLines: number;
-  unmappedLines: number; // raw JSONL hợp lệ nhưng adapter không nhận diện — conformance signal
-  /** P6.2: session id từ event session đầu tiên — dùng cho resume */
+  unmappedLines: number; // valid raw JSONL the adapter doesn't recognize — conformance signal
+  /** P6.2: session id from the first session event — used for resume */
   session?: string;
-  /** P6 — Supervisor Lớp 3 */
-  fsChanged: string[]; // Observed: file đổi trong watchDir
-  toolTargets: string[]; // Reported: target của mọi tool_use
+  /** P6 — Supervisor Layer 3 */
+  fsChanged: string[]; // Observed: files changed in watchDir
+  toolTargets: string[]; // Reported: targets of every tool_use
   fsCrossCheck: { ok: boolean; unreported: string[] };
 }
 
 function killTree(child: ChildProcess, reason: string): void {
   (child as ChildProcess & { __killReason?: string }).__killReason = reason;
   if (process.platform === 'win32' && child.pid) {
-    // Job Object chưa có trong Node core → taskkill /T giết cả tiến trình con
+    // Job Objects aren't in Node core yet → taskkill /T kills child processes too
     spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
   } else {
     child.kill('SIGKILL');
@@ -151,7 +151,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   if (opts.resumeSession) headless.resume = opts.resumeSession;
   const spec = m.headless(prompt, headless);
 
-  // P6.2 — hooks pre-execution + R2a router: splice vào args trước prompt
+  // P6.2 — hooks pre-execution + R2a router: splice into args before the prompt
   const extraEnv: Record<string, string> = {};
   let guardMissing: FleetEvent | undefined;
   let hookScript: string | undefined;
@@ -177,7 +177,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
     child = spawn(spec.cmd, spec.args, {
       cwd: opts.cwd,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'], // prompt qua args, đóng stdin — CLI không chờ pipe
+      stdio: ['ignore', 'pipe', 'pipe'], // prompt via args, stdin closed — CLI doesn't wait on the pipe
       env: Object.keys(extraEnv).length ? { ...process.env, ...extraEnv } : process.env,
     });
   } catch (err) {
@@ -208,14 +208,14 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
   let capturedSession: string | undefined;
   const stderrChunks: string[] = [];
 
-  // P6 — Lớp 3: Observed (fs.watch) + Reported (tool_use) + livelock
+  // P6 — Layer 3: Observed (fs.watch) + Reported (tool_use) + livelock
   const changedFiles = new Set<string>();
   const toolTargets: string[] = [];
   const livelock = new LivelockDetector(5);
   let fsWatcher: FSWatcher | undefined;
   if (opts.watchDir && existsSync(opts.watchDir)) {
     try {
-      // realpath: path 8.3 (NITROV~1) làm libuv fs-event assert → crash cả process (gặp thật trên Windows)
+      // realpath: 8.3 paths (NITROV~1) make libuv fs-event assert → crashes the whole process (seen on Windows)
       fsWatcher = watch(realpathSync.native(opts.watchDir), { recursive: true }, (_ev, filename) => {
         if (!filename) return;
         const rel = path.relative(opts.watchDir!, path.join(opts.watchDir!, filename.toString()));
@@ -223,7 +223,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
         resetSilence();
       });
     } catch {
-      /* watch fail — Observed không khả dụng, chỉ còn Reported */
+      /* watch failed — Observed unavailable, only Reported remains */
     }
   }
 
@@ -247,12 +247,12 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      unmappedLines++; // dòng không phải JSON (banner, warning…) — raw vẫn được giữ
+      unmappedLines++; // non-JSON line (banner, warning…) — raw is still kept
       return;
     }
     const { events: mapped, known } = m.mapEvent(parsed, m.id);
     if (!known) unmappedLines++;
-    // P6.2: capture session id cho resume
+    // P6.2: capture session id for resume
     if (!capturedSession) {
       const sess = mapped.find((e) => e.t === 'session' && typeof e['session'] === 'string');
       if (sess) capturedSession = sess['session'] as string;
@@ -263,7 +263,7 @@ export async function runHeadless(m: Manifest, prompt: string, opts: RunOptions)
       if (e.t === 'tool_use') {
         const target = typeof e['target'] === 'string' ? (e['target'] as string) : JSON.stringify(e['target'] ?? '');
         toolTargets.push(target);
-        // Lớp 3 tín hiệu 3: livelock — kill + blocked event
+        // Layer 3 signal 3: livelock — kill + blocked event
         if (livelock.feed(String(e['tool'] ?? '?'), target)) {
           events.push({ t: 'blocked', worker: m.id, ts: new Date().toISOString(), code: 'livelock_stuck', detail: t('core.runner.livelock', { target: target.slice(0, 120) }) });
           killTree(child, 'livelock_stuck');

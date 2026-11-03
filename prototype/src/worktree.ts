@@ -1,4 +1,4 @@
-// Git worktree isolation — Worker Protocol §9 Lớp 2 + DSL spec §2 (`.orchestra/wt`)
+// Git worktree isolation — Worker Protocol §9 Layer 2 + DSL spec §2 (`.orchestra/wt`)
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { t } from './i18n/index.js';
@@ -26,7 +26,7 @@ export function createWorktree(repo: string, taskId: string): Worktree {
   const wtPath = path.join(repo, '.orchestra', 'wt', taskId);
   const branch = `orchestra/task-${taskId}`;
   let r = git(repo, ['worktree', 'add', '-b', branch, wtPath]);
-  if (!r.ok) r = git(repo, ['worktree', 'add', wtPath]); // branch đã tồn tại → dùng detached
+  if (!r.ok) r = git(repo, ['worktree', 'add', wtPath]); // branch already exists → use detached
   if (!r.ok) throw new Error(t('core.worktree.addFailed', { out: r.out }));
   return { path: wtPath, branch };
 }
@@ -50,7 +50,7 @@ export function changedFiles(wtPath: string): string[] {
     .filter(Boolean);
 }
 
-// KHÔNG trim: patch mất newline cuối / khoảng trắng cuối dòng context = corrupt patch (git apply từ chối)
+// do NOT trim: losing the final newline / trailing whitespace on context lines = corrupt patch (git apply rejects it)
 export function diffPatch(wtPath: string): string {
   const r = spawnSync('git', ['diff', '--cached'], { cwd: wtPath, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
   return r.status === 0 ? r.stdout ?? '' : '';

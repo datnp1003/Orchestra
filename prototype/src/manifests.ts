@@ -7,7 +7,7 @@ const ev = (worker: string, t: FleetEvent['t'], props: Record<string, unknown> =
   ...props,
 });
 
-// ---------- helpers chung ----------
+// ---------- shared helpers ----------
 const summarizeTarget = (input: unknown): string => {
   if (input && typeof input === 'object') {
     const o = input as Record<string, unknown>;
@@ -26,7 +26,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const tomlStr = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 // ---------- Claude Code (stream-json) ----------
-// Format tham chiếu: claude -p --output-format stream-json
+// Reference format: claude -p --output-format stream-json
 //   {"type":"system","subtype":"init","session_id","model","cwd","tools":[..]}
 //   {"type":"assistant","message":{"content":[{"type":"text"|"tool_use",...}]}}
 //   {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id","is_error"}]}}
@@ -48,7 +48,7 @@ function mapClaude(raw: unknown, worker: string): MapResult {
         }),
       );
     }
-    // các subtype khác (hook_started, hook_response, thinking_tokens, …) — đã biết, bỏ qua
+    // other subtypes (hook_started, hook_response, thinking_tokens, …) — known, ignored
     return { events, known: true };
   }
 
@@ -112,9 +112,9 @@ function mapClaude(raw: unknown, worker: string): MapResult {
 }
 
 // ---------- Codex CLI (codex exec --json) ----------
-// Format tham chiếu: thread.started / item.{started,updated,completed} / turn.{completed,failed}
+// Reference format: thread.started / item.{started,updated,completed} / turn.{completed,failed}
 // item.type: agent_message | command_execution | file_change | reasoning | token_count | error
-// ⚠ experimental — cần verify lại theo version pin khi làm conformance thật.
+// ⚠ experimental — re-verify against the pinned version when doing real conformance.
 function mapCodex(raw: unknown, worker: string): MapResult {
   if (!isObj(raw) || typeof raw['type'] !== 'string') return { events: [], known: false };
   const type = raw['type'];
@@ -177,7 +177,7 @@ function mapCodex(raw: unknown, worker: string): MapResult {
       case 'web_search':
       case 'todo_list':
       case 'mcp_tool_call':
-        // đã biết nhưng chưa map — chấp nhận bỏ qua, không tính là unknown
+        // known but not mapped yet — ignored, not counted as unknown
         break;
       default:
         return { events, known: false };
@@ -214,7 +214,7 @@ const claude: Manifest = {
   oauthProvider: 'anthropic',
   versionCmd: { cmd: 'claude', args: ['--version'] },
   versionRegex: /([0-9]+\.[0-9]+\.[0-9]+)/,
-  // không có auth check non-interactive đáng tin ở 2.1.x → 'unknown' đến khi smoke pass
+  // no reliable non-interactive auth check in 2.1.x → 'unknown' until smoke passes
   headless: (prompt: string, opts: HeadlessOpts): SpawnSpec => {
     const args = [
       '-p',
@@ -227,16 +227,16 @@ const claude: Manifest = {
     if (opts.model) args.push('--model', opts.model);
     if (opts.resume) args.push('--resume', opts.resume); // P6.2 session resume
     if (opts.systemPrompt) args.push('--append-system-prompt', opts.systemPrompt); // P5.6 chat brain
-    // P6 — deny globs xuống tầng flag (Worker Protocol §9 Lớp 2):
-    // Edit/Write chỉ auto-approve với pattern trong scope; ngoài scope → denied ở headless.
-    // Bash vẫn rộng (test/build) — giới hạn: lệnh bash ghi ngoài scope do FS cross-check bắt.
+    // P6 — push deny globs down to the flag layer (Worker Protocol §9 Layer 2):
+    // Edit/Write auto-approved only for in-scope patterns; out of scope → denied in headless.
+    // Bash stays broad (test/build) — limitation: bash writes outside scope are caught by the FS cross-check.
     if (opts.sandbox === 'worktree-write' && opts.scope && opts.scope.length) {
       args.push(
         '--allowedTools',
         'Read',
         'Grep',
         'Glob',
-        'Skill', // skill Orchestra copy vào .claude/skills/ của worktree
+        'Skill', // Orchestra skills copied into the worktree's .claude/skills/
         ...opts.scope.flatMap((p) => [`Edit(${p})`, `Write(${p})`]),
         'Bash',
       );
@@ -248,14 +248,14 @@ const claude: Manifest = {
   requiredEvents: ['session', 'message', 'usage'],
   scopeRules: true,
   hooksSupport: true,
-  // R2a: claude bỏ qua ANTHROPIC_* của process (settings.json user đè) → env qua inline --settings
+  // R2a: claude ignores process ANTHROPIC_* (user settings.json overrides) → env via inline --settings
   routerArgs: (r, model) => {
     const m = model || r.defaultModel;
     return {
       settingsEnv: {
         ANTHROPIC_BASE_URL: r.baseUrl,
         ANTHROPIC_AUTH_TOKEN: r.token,
-        // request nền (title, haiku…) cũng đi qua router
+        // background requests (title, haiku…) also go through the router
         ...(m ? { ANTHROPIC_DEFAULT_HAIKU_MODEL: m, ANTHROPIC_DEFAULT_SONNET_MODEL: m, ANTHROPIC_DEFAULT_OPUS_MODEL: m } : {}),
       },
     };
@@ -275,9 +275,9 @@ const codex: Manifest = {
   versionCmd: { cmd: 'codex', args: ['--version'] },
   versionRegex: /([0-9]+\.[0-9]+\.[0-9]+)/,
   authCmd: { cmd: 'codex', args: ['login', 'status'] },
-  // R2a: codex 0.164 — provider 'orch' trỏ router; wire_api chat không gửi request → chỉ responses
+  // R2a: codex 0.164 — provider 'orch' points at the router; wire_api chat sends no request → responses only
   routerArgs: (r, model) => {
-    const m = model ? undefined : r.defaultModel; // có model → headless đã gắn -c model
+    const m = model ? undefined : r.defaultModel; // model given → headless already adds -c model
     return {
       args: [
         '-c', 'model_provider="orch"',
@@ -305,7 +305,7 @@ const codex: Manifest = {
   mapEvent: mapCodex,
   requiredEvents: ['session', 'usage'],
   hooksSupport: true,
-  // codex 0.164 exec: hook qua -c (TOML) + --dangerously-bypass-hook-trust; deny = JSON stdout (exit 2 không dùng)
+  // codex 0.164 exec: hook via -c (TOML) + --dangerously-bypass-hook-trust; deny = JSON stdout (exit 2 not used)
   hookArgs: (cmd) => ['-c', `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=${tomlStr(cmd)},timeout=30}]}]`, '--dangerously-bypass-hook-trust'],
   experimental: true,
   notes: [
@@ -317,8 +317,8 @@ const codex: Manifest = {
   ],
 };
 
-/** codex --sandbox theo node: read-only giữ nguyên mọi OS; worktree-write trên win32 → danger-full-access
- *  (unelevated restricted-token sandbox của codex không spawn được shell — E2E t-mvyyi9rd-agyn). */
+/** codex --sandbox per node: read-only unchanged on every OS; worktree-write on win32 → danger-full-access
+ *  (codex's unelevated restricted-token sandbox cannot spawn a shell — E2E t-mvyyi9rd-agyn). */
 export function codexSandbox(sandbox: HeadlessOpts['sandbox'], platform: NodeJS.Platform = process.platform): string {
   if (sandbox !== 'worktree-write') return 'read-only';
   return platform === 'win32' ? 'danger-full-access' : 'workspace-write';
@@ -328,15 +328,15 @@ const antigravity: Manifest = {
   id: 'antigravity',
   display: 'Antigravity CLI',
   bin: 'antigravity',
-  // Google phân phối riêng — không qua npm public
+  // distributed separately by Google — not via public npm
   install: {},
   versionCmd: { cmd: 'antigravity', args: ['--version'] },
   versionRegex: /([0-9]+\.[0-9]+\.[0-9]+)/,
-  headless: () => ({ cmd: 'antigravity', args: ['-p'] }), // placeholder — conformance sẽ verify/bác
-  mapEvent: mapClaude, // giả định stream-json tương thích — case 2 conformance sẽ xác nhận
+  headless: () => ({ cmd: 'antigravity', args: ['-p'] }), // placeholder — conformance will verify/refute
+  mapEvent: mapClaude, // assumes compatible stream-json — conformance case 2 will confirm
   requiredEvents: ['session', 'usage'],
-  oauthProvider: 'google', // P6.6: duy nhất kênh native google
-  custom_provider: false, // KHÔNG nhận custom endpoint — luật phân phối của user
+  oauthProvider: 'google', // P6.6: native google channel only
+  custom_provider: false, // does NOT accept a custom endpoint — user's distribution rule
   model_slots: { main: true, fast: false, plan: false },
   experimental: true,
   notes: [

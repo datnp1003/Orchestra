@@ -1,4 +1,4 @@
-// TaskBrief — theo Worker Protocol spec v0.1 §7 (luật B1–B4)
+// TaskBrief — per Worker Protocol spec v0.1 §7 (rules B1–B4)
 import { t } from './i18n/index.js';
 
 export type NodeType =
@@ -15,7 +15,7 @@ export interface TaskBrief {
   node: NodeType;
   role: string;
   goal: string;
-  /** hàng rào — glob patterns; worker chỉ được chạm file khớp mẫu này */
+  /** fence — glob patterns; worker may only touch files matching these */
   files_in_scope: string[];
   constraints: string[];
   forbidden_actions: string[];
@@ -51,7 +51,7 @@ export function validateBrief(b: TaskBrief): ValidationResult {
 
   if (!b.goal.trim()) errors.push(t('core.brief.noGoal'));
 
-  // B1: hàng rào bắt buộc, node plan là ngoại lệ (brief của plan chính là task gốc)
+  // B1: fence required, except for plan nodes (a plan's brief is the original task)
   if (b.node !== 'plan' && b.files_in_scope.length === 0) {
     errors.push(t('core.brief.noScope'));
   }

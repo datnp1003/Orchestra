@@ -1,6 +1,6 @@
 // Router R1 — proxy LLM local: 1 endpoint 127.0.0.1, model `<providerId>/<upstreamModel>`.
-// Passthrough khi upstream nói native format của client; không thì dịch Messages ⇄ Chat, Responses → Chat/Messages (R2b).
-// Không bao giờ log/echo key hay local token.
+// Passthrough when upstream speaks the client's native format; otherwise translate Messages ⇄ Chat, Responses → Chat/Messages (R2b).
+// Never log/echo keys or the local token.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { Readable } from 'node:stream';
@@ -25,7 +25,7 @@ export interface RouterOptions {
   store: { listProviders(): ProviderConfig[]; getKey(id: string): string | null; setKey(id: string, value: string): void };
   port?: number; // 0/undefined = random
   token?: string;
-  defaultModel?: string | (() => string | undefined); // `<provider>/<model>` cho model không prefix (claude CLI gửi claude-haiku-… nền); hàm = đọc lại mỗi request
+  defaultModel?: string | (() => string | undefined); // `<provider>/<model>` for unprefixed models (claude CLI sends background claude-haiku-…); function = re-read per request
   onLog?: (line: string) => void;
   upstreamTimeoutMs?: number;
 }
@@ -92,7 +92,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
   enabled().forEach(warnOAuth);
   const resolve = (model: unknown): { p: ProviderConfig; model: string } | null => {
     const s = typeof model === 'string' ? model : '';
-    const i = s.indexOf('/'); // tách ở '/' ĐẦU — model upstream có thể chứa '/'
+    const i = s.indexOf('/'); // split at the FIRST '/' — upstream model may contain '/'
     const p = i > 0 && i < s.length - 1 ? enabled().find((x) => x.id === s.slice(0, i)) : undefined;
     return p ? { p, model: s.slice(i + 1) } : null;
   };
@@ -119,7 +119,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     const clientFmt = ROUTES[url.pathname];
     if (req.method !== 'POST' || !clientFmt) throw new HttpError(404, 'not_found', t('router.server.noRoute', { method: String(req.method), path: url.pathname }));
     const raw = await readBody(req);
-    // phần body thừa: node tự đọc bỏ sau khi trả 413 (client đã qua auth) — cắt socket thì client chỉ thấy ECONNRESET
+    // leftover body: node drains it after the 413 (client already authed) — destroying the socket would only show ECONNRESET
     if (!raw) throw new HttpError(413, 'request_too_large', 'body > 20 MB');
     let body: any;
     try {
@@ -140,7 +140,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     let mode: 'pass' | 'm2c' | 'c2m' | 'r2c' | 'r2m' = 'pass';
     let names: ToolNames = new Map();
     if (native) {
-      target = `${url.pathname}${url.search}`; // giữ query (claude gửi ?beta=true)
+      target = `${url.pathname}${url.search}`; // keep query (claude sends ?beta=true)
       upstreamBody = { ...body, model };
     } else if (url.pathname === '/v1/messages/count_tokens') {
       throw new HttpError(404, 'not_found', t('router.server.noCountTokens', { id: p.id }));
@@ -171,10 +171,10 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       });
       headers.authorization = `Bearer ${creds.access}`;
       applyOAuth(p.kind, headers, upstreamBody, creds);
-      // endpoint subscription: anthropic luôn ?beta=true; codex backend ở <base>/responses
+      // subscription endpoint: anthropic always ?beta=true; codex backend at <base>/responses
       target = p.kind === 'oauth-openai' ? '/responses' : `${target.split('?')[0]}?beta=true`;
     }
-    // client ngắt → huỷ upstream; ponytail: timeout tính cả thời gian stream, đổi sang idle-timeout nếu có turn > 10 phút
+    // client disconnects → abort upstream; ponytail: timeout includes stream time, switch to idle-timeout if turns exceed 10 min
     const ac = new AbortController();
     res.on('close', () => ac.abort());
     const up = await fetch(`${p.baseUrl}${target}`, {
@@ -185,7 +185,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     });
     const ctype = up.headers.get('content-type') ?? 'application/json';
 
-    // codex backend bị ép stream — client không stream nhận JSON gom từ response.completed
+    // codex backend is forced to stream — non-stream clients get JSON assembled from response.completed
     if (p.kind === 'oauth-openai' && !body.stream && up.ok) {
       const done = completedFromSse(await up.text());
       if (!done) throw new HttpError(502, 'upstream_error', t('router.server.noCompleted'));
@@ -193,8 +193,8 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       return;
     }
 
-    // passthrough non-stream: upstream compat đôi khi trả SAI format (gặp thật: gateway trả chat.completion cho /v1/messages
-    // với model ag/*) → chuẩn hoá về format client đã gọi, nếu không client đọc ra rỗng
+    // passthrough non-stream: compat upstreams sometimes return the WRONG format (seen in practice: gateway returns chat.completion for /v1/messages
+    // with model ag/*) → normalize to the format the client called, otherwise the client reads it as empty
     if (mode === 'pass' && up.ok && !body.stream && ctype.includes('json') && (clientFmt === 'messages' || clientFmt === 'chat')) {
       const j = await up.json().catch(() => null);
       if (!j) throw new HttpError(502, 'upstream_error', t('router.server.badJson'));
@@ -204,7 +204,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       sendJson(res, 200, fixed === j ? j : { ...fixed, model: body.model });
       return;
     }
-    // passthrough hoặc lỗi upstream: status + content-type + bytes nguyên vẹn (fetch đã giải nén → không chuyển content-encoding)
+    // passthrough or upstream error: status + content-type + bytes intact (fetch already decompressed → don't forward content-encoding)
     if (mode === 'pass' || !up.ok) {
       res.writeHead(up.status, { 'content-type': ctype, ...(ctype.includes('event-stream') ? { 'cache-control': 'no-cache' } : {}) });
       if (up.body) await pipeline(Readable.fromWeb(up.body as any), res);
@@ -251,7 +251,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
     const log: { provider?: string; model?: string } = {};
     res.on('close', () => opts.onLog?.(`${req.method} ${url.pathname} ${log.provider ?? '-'} ${log.model ?? '-'} ${res.statusCode} ${Date.now() - t0}ms`));
     try {
-      // chống DNS rebinding: trang web trỏ domain → 127.0.0.1 sẽ có Host khác
+      // anti DNS rebinding: a web page pointing a domain → 127.0.0.1 will have a different Host
       const host = req.headers.host;
       if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) throw new HttpError(403, 'forbidden', t('router.server.badHost'));
       if (!tokenOk(req, tokenBuf)) throw new HttpError(401, 'authentication_error', t('router.server.badToken'));
@@ -259,7 +259,7 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       else await proxy(req, res, url, log);
     } catch (err) {
       if (res.headersSent) {
-        res.destroy(); // đang stream dở — chỉ còn cách cắt kết nối
+        res.destroy(); // mid-stream — the only option is to cut the connection
         return;
       }
       const e = err instanceof HttpError ? err : new HttpError(502, 'upstream_error', err instanceof Error ? err.message : String(err));

@@ -8,5 +8,5 @@ UNLOCKED detected at 07:07:53
 [settings] SAVED C:\Users\Nitro V 15\Desktop\Source\Orchestra\desktop\docs\e2e-shots\settings.png x
 E2E headless rerun after unlock:
 settings: activeRepo=demo-repo hooks=true sync=true
-Γ£ô G1 fleet tß╗½ app-path ΓÇö claude:true codex:true antigravity:false
+Γ£ô G1 fleet from app-path ΓÇö claude:true codex:true antigravity:false
 watcher done 07:09:21

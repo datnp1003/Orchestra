@@ -1,7 +1,7 @@
-// Skills — mỗi skill = 1 thư mục có SKILL.md (frontmatter name/description/tags?/workers?) + references/ templates/ scripts/ assets/ tuỳ chọn.
-// Lưu: global ~/.orchestra/skills/<name>/, project ~/.orchestra/projects/<id>/skills/<name>/ (project đè global cùng tên).
-// Nguồn: tự viết | GitHub (clone → preview → install chọn lọc, ghim commit) | import ~/.claude/skills, ~/.codex/skills.
-// Orchestra CHỈ copy file — KHÔNG BAO GIỜ chạy script nào trong skill.
+// Skills — each skill = 1 directory with SKILL.md (frontmatter name/description/tags?/workers?) + optional references/ templates/ scripts/ assets/.
+// Storage: global ~/.orchestra/skills/<name>/, project ~/.orchestra/projects/<id>/skills/<name>/ (project overrides global of the same name).
+// Sources: hand-written | GitHub (clone → preview → selective install, pinned commit) | import ~/.claude/skills, ~/.codex/skills.
+// Orchestra ONLY copies files — NEVER runs any script in a skill.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,7 @@ export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const SKILL_WORKERS = ['claude', 'codex'];
 export const SKILL_FILE = 'SKILL.md';
 export const SOURCE_FILE = '.orchestra-source.json';
-const MAX_DESC = 1024; // theo spec Agent Skills (Claude Code/Codex): description ≤ 1024 ký tự
+const MAX_DESC = 1024; // per the Agent Skills spec (Claude Code/Codex): description ≤ 1024 chars
 const MAX_BODY = 100_000;
 const MAX_SKILL_BYTES = 5 * 1024 * 1024;
 const LARGE_FILE = 1024 * 1024;
@@ -54,7 +54,7 @@ export interface PreviewItem {
   files: { path: string; size: number }[];
   bytes: number;
   warnings: SkillWarning[];
-  /** có error = không cài được: symlink | tooBig | invalid | duplicate */
+  /** error set = not installable: symlink | tooBig | invalid | duplicate */
   error?: string;
   errorDetail?: string;
 }
@@ -107,13 +107,13 @@ function readScope(scope: SkillScope, projectId?: string | null): Skill[] {
       const { meta, body } = parseSkillMd(readFileSync(path.join(dir, d.name, SKILL_FILE), 'utf8'));
       return meta.name === d.name ? [{ ...meta, scope, body, source: readSource(path.join(dir, d.name)) }] : [];
     } catch {
-      return []; // SKILL.md hỏng → bỏ qua, không chặn cả danh sách
+      return []; // broken SKILL.md → skip, don't block the whole list
     }
   });
 }
-/** mọi skill (global + project nếu có) — UI liệt kê cả 2 với badge scope */
+/** all skills (global + project if any) — UI lists both with a scope badge */
 export const listSkills = (projectId?: string | null): Skill[] => [...readScope('global'), ...(projectId ? readScope('project', projectId) : [])];
-/** skill hiệu lực: project đè global cùng tên, sort theo tên */
+/** effective skills: project overrides global of the same name, sorted by name */
 export function availableSkills(projectId?: string | null): Skill[] {
   const m = new Map<string, Skill>();
   for (const s of listSkills(projectId)) m.set(s.name, s);
@@ -130,7 +130,7 @@ export function saveSkill(
   if (typeof s.body !== 'string' || s.body.length > MAX_BODY) throw new Error(t('core.skills.bodyTooLong', { max: MAX_BODY }));
   const fm = { name: s.name, description: s.description, workers: s.workers?.length ? s.workers : SKILL_WORKERS, ...(s.tags?.length ? { tags: s.tags } : {}) };
   const raw = `---\n${yaml.dump(fm, { lineWidth: -1 }).trimEnd()}\n---\n\n${s.body.trim()}\n`;
-  const { meta, body } = parseSkillMd(raw); // validate đúng như lúc đọc lại
+  const { meta, body } = parseSkillMd(raw); // validate exactly as when reading back
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, SKILL_FILE), raw, 'utf8');
   const source = readSource(dir) ?? { type: 'local' as const, installedAt: new Date().toISOString() };
@@ -149,7 +149,7 @@ export interface GithubRef {
   ref?: string;
   subpath?: string;
 }
-// ponytail: ref chứa '/' (vd feature/x) không hỗ trợ — /tree/<ref> lấy 1 segment; cần thì thêm ô ref riêng ở UI
+// ponytail: refs containing '/' (e.g. feature/x) unsupported — /tree/<ref> takes 1 segment; if needed add a separate ref field in the UI
 const GH_RE = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([\w.-]+)(?:\/([\w./-]+?))?)?\/?$/;
 export function parseGithubUrl(url: unknown): GithubRef {
   const m = typeof url === 'string' && !url.includes('..') ? GH_RE.exec(url.trim()) : null;
@@ -157,7 +157,7 @@ export function parseGithubUrl(url: unknown): GithubRef {
   return { owner: m[1]!, repo: m[2]!, ...(m[3] ? { ref: m[3] } : {}), ...(m[4] ? { subpath: m[4] } : {}) };
 }
 const repoUrl = (g: GithubRef): string => `https://github.com/${g.owner}/${g.repo}`;
-/** test inject (bare repo local) — không mạng */
+/** test inject (local bare repo) — no network */
 let cloneUrlFor = (g: GithubRef): string => `${repoUrl(g)}.git`;
 export const setCloneUrlFor = (fn: (g: GithubRef) => string): void => {
   cloneUrlFor = fn;
@@ -177,13 +177,13 @@ function clone(g: GithubRef): { dir: string; commit: string; symlinks: string[] 
     rmSync(dir, { recursive: true, force: true });
     throw new Error(t('core.skills.cloneFailed', { out: head.out.slice(0, 500) }));
   }
-  // symlink theo git (mode 120000) — Windows không có core.symlinks sẽ checkout thành file thường, lstat không thấy
+  // symlinks per git (mode 120000) — Windows without core.symlinks checks them out as regular files, lstat can't see them
   const tree = git(dir, ['ls-tree', '-r', '--full-tree', 'HEAD']).out.split(/\r?\n/);
   const symlinks = tree.filter((l) => l.startsWith('120000 ')).map((l) => l.slice(l.indexOf('\t') + 1));
   return { dir, commit: head.out.split(/\r?\n/).pop()!.trim(), symlinks };
 }
 
-/** thư mục có SKILL.md dưới start (sâu ≤4, tối đa 50) — gặp skill thì không đi sâu tiếp */
+/** directories with SKILL.md under start (depth ≤4, max 50) — stop descending once a skill is found */
 function findSkillDirs(start: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, depth: number): void => {
@@ -293,7 +293,7 @@ export function previewGithub(url: string): Preview {
   }
 }
 
-/** ~/.claude/skills/*\/SKILL.md + ~/.codex/skills/*\/SKILL.md — roots inject được cho test */
+/** ~/.claude/skills/*\/SKILL.md + ~/.codex/skills/*\/SKILL.md — roots injectable for tests */
 export function previewLocal(roots: { origin: string; dir: string }[] = defaultLocalRoots()): Preview {
   const items = roots.flatMap((r) =>
     (existsSync(r.dir) ? readdirSync(r.dir, { withFileTypes: true }) : [])
@@ -315,7 +315,7 @@ export function installSkills(o: { previewId: string; names: string[]; scope: Sk
   if (!p) throw new Error(t('core.skills.noPreview'));
   if (!Array.isArray(o.names) || !o.names.length) throw new Error(t('core.skills.notInPreview', { name: '' }));
   for (const n of o.names) if (typeof n !== 'string' || !p.dirs.has(n)) throw new Error(t('core.skills.notInPreview', { name: String(n) }));
-  skillsDir(o.scope, o.projectId); // validate scope/project trước khi đụng đĩa
+  skillsDir(o.scope, o.projectId); // validate scope/project before touching disk
   for (const name of o.names) {
     const src = p.dirs.get(name)!;
     const dest = skillDir(o.scope, o.projectId, name);
@@ -335,12 +335,12 @@ export interface UpdateCheck {
   commit: string;
   newCommit: string;
   changed: { path: string; status: 'added' | 'removed' | 'modified' }[];
-  /** chỉ có khi có bản mới — truyền cho updateSkill (user bấm) */
+  /** only set when there's a new version — passed to updateSkill (user click) */
   previewId?: string;
   item?: PreviewItem;
 }
 
-/** clone lại, so commit + file — KHÔNG ghi gì; áp dụng chỉ qua updateSkill */
+/** re-clone, compare commit + files — writes NOTHING; apply only via updateSkill */
 export function checkUpdate(scope: SkillScope, projectId: string | null | undefined, name: string): UpdateCheck {
   const dir = skillDir(scope, projectId, name);
   const src = readSource(dir);
@@ -371,20 +371,20 @@ export function checkUpdate(scope: SkillScope, projectId: string | null | undefi
 export const updateSkill = (o: { previewId: string; name: string; scope: SkillScope; projectId?: string | null }): string[] =>
   installSkills({ previewId: o.previewId, names: [o.name], scope: o.scope, projectId: o.projectId });
 
-// ---------- delivery vào worktree của task ----------
+// ---------- delivery into the task worktree ----------
 export interface SkillDelivery {
   delivered: string[];
   skipped: { name: string; reason: 'unknown' | 'worker' | 'cap' | 'exists' }[];
-  /** nối vào prompt của worker */
+  /** appended to the worker prompt */
   prompt: string;
 }
 
-/** Copy skill vào worktree, kèm `.gitignore` = `*` trong thư mục copy → git status/add -A không thấy, không vào
- *  files_changed, không merge. (Không ghi info/exclude: worktree linked dùng chung exclude với repo chính.) */
+/** Copy skill into the worktree, with `.gitignore` = `*` in the copied dir → invisible to git status/add -A, not in
+ *  files_changed, not merged. (No info/exclude: linked worktrees share exclude with the main repo.) */
 function copyIntoWorktree(wtPath: string, rel: string, src: string, onlySupport: boolean): boolean {
   const dest = path.join(wtPath, rel);
-  if (git(wtPath, ['ls-files', '--', rel]).out) return false; // repo tự có skill cùng tên (tracked) → giữ của repo
-  rmSync(dest, { recursive: true, force: true }); // bản copy cũ (worktree tái dùng: verify/review/fix)
+  if (git(wtPath, ['ls-files', '--', rel]).out) return false; // repo has its own (tracked) skill of the same name → keep the repo's
+  rmSync(dest, { recursive: true, force: true }); // stale copy (reused worktree: verify/review/fix)
   cpSync(src, dest, {
     recursive: true,
     filter: (f) => ![SOURCE_FILE, '.git'].includes(path.basename(f)) && !(onlySupport && f === path.join(src, SKILL_FILE)),
@@ -414,7 +414,7 @@ export function deliverSkills(wtPath: string, worker: string, names: string[], p
       else out.delivered.push(name);
       continue;
     }
-    // codex: nội dung vào prompt (trần CODEX_CAP), file phụ trợ copy sang .orchestra/skills/<name>/
+    // codex: content into the prompt (CODEX_CAP ceiling), support files copied to .orchestra/skills/<name>/
     let section = `## ${name}\n${s.description}\n${s.body}`;
     const hasSupport = listFiles(src).some((f) => f.path !== SKILL_FILE);
     if (hasSupport) section += `\n(Supporting files for this skill: .orchestra/skills/${name}/)`;

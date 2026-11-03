@@ -1,4 +1,4 @@
-// Logic thuần — KHÔNG import vscode (test được bằng node thường, P5 gate)
+// Pure logic — does NOT import vscode (testable with plain node, P5 gate)
 import { MANIFESTS } from '../../prototype/src/manifests.js';
 import { checkStatus, checkStatusAsync, type WorkerStatus } from '../../prototype/src/registry.js';
 import { loadPolicy, resolveWorker, DEFAULT_BINDINGS, type PolicyFile } from '../../prototype/src/policy.js';
@@ -19,17 +19,17 @@ import path from 'node:path';
 
 export const FALLBACK_REPO = 'C:/Users/Nitro V 15/Desktop/Source/Orchestra/prototype/demo-repo';
 
-/** router = CLI có routerArgs (auth đi qua Orchestra router) */
+/** router = CLI with routerArgs (auth goes through Orchestra router) */
 export function fleetSnapshot(): FleetRow[] {
   return MANIFESTS.map((m) => fleetRow(m, checkStatus(m)));
 }
-/** Desktop main: probe mọi CLI song song, không spawnSync (không chặn IPC/UI) */
+/** Desktop main: probe all CLIs in parallel, no spawnSync (doesn't block IPC/UI) */
 export const fleetSnapshotAsync = (): Promise<FleetRow[]> => Promise.all(MANIFESTS.map(async (m) => fleetRow(m, await checkStatusAsync(m))));
 type FleetRow = { id: string; display: string; installed: boolean; version?: string; auth: string; router: boolean };
 const fleetRow = (m: (typeof MANIFESTS)[number], s: WorkerStatus): FleetRow =>
   ({ id: m.id, display: m.display, installed: s.installed, version: s.version, auth: s.auth, router: !!m.routerArgs });
 
-/** R2a: model của router (/v1/models) + worker nào chạy được model nào (routerModelOk) */
+/** R2a: router models (/v1/models) + which worker can run which model (routerModelOk) */
 export function modelsList(ids: string[], providers: ProviderConfig[]): {
   models: string[];
   byWorker: Record<string, { id: string; ok: boolean; reason: string }[]>;
@@ -40,11 +40,11 @@ export function modelsList(ids: string[], providers: ProviderConfig[]): {
   };
 }
 
-/** limit: chỉ đọc N file mới nhất (tên file sort được theo thời gian) — không parse hết rồi bỏ */
+/** limit: read only the N newest files (file names sort by time) — don't parse everything then discard */
 export function tasksSnapshot(repo = FALLBACK_REPO, limit = 20): { id: string; node: string; worker: string; exit: number | null; scopeOk: boolean; files: number }[] {
   const dir = path.join(repo, '.orchestra', 'tasks');
   if (!existsSync(dir)) return [];
-  const n = Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 200); // limit đến từ IPC → clamp
+  const n = Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 200); // limit comes from IPC → clamp
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .sort()
@@ -84,7 +84,7 @@ function git(repo: string, args: string[]): { ok: boolean; out: string } {
   return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
 }
 
-/** Task có worktree-branch chưa merge vào main — ứng viên cho Review & Merge */
+/** Tasks with a worktree branch not yet merged into main — Review & Merge candidates */
 export function mergeableTasks(repo = FALLBACK_REPO): MergeableTask[] {
   const dir = path.join(repo, '.orchestra', 'tasks');
   if (!existsSync(dir)) return [];
@@ -97,7 +97,7 @@ export function mergeableTasks(repo = FALLBACK_REPO): MergeableTask[] {
       const exists = git(repo, ['rev-parse', '--verify', `refs/heads/${branch}`]);
       if (!exists.ok) continue;
       const ancestor = git(repo, ['merge-base', '--is-ancestor', branch, 'HEAD']);
-      if (ancestor.ok) continue; // đã merge rồi
+      if (ancestor.ok) continue; // already merged
       out.push({
         id: String(r.id ?? f),
         node: String(r.node ?? '?'),
@@ -108,7 +108,7 @@ export function mergeableTasks(repo = FALLBACK_REPO): MergeableTask[] {
         files: r.artifacts?.files_changed ?? [],
       });
     } catch {
-      /* bỏ qua */
+      /* ignore */
     }
   }
   return out;
@@ -125,7 +125,7 @@ export function reviewMerge(repo: string, taskId: string, action: 'merge' | 'rej
   return { ok: true, detail: t('ext.review.rejected', { worker: task.worker }) };
 }
 
-// ---------- Policy editable (P5.3): click cell = promote worker lên #1 ----------
+// ---------- Policy editable (P5.3): click cell = promote worker to #1 ----------
 export function promoteWorker(repo: string, role: string, cli: string): { ok: boolean; detail: string } {
   const lp = loadPolicy(repo);
   const basePolicy: PolicyFile = lp.policy ?? { version: 1 };
@@ -163,7 +163,7 @@ export function restoreDefaultPolicy(repo: string): boolean {
   return true;
 }
 
-// ---------- Override tracking (P5.3): user chọn worker khác auto-pick ----------
+// ---------- Override tracking (P5.3): user picked a worker other than auto-pick ----------
 export function trackOverride(
   repo: string,
   o: { autoPick?: string; pin?: string; taskId?: string; ok: boolean },
@@ -209,15 +209,15 @@ export function conformanceBadge(repo: string, id: string, version?: string): st
       return null;
     }
   }
-  // CLI update mà chưa chạy conformance lại → badge vàng 'stale'
+  // CLI updated but conformance not re-run → yellow 'stale' badge
   const anyForId = readdirSync(dir).some((f) => f.startsWith(`${id}-`) && f.endsWith('.json'));
   return anyForId ? 'stale' : null;
 }
 
-// ---------- Chat với Orchestrator (P5.6) ----------
-// Brain = 1 CLI trong fleet (mặc định claude) chạy read-only + session resume để nhớ hội thoại.
-// Orchestrator KHÔNG tự làm việc — nó phát hành action ```orchestra {json}``` và extension thực thi
-// qua đường dispatch/pipeline có đầy đủ guard. Kết quả được feedback lại vào session.
+// ---------- Chat with Orchestrator (P5.6) ----------
+// Brain = 1 CLI in the fleet (default claude) running read-only + session resume to remember the conversation.
+// Orchestrator does NOT do the work itself — it emits ```orchestra {json}``` actions and the extension executes them
+// via the fully guarded dispatch/pipeline path. Results are fed back into the session.
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are Orchestra Orchestrator — an IDE agent that coordinates agent CLIs (claude, codex, ...) as workers in a gated pipeline.
 You are chatting with the user in VS Code. Mandatory rules:
@@ -255,7 +255,7 @@ export function parseOrchestraActions(text: string): OrchestraAction[] {
       const obj = JSON.parse(m[1]!.trim()) as OrchestraAction;
       if (obj && typeof obj.action === 'string') out.push(obj);
     } catch {
-      /* block JSON lỗi — bỏ qua, không crash chat */
+      /* invalid JSON block — skip, don't crash chat */
     }
   }
   return out;
@@ -269,7 +269,7 @@ export async function orchestratorTurn(
   model?: string,
 ): Promise<{ text: string; session?: string; rawLines: number }> {
   const m = MANIFESTS.find((x) => x.id === workerId) ?? MANIFESTS[0]!;
-  // P5.7: bơm project memory vào chat brain — worker-agnostic (codex brain không đọc CLAUDE.md)
+  // P5.7: inject project memory into chat brain — worker-agnostic (codex brain doesn't read CLAUDE.md)
   const kb = recallKB(repo, ['**'], 1500);
   const kbBlock = kb.injected ? `\n\nPROJECT KNOWLEDGE (project memory — use it to determine scope):\n${kb.injected}` : '';
   const { runHeadless } = await import('../../prototype/src/runner.js');
@@ -320,7 +320,7 @@ export async function executeAction(repo: string, a: OrchestraAction, opts: { ho
         goal: a.goal,
         scope: a.scope ?? [],
         acceptance: [],
-        autoYes: true, // chat là context async — không có stdin để hỏi
+        autoYes: true, // chat is an async context — no stdin to prompt
         onLog: () => {},
       });
       return `pipeline ${r.runId}: ${r.ok ? 'OK' : 'FAILED'} merged=${r.merged}`;
@@ -336,8 +336,8 @@ function pickOf(rec: Record<string, unknown>): string {
 }
 
 /**
- * D1 — chatExchange: vòng lặp chat hoàn chỉnh (turn → parse action → execute → feedback).
- * Dùng chung cho extension ChatView + Desktop chat page — không còn 2 bản.
+ * D1 — chatExchange: full chat loop (turn → parse action → execute → feedback).
+ * Shared by extension ChatView + Desktop chat page — no more 2 copies.
  */
 export interface ChatMessage {
   kind: 'orch' | 'result';
@@ -372,8 +372,8 @@ export async function chatExchange(
   return { session: follow.session };
 }
 
-// ---------- M1: tool cho Orchestra brain (brain.ts) — worker chỉ chạm qua fleet_dispatch/fleet_pipeline ----------
-// Tier: T0 khảo sát (auto) · T1 đường guarded sẵn có (auto) · T2 cần user duyệt (approve)
+// ---------- M1: tools for Orchestra brain (brain.ts) — workers reached only via fleet_dispatch/fleet_pipeline ----------
+// Tier: T0 survey (auto) · T1 existing guarded path (auto) · T2 needs user approval (approve)
 
 export const BRAIN_SYSTEM_PROMPT = `You are Orchestra — the coordinating agent. You talk to the user directly; the agent CLIs (claude, codex, ...) are only workers you drive via tools.
 Rules:
@@ -385,7 +385,7 @@ Rules:
 6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.
 7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.`;
 
-// ngôn ngữ do chính user quyết (theo tin nhắn), KHÔNG theo locale UI/i18n
+// language is decided by the user (from their messages), NOT by UI locale/i18n
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
 const MEMORY_RULE = `\nMEMORY: save durable facts proactively and silently with memory_update — no permission needed. User preferences/style → scope "global"; project facts (decisions, conventions, architecture, repo roles, recurring pitfalls) → scope "project". One short line per fact; replace outdated entries instead of adding duplicates. Never store secrets or transient task progress.`;
 const PROJECT_RULES = `\n8. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
@@ -398,7 +398,7 @@ export interface RepoRef {
   name: string;
   path: string;
 }
-/** tên repo = basename; trùng → thêm -2, -3… (tên ổn định theo thứ tự repo trong project) */
+/** repo name = basename; duplicates → append -2, -3… (stable by repo order in the project) */
 export function repoRefs(paths: string[]): RepoRef[] {
   const seen = new Set<string>();
   return paths.map((p) => {
@@ -410,7 +410,7 @@ export function repoRefs(paths: string[]): RepoRef[] {
   });
 }
 
-/** danh sách skill cho brain (tối đa 40) — chat ngoài project chỉ xem, không dispatch được */
+/** skill list for brain (max 40) — chat outside a project can only view, not dispatch */
 function skillsBlock(skills: { name: string; description: string }[] | undefined, canDispatch: boolean): string {
   if (!skills?.length) return '';
   const list = skills.slice(0, 40).map((s) => `- ${s.name} — ${s.description}`).join('\n');
@@ -420,12 +420,12 @@ function skillsBlock(skills: { name: string; description: string }[] | undefined
     : `\n\nSKILLS installed (informational — skills can only be attached to work inside a project):\n${list}${more}`;
 }
 
-/** project = undefined → chat ngoài project: chỉ global memory, không repo/KB/project memory */
+/** project = undefined → chat outside a project: global memory only, no repo/KB/project memory */
 export function brainSystemPrompt(o: { project?: { name: string; repos: RepoRef[] }; workspace?: RepoRef; attached?: RepoRef[]; globalMemory: string; projectMemory?: string; skills?: { name: string; description: string }[]; mode?: PermissionMode }): string {
   const p = o.project;
   const m = isPermissionMode(o.mode) ? o.mode : 'ask';
   const mode = `\nPERMISSION MODE: ${m} — ${MODE_PROMPT[m]}`;
-  // chat ngoài project: vẫn gọi worker được — repo user nhắc tới (repo_attach) hoặc repo scratch ~/.orchestra/workspace
+  // chat outside a project: can still call workers — repo the user mentioned (repo_attach) or scratch repo ~/.orchestra/workspace
   const att = o.attached?.length ? `\nATTACHED REPOS:\n${o.attached.map((r) => `- ${r.name}: ${r.path}`).join('\n')}` : '';
   if (!p && o.workspace) return BRAIN_SYSTEM_PROMPT + WORKSPACE_RULES + mode + MEMORY_RULE + BRAIN_LANGUAGE + `\nWORKSPACE: ${o.workspace.path}` + att + skillsBlock(o.skills, true) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
   if (!p) return GLOBAL_PROMPT + MEMORY_RULE + BRAIN_LANGUAGE + skillsBlock(o.skills, false) + `\n\n${renderMemoryBlock(o.globalMemory)}`;
@@ -461,7 +461,7 @@ export const MEMORY_TOOL = {
   description: 'Update long-term memory (no approval needed). scope global = user preferences/general facts; project = facts about this project. add needs text; replace needs old_text (unique substring of one entry) + text; remove needs old_text.',
   input_schema: obj({ scope: { type: 'string', enum: ['global', 'project'] }, action: { type: 'string', enum: ['add', 'replace', 'remove'] }, text: { type: 'string' }, old_text: { type: 'string' } }, ['scope', 'action']),
 };
-/** repos = null → chỉ memory_update; attach = chat ngoài project → thêm repo_attach, `repo` không enum (danh sách đổi giữa lượt) */
+/** repos = null → memory_update only; attach = chat outside a project → add repo_attach, `repo` not an enum (list changes mid-turn) */
 export function brainTools(repos: RepoRef[] | null, opts: { attach?: boolean } = {}): typeof BRAIN_TOOLS {
   if (!repos) return [MEMORY_TOOL];
   const repo = { type: 'string', description: 'repo name from REPOS (required when the project has more than one repo)', ...(repos.length && !opts.attach ? { enum: repos.map((r) => r.name) } : {}) };
@@ -474,7 +474,7 @@ export const ATTACH_TOOL = {
 };
 
 const FIND_SKIP = new Set(['node_modules', '.git', '.orchestra', 'bin', 'obj', 'dist', 'out', 'build', '.vs', '.idea']);
-/** git repo con trong dir (dir là repo → [dir]); .git là thư mục hoặc file (worktree). Dừng ở repo đầu tiên mỗi nhánh. */
+/** child git repos in dir (dir is a repo → [dir]); .git is a directory or file (worktree). Stops at the first repo on each branch. */
 export function findRepos(dir: string, maxDepth = 3, max = 40): string[] {
   const out: string[] = [];
   const walk = (d: string, depth: number) => {
@@ -490,28 +490,28 @@ export function findRepos(dir: string, maxDepth = 3, max = 40): string[] {
 }
 
 export interface BrainToolDeps {
-  /** T2: hỏi user — false = từ chối; kind = badge của approval card */
+  /** T2: ask the user — false = rejected; kind = approval card badge */
   approve: (question: string, kind?: ApprovalKind) => Promise<boolean>;
-  /** permission mode của chat — thiếu = 'ask' */
+  /** chat permission mode — missing = 'ask' */
   mode?: PermissionMode;
   /** pipeline plan approval */
   askUser?: (q: string) => Promise<string>;
   hooksEnabled?: boolean;
-  /** skill = global + project này (project đè global) */
+  /** skills = global + this project (project overrides global) */
   projectId?: string | null;
   templatesDir?: string;
   autoApprovePlan?: boolean;
   onLog?: (line: string) => void;
-  /** user bấm Dừng → kill worker đang chạy */
+  /** user clicked Stop → kill the running worker */
   signal?: AbortSignal;
-  /** R2a: worker chạy qua Orchestra router */
+  /** R2a: worker runs through Orchestra router */
   router?: RouterInfo;
-  /** test seam — mặc định dispatchTracked */
+  /** test seam — defaults to dispatchTracked */
   dispatch?: typeof dispatchTracked;
 }
 type ToolOut = { ok: boolean; content: string };
 
-/** permission mode gate: null = được chạy; ToolOut = bị chặn (plan mode) hoặc user từ chối */
+/** permission mode gate: null = allowed; ToolOut = blocked (plan mode) or user rejected */
 async function gate(deps: BrainToolDeps, action: ApprovalAction, kind: ApprovalKind, question: () => string): Promise<ToolOut | null> {
   const need = needsApproval(deps.mode, action);
   if (need === 'block') return bad(PLAN_BLOCKED);
@@ -531,12 +531,12 @@ function loadTask(repo: string, taskId: string): Record<string, any> | string {
   }
 }
 
-/** patch của task (patch_ref) hoặc diff <nhánh hiện tại>...<branch task>; stat = diffstat */
+/** task patch (patch_ref) or diff <current branch>...<task branch>; stat = diffstat */
 function taskPatch(repo: string, rec: Record<string, any>): { patch: string; stat: string } {
   const ref = rec.artifacts?.patch_ref;
   if (typeof ref === 'string' && existsSync(ref)) {
     const st = git(repo, ['apply', '--stat', ref]);
-    // patch cũ (trước fix diffPatch trim) có thể corrupt → rơi xuống diff branch
+    // old patches (before the diffPatch trim fix) may be corrupt → fall back to branch diff
     if (st.ok) return { patch: readFileSync(ref, 'utf8'), stat: st.out };
   }
   const base = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -562,8 +562,8 @@ function taskDiff(repo: string, taskId: string): ToolOut {
 }
 
 const NPM_DEFAULT_TEST = /no test specified/;
-/** chạy `npm test` trong worktree nếu có scripts.test; null = không có test command */
-// async — không chặn Electron main; signal (Dừng) kill test
+/** run `npm test` in the worktree if scripts.test exists; null = no test command */
+// async — doesn't block Electron main; signal (Stop) kills the test
 async function runTaskTests(dir: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; line: string } | null> {
   if (!dir) return null;
   let script: unknown;
@@ -585,7 +585,7 @@ async function runTaskTests(dir: string | undefined, signal?: AbortSignal): Prom
 }
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.orchestra']);
-// ponytail: walk đồng bộ, trần 20k file — repo khổng lồ cần index/ripgrep
+// ponytail: synchronous walk, capped at 20k files — huge repos need an index/ripgrep
 function walkRepo(root: string, max = 20_000): string[] {
   const out: string[] = [];
   const stack = [''];
@@ -607,14 +607,14 @@ function walkRepo(root: string, max = 20_000): string[] {
   return out.sort();
 }
 
-// globToRegex: '**/' cần ≥1 thư mục; khảo sát thì cho '**/' khớp cả 0 thư mục (src/**/*.ts ⊇ src/a.ts)
+// globToRegex: '**/' needs ≥1 directory; for surveying let '**/' also match 0 directories (src/**/*.ts ⊇ src/a.ts)
 function globMatcher(p: string): (f: string) => boolean {
   const a = globToRegex(p);
   const b = globToRegex(p.replace(/\*\*\//g, ''));
   return (f) => a.test(f) || b.test(f);
 }
 
-/** path tương đối nằm trong repo → absolute; thoát ra ngoài → null */
+/** relative path inside the repo → absolute; escapes the repo → null */
 export function resolveInRepo(root: string, p: string): string | null {
   if (path.isAbsolute(p) || /^[a-zA-Z]:/.test(p)) return null;
   const abs = path.resolve(root, p);
@@ -627,7 +627,7 @@ const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every(isSt
 const optStr = (v: unknown) => v === undefined || v === null || typeof v === 'string';
 const bad = (content: string): ToolOut => ({ ok: false, content });
 
-/** skills từ brain: undefined → []; tên lạ → chuỗi lỗi kèm danh sách hợp lệ */
+/** skills from brain: undefined → []; unknown name → error string with the valid list */
 function checkSkills(v: unknown, projectId?: string | null): string[] | string {
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return 'skills must be an array of skill names';
@@ -706,7 +706,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const scope = i.scope;
         const g = ro ? null : await gate(deps, 'dispatch_write', 'risk', () => t('ext.dispatch.ask', { goal: i.goal as string, scope: scope.join(', '), worker: isStr(i.worker) ? i.worker : 'auto' }));
         if (g) return g;
-        // read-only: node plan (sandbox read-only, không tính no_change, không vào EMA coder) — prompt trả lời thẳng, không bắt viết plan
+        // read-only: plan node (read-only sandbox, no no_change, not counted in coder EMA) — prompt answers directly, no plan required
         const r = await (deps.dispatch ?? dispatchTracked)(repo, {
           node: ro ? 'plan' : 'implement', role: ro ? 'planner' : 'coder', goal: i.goal, scope: i.scope, acceptance,
           promptOverride: ro
@@ -751,8 +751,8 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       }
       case 'fleet_merge': {
         if (!isStr(i.taskId)) return bad('taskId must be a string');
-        if (needsApproval(deps.mode, 'merge') === 'block') return bad(PLAN_BLOCKED); // trước khi chạy test
-        // gate trong code — brain không merge được task rỗng / ngoài scope / test đỏ
+        if (needsApproval(deps.mode, 'merge') === 'block') return bad(PLAN_BLOCKED); // before running tests
+        // gate in code — brain can't merge empty / out-of-scope / test-failing tasks
         const rec = loadTask(repo, i.taskId);
         if (typeof rec === 'string') return bad(rec);
         const files: string[] = rec.artifacts?.files_changed ?? [];
@@ -788,14 +788,14 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
 }
 
 export interface SessionToolDeps extends BrainToolDeps {
-  /** null = chat ngoài project — memory_update chỉ nhận scope global */
+  /** null = chat outside a project — memory_update only accepts global scope */
   projectId: string | null;
-  /** consolidate memory khi vượt budget; thiếu → giữ entry mới nhất vừa budget */
+  /** consolidate memory when over budget; missing → keep the newest entries that fit the budget */
   callModel?: CallModel;
-  /** chat ngoài project: repo_attach — validate + hỏi user, trả repo đã gắn (caller push vào `repos`) */
+  /** chat outside a project: repo_attach — validate + ask user, return the attached repo (caller pushes into `repos`) */
   attach?: (path: string) => Promise<{ ok: boolean; content: string }>;
 }
-/** tool executor của 1 session: route repo tool tới repo theo `repo` + memory_update */
+/** tool executor for 1 session: route repo tools to the repo named by `repo` + memory_update */
 export function projectToolExecutor(repos: RepoRef[], deps: SessionToolDeps): (name: string, input: unknown) => Promise<ToolOut> {
   return async (name, raw) => {
     const { repo, ...i } = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -819,7 +819,7 @@ export function projectToolExecutor(repos: RepoRef[], deps: SessionToolDeps): (n
   };
 }
 
-/** dữ liệu Role × Worker matrix — Desktop render bằng CSS của app, VS Code dùng policyMatrixHtml */
+/** Role × Worker matrix data — Desktop renders it with the app's CSS, VS Code uses policyMatrixHtml */
 export function policyMatrixData(repo = FALLBACK_REPO) {
   const lp = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), lp.policy?.routing?.decay_days ?? 30);
@@ -874,7 +874,7 @@ export function policyMatrixHtml(repo = FALLBACK_REPO, interactive = false): str
     <table><tr><th>id</th><th>title</th><th>scope</th><th>source</th><th>pinned</th></tr>${kbRows}</table>
     ${interactive ? `<p><small>${t('ext.mx.footer')}</small></p>
     <script>
-      // host-agnostic: VS Code webview dùng acquireVsCodeApi; Desktop iframe dùng parent.postMessage
+      // host-agnostic: VS Code webview uses acquireVsCodeApi; Desktop iframe uses parent.postMessage
       const vscode = window.acquireVsCodeApi ? window.acquireVsCodeApi() : { postMessage: (m) => window.parent.postMessage(m, '*') };
       document.querySelectorAll('td[data-role]').forEach((td) => {
         td.addEventListener('click', () => {

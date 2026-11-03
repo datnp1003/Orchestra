@@ -1,5 +1,5 @@
 // Retrospective v0 — memory-interface-spec §6: cluster → lessons → proposals
-// Nguyên tắc: chỉ SINH proposal file (PR-equivalent), không tự ghi KB/policy (M1, nguyên tắc §1.3)
+// Principle: only GENERATE proposal files (PR-equivalent), never write KB/policy directly (M1, principle §1.3)
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildFleetStats, loadKB, type TaskRecordLite } from './memory.js';
@@ -18,7 +18,7 @@ function readFullRecords(tasksDir: string): (TaskRecordLite & { artifacts?: { fi
       const r = JSON.parse(readFileSync(path.join(tasksDir, f), 'utf8'));
       out.push(r);
     } catch {
-      /* bỏ qua record lỗi */
+      /* skip broken records */
     }
   }
   return out;
@@ -37,7 +37,7 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
   const kbProposals: string[] = [];
   const policyProposals: string[] = [];
 
-  // ---- KB proposals: cluster files_changed theo module cấp 1 (src/<dir>) ----
+  // ---- KB proposals: cluster files_changed by top-level module (src/<dir>) ----
   const moduleHits = new Map<string, { files: Set<string>; tasks: string[]; goals: string[] }>();
   for (const r of records) {
     if (r.node !== 'implement' && r.node !== 'fix') continue;
@@ -52,7 +52,7 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
     }
   }
   for (const [moduleDir, g] of moduleHits) {
-    // đã có KB entry phủ module này? (scope giao nhau)
+    // is there already a KB entry covering this module? (overlapping scope)
     const covered = kb.some((e) => e.scope.some((s) => s.startsWith(moduleDir) || moduleDir.startsWith(s.replace('/**', ''))));
     if (covered || g.tasks.length < 2) continue;
     const file = path.join(dir, `prop-${stamp}-kb-${moduleDir.replace('/', '-')}.md`);
@@ -83,7 +83,7 @@ export function retrospective(repo: string, tasksDirName = 'tasks', minSample = 
     kbProposals.push(file);
   }
 
-  // ---- Policy proposals: chênh first_try_pass ≥ threshold khi đủ sample ----
+  // ---- Policy proposals: first_try_pass gap ≥ threshold once enough samples ----
   const byRole = new Map<string, Map<string, { passed: number; n: number }>>();
   for (const [key, s] of stats) {
     const [worker, role] = key.split('|');

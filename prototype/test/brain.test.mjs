@@ -1,4 +1,4 @@
-// M1: agent loop của Orchestra brain — fake fetch, không mạng thật
+// M1: Orchestra brain agent loop — fake fetch, no real network
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runBrainTurn, listBrainModels } from '../dist/brain.js';
@@ -15,15 +15,15 @@ function fakeFetch(responses) {
   return { fn, calls };
 }
 const TOOLS = [{ name: 'dummy', description: 'd', input_schema: { type: 'object', properties: {} } }];
-const toolUse = (id) => ({ body: { stop_reason: 'tool_use', content: [{ type: 'text', text: 'đang làm' }, { type: 'tool_use', id, name: 'dummy', input: { x: 1 } }] } });
+const toolUse = (id) => ({ body: { stop_reason: 'tool_use', content: [{ type: 'text', text: 'working' }, { type: 'tool_use', id, name: 'dummy', input: { x: 1 } }] } });
 
-test('tool_use → tool_result gửi lại → end_turn', async () => {
+test('tool_use → tool_result sent back → end_turn', async () => {
   const { fn, calls } = fakeFetch([toolUse('tu_1'), { body: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'xong' }] } }]);
   const steps = [];
   const executed = [];
   const r = await runBrainTurn({
-    baseUrl: 'https://gw.test/', apiKey: KEY, history: [], userText: 'làm đi', model: 'worker-claude', system: 'sys', tools: TOOLS,
-    execTool: async (name, input) => (executed.push([name, input]), { ok: false, content: 'lỗi giả' }),
+    baseUrl: 'https://gw.test/', apiKey: KEY, history: [], userText: 'do it', model: 'worker-claude', system: 'sys', tools: TOOLS,
+    execTool: async (name, input) => (executed.push([name, input]), { ok: false, content: 'fake error' }),
     onStep: (s) => steps.push(s), fetchImpl: fn,
   });
   assert.equal(r.text, 'xong');
@@ -38,7 +38,7 @@ test('tool_use → tool_result gửi lại → end_turn', async () => {
   }
   const last = calls[1].body.messages.at(-1);
   assert.equal(last.role, 'user');
-  assert.deepEqual(last.content, [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'lỗi giả', is_error: true }]);
+  assert.deepEqual(last.content, [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'fake error', is_error: true }]);
   assert.deepEqual(steps.map((s) => s.kind), ['text', 'tool_call', 'tool_result']);
   assert.equal(r.history.length, 4); // user, assistant(tool_use), user(tool_result), assistant(text)
   assert.ok(!JSON.stringify(r.history).includes(KEY));
@@ -52,11 +52,11 @@ test('maxTurns cap', async () => {
   });
   assert.equal(calls.length, 3);
   assert.equal(r.text, t('brain.turnCap', { n: 3 }));
-  assert.ok(calls[2].body.messages.at(-1).content[0].content.length < 21_000, 'tool_result bị cắt ~20k');
+  assert.ok(calls[2].body.messages.at(-1).content[0].content.length < 21_000, 'tool_result truncated to ~20k');
   assert.equal(r.history.at(-1).role, 'assistant');
 });
 
-test('HTTP 500 → throw, không lộ key', async () => {
+test('HTTP 500 → throw, key not leaked', async () => {
   const { fn } = fakeFetch([{ status: 500, body: `boom auth=${KEY} ` + 'y'.repeat(500) }]);
   await assert.rejects(
     runBrainTurn({ baseUrl: 'https://gw.test', apiKey: KEY, history: [], userText: 'x', model: 'm', system: 's', tools: [], execTool: async () => ({ ok: true, content: '' }), fetchImpl: fn }),
@@ -77,7 +77,7 @@ test('non-JSON → throw', async () => {
   );
 });
 
-test('abort giữa tool → history hợp lệ (mọi tool_use có tool_result, kết thúc assistant)', async () => {
+test('abort mid-tool → valid history (every tool_use has tool_result, ends with assistant)', async () => {
   const two = { body: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'a', name: 'dummy', input: {} }, { type: 'tool_use', id: 'b', name: 'dummy', input: {} }] } };
   const { fn, calls } = fakeFetch([two]);
   const ac = new AbortController();
@@ -89,13 +89,13 @@ test('abort giữa tool → history hợp lệ (mọi tool_use có tool_result, 
     }),
   });
   assert.equal(r.aborted, true);
-  assert.equal(calls.length, 1, 'không gọi API lại sau abort');
+  assert.equal(calls.length, 1, 'no further API call after abort');
   const h = r.history;
   assert.deepEqual(h.map((m) => m.role), ['user', 'assistant', 'user', 'assistant']);
   assert.deepEqual(h[2].content.map((b) => [b.tool_use_id, b.is_error]), [['a', true], ['b', true]]);
   assert.equal(h[2].content[1].content, 'aborted');
   assert.equal(h[3].content[0].text, t('brain.aborted'));
-  // abort trước khi gọi API → fetch reject → vẫn trả history hợp lệ
+  // abort before the API call → fetch rejects → still returns valid history
   const ac2 = new AbortController();
   ac2.abort();
   const r2 = await runBrainTurn({
@@ -106,7 +106,7 @@ test('abort giữa tool → history hợp lệ (mọi tool_use có tool_result, 
   assert.deepEqual(r2.history.map((m) => m.role), ['user', 'assistant']);
 });
 
-test('listBrainModels: ok + lỗi', async () => {
+test('listBrainModels: ok + error', async () => {
   const ok = fakeFetch([{ body: { data: [{ id: 'worker-claude' }, { id: 'cc/claude-sonnet-5-5' }, {}] } }]);
   assert.deepEqual(await listBrainModels({ baseUrl: 'https://gw.test/v1', apiKey: KEY }, ok.fn), { models: ['worker-claude', 'cc/claude-sonnet-5-5'] });
   assert.equal(ok.calls[0].url, 'https://gw.test/v1/models');

@@ -1,13 +1,13 @@
-// Orchestra Desktop — renderer (vanilla, không framework)
-// Bố cục agent-first: Chat là màn hình chính (composer ở đáy), Dashboard/Fleet là panel phụ.
-const api = window.orchestra ?? devStub(); // stub chỉ dùng khi chạy renderer ngoài Electron (dev/preview)
+// Orchestra Desktop — renderer (vanilla, no framework)
+// Agent-first layout: Chat is the main screen (composer at the bottom), Dashboard/Fleet are secondary panels.
+const api = window.orchestra ?? devStub(); // stub only used when running the renderer outside Electron (dev/preview)
 const page = document.getElementById('page');
 const composerWrap = document.getElementById('composerWrap');
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
-// ---------- i18n: dict desktop.* từ main (i18n:get); cùng ngữ nghĩa t() của prototype/src/i18n ----------
+// ---------- i18n: desktop.* dict from main (i18n:get); same semantics as t() in prototype/src/i18n ----------
 let I18N = { locale: 'en', dict: {} };
 const t = (key, params) => {
   const s = I18N.dict[key] ?? key;
@@ -24,23 +24,23 @@ async function loadI18n() {
 let SETTINGS = null;
 let FLEET = [];
 let MODELS = { models: [], byWorker: {} };
-let BRAIN_MODELS = []; // model của Orchestra brain (router /v1/models)
+let BRAIN_MODELS = []; // Orchestra brain models (router /v1/models)
 
-// ---------- event bus: đăng ký listener đúng 1 lần, route mới chỉ gắn handler ----------
+// ---------- event bus: register listeners exactly once, new routes only attach handlers ----------
 const handlers = {};
 for (const ch of ['dispatch:event', 'pipeline:log', 'install:log', 'chat:message', 'chat:step', 'terminal:data', 'terminal:exit', 'update:status', 'nav', 'approval:request', 'approval:resolved', 'approval:focus', 'fleet:changed']) {
   api.on(ch, (d) => handlers[ch]?.(d));
 }
 const on = (ch, fn) => { handlers[ch] = fn; };
-on('fleet:changed', (list) => setFleet(list)); // probe nền của main xong → pill + bảng fleet đang hiện
+on('fleet:changed', (list) => setFleet(list)); // main's background probe done → pill + visible fleet table
 
-// ---------- dữ liệu chung ----------
+// ---------- shared data ----------
 async function loadSettings() {
   SETTINGS = await api.invoke('settings:get');
   renderChrome();
   return SETTINGS;
 }
-// main trả cache ngay (probe CLI chạy nền) — page không await cái này trước khi vẽ
+// main returns cache immediately (CLI probe runs in background) — pages don't await this before drawing
 async function loadFleet() {
   setFleet(await api.invoke('fleet:list'));
   return FLEET;
@@ -53,7 +53,7 @@ function setFleet(list) {
 async function loadModels() {
   MODELS = await api.invoke('models:list');
   renderChrome();
-  // Dashboard vẽ trước khi models về (upstream lạnh ~3s) → vá 2 dropdown, giữ lựa chọn
+  // Dashboard draws before models arrive (cold upstream ~3s) → patch the 2 dropdowns, keep selection
   for (const [id, worker] of [['#dModel', $('#dWorker')?.value || ''], ['#pModel', '']]) {
     const sel = $(id);
     if (sel) sel.innerHTML = modelOptions(worker, sel.value, t('desktop.dash.byPolicy'));
@@ -64,14 +64,14 @@ async function loadBrainModels() {
   BRAIN_MODELS = (await api.invoke('brain:models')).models || [];
   renderChrome();
 }
-// <option> model: '' = mặc định; worker rỗng (auto) = toàn bộ model router; model worker không chạy được → disabled + lý do
+// model <option>: '' = default; empty worker (auto) = all router models; models the worker can't run → disabled + reason
 function modelOptions(worker, cur, defLabel) {
   const list = worker ? MODELS.byWorker[worker] || [] : MODELS.models.map((id) => ({ id, ok: true, reason: '' }));
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
-// ô search lọc <option> của 1 select model (hàng trăm model từ router): gõ chuỗi con, không phân biệt hoa thường;
-// option đang chọn luôn hiện; Enter = chọn kết quả đầu tiên. Select bị render lại (innerHTML) → observer lọc lại.
+// search box filters a model select's <option>s (hundreds of router models): substring, case-insensitive;
+// selected option always shown; Enter = pick first match. Select re-rendered (innerHTML) → observer re-filters.
 function modelSearch(sel) {
   if (!sel || sel.dataset.search) return;
   sel.dataset.search = '1';
@@ -103,14 +103,14 @@ function modelSearch(sel) {
   new MutationObserver(apply).observe(sel, { childList: true });
 }
 
-// session đang mở: projectId null = chat ngoài project (chỉ global memory); started = đã có tin nhắn (không còn màn trống)
+// open session: projectId null = chat outside a project (global memory only); started = has messages (no longer the empty screen)
 let CHAT = { projectId: null, projectName: '', started: false };
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const fleetInstalled = () => FLEET.filter((f) => f.installed).length;
-// 1 nguồn màu cho mọi chỗ hiện fleet: có worker = xanh, không có = xám
+// single color source for every fleet display: has worker = green, none = grey
 const fleetDot = (n) => (n ? 'ok' : '');
 
-// project/repo của session: statusbar luôn hiện; header chỉ khi đang ở Chat
+// session's project/repo: always in statusbar; in header only while on Chat
 function renderRepo() {
   const r = CHAT.projectId ? SETTINGS?.activeRepo || '' : '';
   $('#stRepo').textContent = CHAT.projectId ? `${CHAT.projectName} · repo: ${baseName(r) || '—'}` : t('desktop.chat.global');
@@ -121,7 +121,7 @@ function renderRepo() {
 }
 const onChatPage = () => !location.hash || location.hash.startsWith('#/chat');
 
-// ---------- Permission mode (plan / ask / auto / full) — main enforce ở tool layer; đây chỉ chọn + hiển thị ----------
+// ---------- Permission mode (plan / ask / auto / full) — main enforces at the tool layer; this only selects + displays ----------
 const MODES = ['plan', 'ask', 'auto', 'full'];
 function renderMode() {
   const m = SETTINGS?.permissionMode || 'ask';
@@ -151,7 +151,7 @@ $('#modeMenu').addEventListener('click', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: b.dataset.mode });
   renderChrome();
   if (SETTINGS.permissionMode !== 'full' || prev === 'full') return;
-  // cảnh báo 1 dòng khi chuyển sang full; màn trống → hiện ở dòng ngữ cảnh
+  // 1-line warning when switching to full; empty screen → shown in the context line
   if (document.getElementById('main').classList.contains('chat-empty')) {
     $('#emptyCtx').textContent = t('desktop.mode.fullWarn');
     $('#emptyCtx').classList.add('warn');
@@ -164,9 +164,9 @@ $('#modeMenu').addEventListener('click', async (e) => {
   }
 });
 
-// ---------- Approval card trong chat (thay modal native): main gửi approval:request, user trả lời approval:respond ----------
-const APPROVALS = new Map(); // id → request đang chờ
-let focusApprovalId = null; // click notification / badge → focus card này sau khi Chat vẽ xong
+// ---------- Approval card in chat (replaces native modal): main sends approval:request, user answers via approval:respond ----------
+const APPROVALS = new Map(); // id → pending request
+let focusApprovalId = null; // click notification / badge → focus this card after Chat finishes drawing
 const approvalEl = (id) => $('#chatMsgs')?.querySelector(`[data-approval="${CSS.escape(id)}"]`);
 function renderApprovalBadge() {
   const b = $('#approvalBadge');
@@ -211,13 +211,13 @@ function approvalCard(r) {
   no.onclick = () => answerApproval(r.id, false);
   row.append(yes, no);
   d.append(head, q, row);
-  // Enter/Esc khi chính card được focus (trên nút thì Enter = click nút đó)
+  // Enter/Esc when the card itself is focused (on a button, Enter = click that button)
   d.onkeydown = (e) => {
     if (e.target !== d) return;
     if (e.key === 'Enter') { e.preventDefault(); answerApproval(r.id, true); }
     else if (e.key === 'Escape') answerApproval(r.id, false);
   };
-  box.insertBefore(d, box.querySelector('.pending')); // trên bubble '…đang xử lý'
+  box.insertBefore(d, box.querySelector('.pending')); // above the '…processing' bubble
   box.scrollTop = box.scrollHeight;
 }
 function focusApprovalCard() {
@@ -261,7 +261,7 @@ function renderChrome() {
   }
   // statusbar
   $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
-  // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
+  // composer: only picks the Orchestra model — workers are coordinated by Orchestra, not picked by the user in chat
   if (SETTINGS) {
     const cur = SETTINGS.brainModel;
     $('#cbModel').innerHTML = `<option value="">${esc(t('desktop.composer.pickModel'))}</option>` + [...new Set([cur, ...BRAIN_MODELS].filter(Boolean))]
@@ -269,13 +269,13 @@ function renderChrome() {
   }
 }
 
-// ---------- Sessions (hội thoại đã lưu — click để resume) ----------
+// ---------- Sessions (saved conversations — click to resume) ----------
 const ago = (iso) => {
   const s = (Date.now() - Date.parse(iso)) / 1000;
   return s < 60 ? t('desktop.time.now') : s < 3600 ? t('desktop.time.minutes', { n: Math.floor(s / 60) })
     : s < 86400 ? t('desktop.time.hours', { n: Math.floor(s / 3600) }) : t('desktop.time.days', { n: Math.floor(s / 86400) });
 };
-// collapsed project groups — chỉ là trạng thái UI, lưu localStorage
+// collapsed project groups — UI state only, stored in localStorage
 const COLLAPSED = new Set(JSON.parse(localStorage.getItem('orchestra.collapsed') || '[]'));
 const sessionItem = (x, projectId) => `
     <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-project="${esc(projectId ?? '')}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
@@ -309,7 +309,7 @@ async function loadSessions() {
     };
   });
 }
-let openedMsgs = null; // tin nhắn của session vừa mở — renderChat vẽ 1 lần
+let openedMsgs = null; // messages of the just-opened session — renderChat draws them once
 const showChat = () => {
   if (location.hash.startsWith('#/chat') || !location.hash) route();
   else location.hash = '#/chat';
@@ -320,7 +320,7 @@ async function openSession(projectId, id) {
   if (!r.ok) return alert('✗ ' + r.error);
   openedMsgs = r.messages;
   CHAT = { projectId: r.projectId, projectName: r.projectName || '', started: !!r.messages?.length };
-  await loadSettings(); // activeRepo theo project của session
+  await loadSettings(); // activeRepo follows the session's project
   showChat();
 }
 async function startChat(projectId) {
@@ -331,7 +331,7 @@ async function startChat(projectId) {
   await loadSettings();
   showChat();
 }
-// tạo project: ô nhập ngay dưới header (Electron không có prompt())
+// create project: input right below the header (Electron has no prompt())
 $('#newProject').onclick = () => {
   const box = $('#newProjectName');
   box.hidden = !box.hidden;
@@ -357,15 +357,15 @@ document.getElementById('btnSettings').onclick = () => {
   if (!location.hash.includes('#/settings')) location.hash = '#/settings';
 };
 $('#fleetPill').onclick = () => { location.hash = '#/dashboard'; route(); };
-// đổi model Orchestra → lưu ngay (main reset hội thoại)
+// change Orchestra model → save immediately (main resets the conversation)
 $('#cbModel').addEventListener('change', async (e) => {
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, brainModel: e.target.value });
-  CHAT.started = false; // main reset hội thoại khi đổi model
+  CHAT.started = false; // main resets the conversation on model change
   renderChrome();
   if (location.hash.startsWith('#/chat') || !location.hash) renderChat();
   loadSessions();
 });
-$('#cbNew').addEventListener('click', () => startChat(CHAT.projectId)); // chat mới cùng project
+$('#cbNew').addEventListener('click', () => startChat(CHAT.projectId)); // new chat in the same project
 
 function logLine(s) {
   const el = $('#log');
@@ -374,7 +374,7 @@ function logLine(s) {
   el.scrollTop = el.scrollHeight;
 }
 
-// ---------- Chat (màn hình chính) ----------
+// ---------- Chat (main screen) ----------
 async function renderChat() {
   composerWrap.hidden = false;
   page.classList.add('fill');
@@ -389,7 +389,7 @@ async function renderChat() {
   };
   add('greet', t('desktop.chat.greet'));
   for (const m of openedMsgs ?? []) add(m.role, m.text);
-  // chat chưa có tin nhắn → bố cục gọn ở giữa (1 class trên #main, cùng DOM composer)
+  // chat with no messages → compact centered layout (1 class on #main, same composer DOM)
   const main = document.getElementById('main');
   main.classList.toggle('chat-empty', !CHAT.started);
   openedMsgs = null;
@@ -397,7 +397,7 @@ async function renderChat() {
   $('#emptyCtx').textContent = CHAT.projectId
     ? t('desktop.empty.ctxProject', { name: CHAT.projectName, n: SETTINGS?.projects?.find((p) => p.id === CHAT.projectId)?.repos.length ?? 0 })
     : t('desktop.empty.ctxGlobal');
-  // approval còn chờ (đổi trang / vẽ lại) → vẽ lại card
+  // approvals still pending (page change / redraw) → redraw cards
   for (const r of await api.invoke('approval:pending')) { APPROVALS.set(r.id, r); approvalCard(r); }
   renderApprovalBadge();
   focusApprovalCard();
@@ -425,7 +425,7 @@ async function renderChat() {
   });
   $('#chatSend').onclick = send;
   $('#chatStop').onclick = () => api.invoke('chat:cancel');
-  // gán property (không addEventListener): #chatInput sống qua các lần render → tránh gửi trùng
+  // assign property (not addEventListener): #chatInput survives re-renders → avoids duplicate sends
   input.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
@@ -433,16 +433,16 @@ async function renderChat() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   };
-  // chèn trước bubble pending để '…đang xử lý' luôn ở cuối
+  // insert before the pending bubble so '…processing' stays last
   const addStep = (cls, text) => {
     const d = add(cls, text);
-    d.title = text; // dòng step bị ellipsis — hover xem đủ
+    d.title = text; // step line is ellipsized — hover to see all
     const pending = $('#chatMsgs .pending');
     if (pending) $('#chatMsgs').appendChild(pending);
     return d;
   };
-  let progressBox = null; // tiến độ worker của tool call hiện tại — giữ 5 dòng cuối
-  // tool call của 1 lượt gộp vào 1 <details> (mặc định thu gọn, hiện call đang chạy); mỗi call 1 <details> con
+  let progressBox = null; // worker progress of the current tool call — keeps the last 5 lines
+  // a turn's tool calls grouped in 1 <details> (collapsed by default, shows the running call); each call is a child <details>
   let toolGroup = null;
   let lastCall = null;
   const argSummary = (input) => {
@@ -496,7 +496,7 @@ async function renderChat() {
     groupSummary();
   };
   on('chat:step', (s) => {
-    if (!$('#chatMsgs')) return; // memory step nền có thể tới khi đã rời Chat
+    if (!$('#chatMsgs')) return; // background memory steps may arrive after leaving Chat
     if (s.kind === 'progress') {
       progressBox ??= addStep('progress', '');
       const line = document.createElement('div');
@@ -518,13 +518,13 @@ async function renderChat() {
     toolGroup = null;
     lastCall = null;
     const pending = $('#chatMsgs .pending');
-    if (pending) pending.remove(); // kể cả 'result' lỗi (vd. chưa chọn repo)
+    if (pending) pending.remove(); // including an error 'result' (e.g. no repo selected)
     add(m.kind, m.text);
   });
   input.focus();
 }
 
-// ---------- Fleet HTML: vẽ lần đầu bằng FLEET hiện có, fleet:changed → paintFleet vá phần đang hiện ----------
+// ---------- Fleet HTML: first draw uses current FLEET, fleet:changed → paintFleet patches the visible part ----------
 const fleetRows = () => FLEET.map((f) => `<tr><td><span class="dot ${f.installed ? 'ok' : 'err'}"></span></td><td>${esc(f.id)}</td><td class="mono">${esc(f.version ?? '-')}</td><td>${esc(f.auth)}</td><td>${esc(f.conformance ?? '-')}</td></tr>`).join('');
 const dWorkerOptions = () => `<option value="">auto (Role Policy)</option>${FLEET.filter((f) => f.installed).map((f) => `<option>${esc(f.id)}</option>`).join('')}`;
 const cWorkerOptions = () => FLEET.map((f) => `<option>${esc(f.id)}</option>`).join('');
@@ -552,7 +552,7 @@ function paintFleet() {
 async function renderDashboard() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
-  // fleet không await: vẽ bằng FLEET hiện có, loadFleet về → paintFleet
+  // fleet not awaited: draw with current FLEET, loadFleet returns → paintFleet
   const [tasks] = await Promise.all([api.invoke('tasks:list', { limit: TOP_N }), loadSettings()]);
   loadFleet();
   page.innerHTML = `
@@ -612,7 +612,7 @@ async function renderDashboard() {
 // ---------- Transcript (section trong Dashboard; #/transcript cũ → #/dashboard) ----------
 const TOP_N = 20;
 let openTranscript = false;
-// tasks: top-N mới nhất (main đã giới hạn); click row ở bảng Task records → chọn task cho transcript
+// tasks: newest top-N (main already limits); click a row in Task records → select task for transcript
 function renderTranscript(box, tasks) {
   box.innerHTML = `<h3>Transcript</h3><div id="trSel" class="dim">${esc(t('desktop.tr.hint'))}</div>
     <h3>${esc(t('desktop.tr.live'))}</h3><div id="log"></div>`;
@@ -630,7 +630,7 @@ function renderTranscript(box, tasks) {
   on('install:log', (line) => logLine('[install] ' + line));
 }
 
-// ---------- Policy Matrix (tab trong Cài đặt) ----------
+// ---------- Policy Matrix (tab in Settings) ----------
 async function renderMatrix(box) {
   const d = await api.invoke('matrix:data');
   if (!d) {
@@ -661,14 +661,14 @@ async function renderMatrix(box) {
   }));
 }
 
-// ---------- Cài đặt (1 nút duy nhất — gộp Settings + Setup Wizard, kiểu tab như ZCode) ----------
+// ---------- Settings (single button — merges Settings + Setup Wizard, ZCode-style tabs) ----------
 let settingsTab = 'chung';
 async function renderSettings() {
   composerWrap.hidden = true;
   page.classList.remove('fill');
   const s = await loadSettings();
-  loadFleet(); // không chặn vẽ — về thì paintFleet
-  const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], /* conformance: tạm ẩn theo yêu cầu (pane + IPC giữ nguyên, badge vẫn ở Dashboard) */ ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
+  loadFleet(); // doesn't block drawing — paintFleet on arrival
+  const TABS = [['chung', t('desktop.tab.general')], ['workers', 'Workers'], ['providers', 'Providers'], /* conformance: temporarily hidden on request (pane + IPC kept, badge still on Dashboard) */ ['skills', 'Skills'], ['matrix', 'Policy Matrix']];
   const KINDS = [['anthropic', 'anthropic'], ['openai', 'openai'], ['anthropic-compatible', 'anthropic-compatible'], ['openai-compatible', 'openai-compatible'],
     ['oauth-anthropic', 'OAuth Anthropic (Claude Pro/Max)'], ['oauth-openai', 'OAuth OpenAI (ChatGPT Plus/Pro)']];
   const isOAuth = (k) => k.startsWith('oauth-');
@@ -746,7 +746,7 @@ async function renderSettings() {
   renderMatrix($('#matrixBox'));
   renderSkills($('#skillsBox'), null);
   renderMemoryEditor($('#globalMemory'), null);
-  // chuyển tab
+  // switch tab
   page.querySelectorAll('.tab').forEach((tb) => {
     tb.onclick = () => {
       settingsTab = tb.dataset.tab;
@@ -767,7 +767,7 @@ async function renderSettings() {
     alert(t('desktop.common.saved'));
     route();
   };
-  // đổi ngôn ngữ → lưu ngay (main setLocale) + vẽ lại, không restart
+  // change language → save immediately (main setLocale) + redraw, no restart
   $('#sLang').onchange = async (e) => {
     SETTINGS = await api.invoke('settings:set', { ...SETTINGS, language: e.target.value });
     await loadI18n();
@@ -783,14 +783,14 @@ async function renderSettings() {
     await api.invoke('update:check');
     setTimeout(() => { if ($('#sUpdateOut')) $('#sUpdateOut').textContent += t('desktop.set.updateNote'); }, 4000);
   };
-  // tab workers — delegate trên #wFleet (paintFleet thay nội dung, listener vẫn còn)
+  // workers tab — delegate on #wFleet (paintFleet replaces content, listener stays)
   $('#wFleet').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-install]');
     if (!b) return;
     logLine('▶ install ' + b.dataset.install);
     const r = await api.invoke('install:worker', b.dataset.install);
     logLine((r.ok ? '✓ ' : '✗ ') + r.detail);
-    setFleet(await api.invoke('fleet:refresh')); // main đã kích refresh sau install — de-dup, chờ đúng probe đó
+    setFleet(await api.invoke('fleet:refresh')); // main already triggered refresh after install — de-duped, waits for that same probe
   });
   $('#wRefresh').onclick = async () => {
     const b = $('#wRefresh');
@@ -803,16 +803,16 @@ async function renderSettings() {
       b.textContent = t('desktop.w.recheck');
     }
   };
-  // tab providers — key không bao giờ về renderer (chỉ hasKey)
+  // providers tab — keys never reach the renderer (only hasKey)
   let PROVS = [];
-  let oauthWaiting = ''; // provider anthropic đang chờ dán code#state
+  let oauthWaiting = ''; // anthropic provider waiting for pasted code#state
   const syncKind = () => {
     const o = isOAuth($('#prKind').value);
     $('#prRisk').hidden = !o;
     $('#prKeyed').hidden = o;
   };
   $('#prKind').onchange = syncKind;
-  // quick-add kiểu 9router: [kind, nhãn (tên riêng — không dịch), id gợi ý, baseUrl mặc định, formats mặc định (= DEFAULT_FORMATS của router)]
+  // 9router-style quick-add: [kind, label (proper name — not translated), suggested id, default baseUrl, default formats (= router's DEFAULT_FORMATS)]
   const QUICK = [
     ['anthropic', '＋ Anthropic API', 'anthropic', 'https://api.anthropic.com', ['messages']],
     ['openai', '＋ OpenAI API', 'openai', 'https://api.openai.com', ['chat', 'responses']],
@@ -950,13 +950,13 @@ async function renderSettings() {
   on('install:log', (line) => logLine(line));
 }
 
-// ---------- Skills (Settings › Skills = global, Project page = project + global kế thừa) ----------
-// Chỉ gửi tên/scope/projectId/URL — path luôn do main tính; text skill luôn qua esc()
+// ---------- Skills (Settings › Skills = global, Project page = project + inherited global) ----------
+// Only send name/scope/projectId/URL — paths always computed by main; skill text always goes through esc()
 async function renderSkills(box, projectId) {
   const scope = projectId ? 'project' : 'global';
   const r = await api.invoke('skills:list', { projectId });
   const all = r.skills || [];
-  // project ghi đè global cùng tên → ẩn bản global bị che
+  // project overrides same-name global → hide the shadowed global
   const shown = all.filter((s) => s.scope === scope || !all.some((o) => o.name === s.name && o.scope !== s.scope));
   const srcLabel = (s) => (s.source?.type === 'github'
     ? `github ${(s.source.url || '').replace('https://github.com/', '')}@${(s.source.commit || '').slice(0, 7)}`
@@ -991,7 +991,7 @@ async function renderSkills(box, projectId) {
   const out = q('[data-sk-out]');
   const fail = (x) => { out.textContent = '✗ ' + x.error; out.className = 'err'; };
   const reload = () => renderSkills(box, projectId);
-  const target = (s) => ({ scope, projectId, name: s.name }); // chỉ skill đúng scope mới có nút
+  const target = (s) => ({ scope, projectId, name: s.name }); // only skills in this scope get buttons
   box.querySelectorAll('[data-sk-edit]').forEach((b) => { b.onclick = () => {
     const s = shown[b.dataset.skEdit];
     q('[data-sk-name]').value = s.name;
@@ -1074,13 +1074,13 @@ async function renderMemoryEditor(box, projectId) {
   box.querySelector('[data-mem-save]').onclick = async () => {
     const r = await api.invoke('memory:set', { projectId, text: area.value });
     if (!r.ok) { out.textContent = '✗ ' + r.error; return; }
-    area.value = r.text; // main đã redact secret
+    area.value = r.text; // main already redacted secrets
     used(r.used);
     out.textContent += ' · ' + t('desktop.common.saved');
   };
 }
 
-// ---------- Project (#/project/<id>): tên, repos, memory, KB read-only ----------
+// ---------- Project (#/project/<id>): name, repos, memory, read-only KB ----------
 async function renderProject(id) {
   composerWrap.hidden = true;
   page.classList.remove('fill');
@@ -1174,7 +1174,7 @@ async function renderTerminal() {
       await api.invoke('terminal:input', { id: TERM_ID, data: cmd + '\r' });
     }
   });
-  if (termSession === TERM_ID) await api.invoke('terminal:kill', TERM_ID); // vào lại trang → session mới, tránh pty cũ
+  if (termSession === TERM_ID) await api.invoke('terminal:kill', TERM_ID); // re-entering the page → new session, avoids stale pty
   await create();
   termSession = TERM_ID;
   termEl.textContent += t('desktop.term.ready') + '\r\n';
@@ -1182,19 +1182,19 @@ async function renderTerminal() {
 }
 
 // ---------- router ----------
-// terminal: route giữ nguyên nhưng không có link trên UI — tạm ẩn theo yêu cầu
+// terminal: route kept but no link in the UI — temporarily hidden on request
 const TITLES = { chat: () => 'Chat — Orchestrator', dashboard: () => 'Dashboard', terminal: () => 'Terminal', settings: () => t('desktop.page.settings') };
 const ROUTES = { chat: renderChat, dashboard: renderDashboard, terminal: renderTerminal, settings: renderSettings };
 function route() {
   let hash = (location.hash || '#/chat').replace('#/', '');
-  if (hash === 'wizard') hash = 'settings'; // hash cũ còn hoạt động
-  if (hash === 'transcript') { openTranscript = true; location.hash = '#/dashboard'; return; } // Transcript giờ là section trong Dashboard
-  if (hash === 'matrix') { settingsTab = 'matrix'; location.hash = '#/settings'; return; } // Policy Matrix giờ là tab trong Cài đặt (hashchange → route lại)
+  if (hash === 'wizard') hash = 'settings'; // old hash still works
+  if (hash === 'transcript') { openTranscript = true; location.hash = '#/dashboard'; return; } // Transcript is now a section in Dashboard
+  if (hash === 'matrix') { settingsTab = 'matrix'; location.hash = '#/settings'; return; } // Policy Matrix is now a tab in Settings (hashchange → re-route)
   document.querySelectorAll('#sidebar a[data-page]').forEach((a) => a.classList.toggle('active', a.dataset.page === hash));
   document.getElementById('btnSettings').classList.toggle('active', hash === 'settings');
   $('#pageTitle').textContent = TITLES[hash]?.() || 'Orchestra';
   renderRepo();
-  document.getElementById('main').classList.remove('chat-empty'); // renderChat bật lại nếu chat còn trống
+  document.getElementById('main').classList.remove('chat-empty'); // renderChat re-adds it if the chat is still empty
   renderApprovalBadge();
   if (hash.startsWith('project/')) {
     loadSessions(); // highlight project trong sidebar
@@ -1207,9 +1207,9 @@ window.addEventListener('hashchange', route);
 
 // ---------- init ----------
 (async () => {
-  await loadI18n(); // trước render đầu tiên
+  await loadI18n(); // before the first render
   await loadSettings();
-  // fleet (probe CLI) + models (upstream lạnh ~3s) không chặn vẽ đầu — về thì renderChrome/paintFleet vá
+  // fleet (CLI probe) + models (cold upstream ~3s) don't block first draw — renderChrome/paintFleet patch on arrival
   loadFleet();
   loadSessions();
   loadModels();
@@ -1218,7 +1218,7 @@ window.addEventListener('hashchange', route);
   route();
 })();
 
-// Stub API mẫu — chỉ active khi renderer chạy ngoài Electron (preview bằng trình duyệt).
+// Sample stub API — only active when the renderer runs outside Electron (browser preview).
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const project = { id: 'payments-a1b2', name: 'Payments', repos };
@@ -1240,7 +1240,7 @@ function devStub() {
     if (ch === 'approval:pending') return [];
     if (ch === 'fleet:list' || ch === 'fleet:refresh') return fleet;
     if (ch === 'tasks:list') return tasks;
-    if (ch === 'i18n:get') return { locale: 'en', dict: {} }; // preview: hiện key
+    if (ch === 'i18n:get') return { locale: 'en', dict: {} }; // preview: shows keys
     if (ch === 'models:list') return { models: ['gw/claude-opus'], byWorker: { claude: [{ id: 'gw/claude-opus', ok: true, reason: 'gw speaks messages' }], codex: [{ id: 'gw/claude-opus', ok: true, reason: 'gw messages (router translates Responses→Chat/Messages)' }] } };
     if (ch === 'settings:set') return Object.assign(settings, p);
     if (ch === 'brain:models') return { models: ['gw/claude-opus'] };

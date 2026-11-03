@@ -1,6 +1,6 @@
-// Long-term memory của Orchestra brain — global (~/.orchestra/memory.md: sở thích user, fact chung)
-// + theo project (~/.orchestra/projects/<id>/memory.md). File markdown, mỗi entry 1 dòng "- ...".
-// Ghi tự động (tool memory_update + reflection nền); mọi lần ghi đều qua redactSecrets.
+// Long-term memory of the Orchestra brain — global (~/.orchestra/memory.md: user preferences, general facts)
+// + per project (~/.orchestra/projects/<id>/memory.md). Markdown file, one "- ..." line per entry.
+// Written automatically (memory_update tool + background reflection); every write goes through redactSecrets.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { memoryFile } from './home.js';
@@ -17,10 +17,10 @@ export interface MemoryOp {
 export interface ScopedOp extends MemoryOp {
   scope: Scope;
 }
-/** 1 lượt Messages API (system + 1 user message) → text trả về */
+/** 1 Messages API turn (system + 1 user message) → returned text */
 export type CallModel = (system: string, user: string) => Promise<string>;
 
-// ponytail: heuristic — token dài có '/' (base64 chuẩn) bị cắt đôi nên có thể lọt; cần scanner entropy thật nếu thấy lọt
+// ponytail: heuristic — long tokens containing '/' (standard base64) get split so may leak; need a real entropy scanner if leaks show up
 const SECRET_RES: [RegExp, string][] = [
   [/sk-ant-[\w-]+/g, '[REDACTED]'],
   [/\bsk-[\w-]{8,}/g, '[REDACTED]'],
@@ -31,18 +31,18 @@ const SECRET_RES: [RegExp, string][] = [
 export function redactSecrets(s: string): string {
   let out = s;
   for (const [re, rep] of SECRET_RES) out = out.replace(re, rep);
-  // base64/random ≥32 ký tự: chỉ khi trộn hoa + thường + số (tên kebab/snake dài không bị đụng)
+  // base64/random ≥32 chars: only when mixing upper + lower + digits (long kebab/snake names untouched)
   return out.replace(/[A-Za-z0-9+_=-]{32,}/g, (m) => (/\d/.test(m) && /[a-z]/.test(m) && /[A-Z]/.test(m) ? '[REDACTED]' : m));
 }
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
-/** text → thân các entry (bỏ "- "); dòng không có "- " (user sửa tay) vẫn là 1 entry */
+/** text → entry bodies (strip "- "); a line without "- " (hand-edited by user) is still 1 entry */
 const toEntries = (text: string): string[] =>
   text.split(/\r?\n/).map((l) => l.trim().replace(/^[-*]\s*/, '').trim()).filter(Boolean);
 const fromEntries = (list: string[]) => list.map((e) => `- ${e}`).join('\n');
 export const normalizeMemory = (text: string): string => fromEntries(toEntries(redactSecrets(text)));
 
-/** giữ các entry mới nhất (cuối file) vừa budget — fallback xác định khi vượt budget */
+/** keep the newest entries (end of file) that fit the budget — deterministic fallback when over budget */
 export function fitNewest(text: string, budget: number): string {
   const keep: string[] = [];
   let used = 0;
@@ -92,7 +92,7 @@ function writeAtomic(file: string, text: string): void {
   renameSync(tmp, file);
 }
 
-/** memory:set (user sửa tay) — redact + normalize; vượt budget → lỗi, không ghi */
+/** memory:set (hand-edited by user) — redact + normalize; over budget → error, no write */
 export function setMemoryText(projectId: string | null, text: string): { ok: boolean; text: string; used: number; budget: number; error?: string } {
   const budget = BUDGET[projectId ? 'project' : 'global'];
   const out = normalizeMemory(text);
@@ -101,7 +101,7 @@ export function setMemoryText(projectId: string | null, text: string): { ok: boo
   return { ok: true, text: out, used: out.length, budget };
 }
 
-/** khối memory cho system prompt — session ngoài project KHÔNG bao giờ nhận project memory */
+/** memory block for the system prompt — sessions outside a project NEVER get project memory */
 export function renderMemoryBlock(global: string, project?: { name: string; text: string }): string {
   const sec = (title: string, text: string, budget: number) => `${title}\n${fitNewest(text, budget) || '(empty)'}`;
   return [
@@ -122,7 +122,7 @@ Given CURRENT MEMORY and the RECENT CONVERSATION, return ONLY JSON:
 
 const isScope = (v: unknown): v is Scope => v === 'global' || v === 'project';
 const optS = (v: unknown) => v === undefined || typeof v === 'string';
-/** JSON đầu tiên trong output model; hỏng → [] (no-op) */
+/** first JSON in the model output; malformed → [] (no-op) */
 export function parseOps(raw: string): ScopedOp[] {
   let j: { ops?: unknown };
   try {
@@ -153,12 +153,12 @@ export async function consolidateMemory(o: { callModel: CallModel; text: string;
     const lines = raw.split(/\r?\n/).filter((l) => l.trim().startsWith('- ')).join('\n');
     if (lines) out = normalizeMemory(lines);
   } catch {
-    /* model lỗi → fallback xác định bên dưới */
+    /* model error → deterministic fallback below */
   }
   return out.length <= o.budget ? out : fitNewest(out, o.budget);
 }
 
-/** áp ops vào file memory (đọc lại bản mới nhất); op lỗi bị bỏ qua + báo; vượt budget → consolidate */
+/** apply ops to the memory file (re-reads latest); bad ops skipped + reported; over budget → consolidate */
 export async function writeMemoryOps(projectId: string | null, ops: ScopedOp[], callModel?: CallModel): Promise<{ applied: ScopedOp[]; errors: string[] }> {
   const applied: ScopedOp[] = [];
   const errors: string[] = [];
@@ -182,14 +182,14 @@ export async function writeMemoryOps(projectId: string | null, ops: ScopedOp[], 
       }
     }
     if (!changed) continue;
-    // ponytail: đọc → (await consolidate) → ghi không khoá; 2 writer đồng thời có thể mất 1 op → lock file nếu thấy
+    // ponytail: read → (await consolidate) → write without locking; 2 concurrent writers may lose an op → lock file if seen
     if (text.length > BUDGET[scope]) text = callModel ? await consolidateMemory({ callModel, text, budget: BUDGET[scope] }) : fitNewest(text, BUDGET[scope]);
     writeAtomic(memoryFile(id), text);
   }
   return { applied, errors };
 }
 
-/** transcript cho reflection: chỉ text user + assistant (không tool_result), giữ phần cuối */
+/** transcript for reflection: user + assistant text only (no tool_result), keeps the tail */
 export function transcriptOf(msgs: Msg[], max = 8000): string {
   const s = msgs
     .flatMap((m) => {
@@ -201,6 +201,6 @@ export function transcriptOf(msgs: Msg[], max = 8000): string {
 }
 
 const SIGN = { add: '+', replace: '~', remove: '−' } as const;
-/** tóm tắt cho dòng step trong chat (đã redact) */
+/** summary for the chat step line (redacted) */
 export const summarizeOps = (ops: ScopedOp[]): string =>
   ops.map((o) => `${SIGN[o.action]}${o.scope}: ${redactSecrets(oneLine(o.text ?? o.old_text ?? '')).slice(0, 60)}`).join(' · ');

@@ -1,6 +1,6 @@
-// Cache single-flight cho fleet snapshot — thuần (không electron), test bằng node thường.
-// get(): có data → trả ngay (cũ quá staleMs → refresh nền); chưa có → chờ probe đang chạy (không probe thứ 2).
-// refresh(): đang chạy → trả đúng promise đó (de-dup); xong → onChange(data mới).
+// Single-flight cache for the fleet snapshot — pure (no electron), testable with plain node.
+// get(): has data → return now (older than staleMs → background refresh); none → await the running probe (no 2nd probe).
+// refresh(): running → return that same promise (de-dup); done → onChange(new data).
 export interface FleetCache<T> {
   get(): Promise<T>;
   refresh(): Promise<T>;
@@ -14,7 +14,7 @@ export function createFleetCache<T>(
   const now = opts.now ?? Date.now;
   let value: { v: T; at: number } | null = null;
   let inflight: Promise<T> | null = null;
-  // ponytail: refresh() trong lúc probe khác đang chạy dùng lại kết quả probe đó (có thể bắt đầu trước khi install xong) — thêm cờ "chạy lại 1 lần" nếu thấy lệch
+  // ponytail: refresh() during another running probe reuses that probe's result (may have started before install finished) — add a "rerun once" flag if results drift
   const refresh = (): Promise<T> =>
     (inflight ??= probe()
       .then((v) => {

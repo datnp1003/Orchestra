@@ -1,4 +1,4 @@
-// Regression E2E t-mvyyi9rd-agyn: codex sandbox Windows + implement no-op không được tính ok + fs cross-check noise
+// Regression E2E t-mvyyi9rd-agyn: codex Windows sandbox + implement no-op must not count as ok + fs cross-check noise
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { codexSandbox, getManifest } from '../dist/manifests.js';
 import { buildFleetStats } from '../dist/memory.js';
 import { computeFsCrossCheck, filterRealChanges } from '../dist/runner.js';
 
-test('codex sandbox: worktree-write win32 → danger-full-access, linux → workspace-write, read-only giữ nguyên', () => {
+test('codex sandbox: worktree-write win32 → danger-full-access, linux → workspace-write, read-only unchanged', () => {
   assert.equal(codexSandbox('worktree-write', 'win32'), 'danger-full-access');
   assert.equal(codexSandbox('worktree-write', 'linux'), 'workspace-write');
   assert.equal(codexSandbox('read-only', 'win32'), 'read-only');
@@ -18,7 +18,7 @@ test('codex sandbox: worktree-write win32 → danger-full-access, linux → work
   assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
 });
 
-test('buildFleetStats: implement không đổi file / outcome no_change = thất bại', () => {
+test('buildFleetStats: implement with no file changes / outcome no_change = failure', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'orch-stats-'));
   const rec = (id, extra) =>
     writeFileSync(
@@ -34,7 +34,7 @@ test('buildFleetStats: implement không đổi file / outcome no_change = thất
   assert.ok(Math.abs(s.ema - 1 / 3) < 1e-6);
 });
 
-test('filterRealChanges: file checkout không đổi bị loại, untracked đổi thật vẫn bị báo', () => {
+test('filterRealChanges: unchanged checked-out files dropped, really changed untracked still reported', () => {
   const repo = mkdtempSync(path.join(tmpdir(), 'orch-fsx-'));
   const g = (...a) => spawnSync('git', a, { cwd: repo, encoding: 'utf8' });
   g('init', '-q');
@@ -45,12 +45,12 @@ test('filterRealChanges: file checkout không đổi bị loại, untracked đ�
   const real = filterRealChanges(repo, ['README.md', 'new.txt']);
   assert.deepEqual(real, ['new.txt']);
   assert.deepEqual(computeFsCrossCheck(real, []).unreported, ['new.txt']);
-  // không phải git → giữ nguyên
+  // not git → unchanged
   const plain = mkdtempSync(path.join(tmpdir(), 'orch-fsx-plain-'));
   assert.deepEqual(filterRealChanges(plain, ['a.txt']), ['a.txt']);
 });
 
-test('diffPatch giữ nguyên patch (không trim) → git apply --check được', async () => {
+test('diffPatch keeps the patch intact (no trim) → git apply --check passes', async () => {
   const { diffPatch } = await import('../dist/worktree.js');
   const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

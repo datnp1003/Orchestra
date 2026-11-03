@@ -1,4 +1,4 @@
-// Test runner — dùng VS Code đã cài trên máy (không tải thêm), chạy headless
+// Test runner — uses the locally installed VS Code (no extra download), runs headless
 const { runTests } = require('@vscode/test-electron');
 const path = require('path');
 const fs = require('fs');
@@ -9,7 +9,7 @@ function findVscode() {
     'C:\\Program Files\\Microsoft VS Code\\Code.exe',
   ];
   for (const c of candidates) if (fs.existsSync(c)) return c;
-  return undefined; // fallback: để test-electron tự tải
+  return undefined; // fallback: let test-electron download it
 }
 
 async function main() {
