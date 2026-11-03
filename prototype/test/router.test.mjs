@@ -457,3 +457,23 @@ test('request đã dịch luôn có stream tường minh (upstream compat mặc 
   assert.equal(chatToMessagesRequest({ messages: [{ role: 'user', content: 'x' }] }, 'm').stream, false);
   assert.equal(messagesToChatRequest({ stream: true, messages: [{ role: 'user', content: 'x' }] }, 'm').stream, true);
 });
+
+test('passthrough non-stream: upstream trả chat.completion cho /v1/messages → chuẩn hoá về Messages', async () => {
+  const http = await import('node:http');
+  const up = http.createServer((q, r) => { q.resume(); q.on('end', () => { r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ id: 'x', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: 'Hi.' }, finish_reason: 'stop' }], usage: {} })); }); });
+  await new Promise((ok) => up.listen(0, '127.0.0.1', ok));
+  const { createProviderStore } = await import('../dist/router/providers.js');
+  const { startRouter } = await import('../dist/router/server.js');
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const os = await import('node:os'); const path = await import('node:path');
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'rt-')), 'router.json');
+  writeFileSync(file, JSON.stringify({ providers: [{ id: 'gw', kind: 'anthropic-compatible', baseUrl: `http://127.0.0.1:${up.address().port}`, formats: ['messages'] }] }));
+  const r = await startRouter({ store: createProviderStore({ file, keyFor: () => 'k' }) });
+  try {
+    const res = await fetch(`http://127.0.0.1:${r.port}/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${r.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gw/m', max_tokens: 10, stream: false, messages: [{ role: 'user', content: 'hi' }] }) });
+    const j = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(j.type, 'message');
+    assert.equal(j.content[0].text, 'Hi.');
+  } finally { await r.close(); up.close(); }
+});

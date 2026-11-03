@@ -114,7 +114,9 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
       if (o.signal?.aborted) return stopped();
       throw err;
     }
-    const content: Block[] = Array.isArray(r?.content) ? r.content : [];
+    // không có content[] = không phải phản hồi Messages API → báo lỗi rõ thay vì im lặng trả "(empty)"
+    if (!Array.isArray(r?.content)) throw new Error(t('brain.badResponse', { model: o.model, body: JSON.stringify(r ?? null).slice(0, 200) }));
+    const content: Block[] = r.content;
     const text = content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
     const uses = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     if (r?.stop_reason !== 'tool_use' || !uses.length) {

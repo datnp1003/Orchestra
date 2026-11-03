@@ -275,6 +275,7 @@ export const en = {
 
   Global: --lang en|vi (or env ORCHESTRA_LANG)`,
   'brain.aborted': '⏹ stopped',
+  'brain.badResponse': 'Model {model} returned a non-Messages response: {body}',
   'brain.turnCap': 'Hit the cap of {n} tool turns — stopping this turn. Send another message to let Orchestra continue.',
   'core.memory.overBudget': 'memory is {used} chars, over the {budget}-char budget — shorten it',
   'core.brief.noGoal': 'B1: goal is empty',

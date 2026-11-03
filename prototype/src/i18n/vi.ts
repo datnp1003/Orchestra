@@ -275,6 +275,7 @@ export const vi: Record<keyof typeof en, string> = {
 
   Chung: --lang en|vi (hoặc env ORCHESTRA_LANG)`,
   'brain.aborted': '⏹ đã dừng',
+  'brain.badResponse': 'Model {model} trả về không đúng định dạng Messages: {body}',
   'brain.turnCap': 'Đã chạm trần {n} lượt tool — dừng lượt này. Nhắn tiếp để Orchestra làm tiếp.',
   'core.memory.overBudget': 'memory dài {used} ký tự, vượt budget {budget} — rút gọn lại',
   'core.brief.noGoal': 'B1: goal rỗng',

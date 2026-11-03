@@ -193,6 +193,17 @@ export async function startRouter(opts: RouterOptions): Promise<RouterHandle> {
       return;
     }
 
+    // passthrough non-stream: upstream compat đôi khi trả SAI format (gặp thật: gateway trả chat.completion cho /v1/messages
+    // với model ag/*) → chuẩn hoá về format client đã gọi, nếu không client đọc ra rỗng
+    if (mode === 'pass' && up.ok && !body.stream && ctype.includes('json') && (clientFmt === 'messages' || clientFmt === 'chat')) {
+      const j = await up.json().catch(() => null);
+      if (!j) throw new HttpError(502, 'upstream_error', t('router.server.badJson'));
+      const fixed = clientFmt === 'messages' && Array.isArray(j.choices) && !Array.isArray(j.content) ? chatToMessagesResponse(j)
+        : clientFmt === 'chat' && j.type === 'message' && Array.isArray(j.content) && !Array.isArray(j.choices) ? messagesToChatResponse(j)
+        : j;
+      sendJson(res, 200, fixed === j ? j : { ...fixed, model: body.model });
+      return;
+    }
     // passthrough hoặc lỗi upstream: status + content-type + bytes nguyên vẹn (fetch đã giải nén → không chuyển content-encoding)
     if (mode === 'pass' || !up.ok) {
       res.writeHead(up.status, { 'content-type': ctype, ...(ctype.includes('event-stream') ? { 'cache-control': 'no-cache' } : {}) });
