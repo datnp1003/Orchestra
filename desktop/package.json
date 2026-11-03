@@ -74,6 +74,7 @@
       "repo": "Orchestra"
     },
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         "nsis"
       ],

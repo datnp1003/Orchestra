@@ -86,11 +86,6 @@ function renderChrome() {
   }
   // statusbar
   $('#stWorker').textContent = `Orchestra · model: ${SETTINGS?.brainModel || '—'}`;
-  const stFleet = $('#stFleet');
-  if (FLEET.length) {
-    const n = fleetInstalled();
-    stFleet.innerHTML = `<span class="dot ${fleetDot(n)}"></span> ${n}/${FLEET.length} workers`;
-  }
   // composer: chỉ chọn model Orchestra — worker do Orchestra điều phối, user không chọn ở chat
   if (SETTINGS) {
     const cur = SETTINGS.brainModel;
