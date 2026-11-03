@@ -14,6 +14,8 @@ const settingsFile = path.join(app.getPath('userData'), 'orchestra-settings.json
 
 // icon từ file (PNG base64 cũ hỏng → nativeImage rỗng → tray/taskbar không có icon)
 const ICON = nativeImage.createFromPath(path.join(appRoot, 'assets', 'icon.png'));
+// tray 16px: bản đơn giản (chỉ nhạc trưởng) — icon đầy đủ bị nhoè ở cỡ này
+const TRAY_ICON = nativeImage.createFromPath(path.join(appRoot, 'assets', 'tray.png'));
 if (ICON.isEmpty()) console.error('[orchestra] assets/icon.png failed to load — tray icon will be missing');
 
 let win: BrowserWindow | null = null;
@@ -77,7 +79,7 @@ if (!gotLock) {
     );
   };
   const createTray = (): void => {
-    tray = new Tray(ICON.resize({ width: 16, height: 16 }));
+    tray = new Tray((TRAY_ICON.isEmpty() ? ICON : TRAY_ICON).resize({ width: 16, height: 16, quality: 'best' }));
     tray.setToolTip('Orchestra Desktop');
     buildTrayMenu();
     // click trái tray → focus/hiện cửa sổ
