@@ -1,0 +1,27 @@
+{
+  "extends": null,
+  "appId": "dev.orchestra.desktop",
+  "productName": "Orchestra Desktop",
+  "files": ["out/**", "src/preload.cjs", "assets/**", "src/renderer/**", "package.json"],
+  "extraResources": [
+    {"from": "../prototype/hooks", "to": "prototype/hooks", "filter": ["guard.cjs"]},
+    {"from": "../prototype/policy.yml", "to": "prototype/policy.yml"},
+    {"from": "../prototype/templates", "to": "prototype/templates"}
+  ],
+  "asarUnpack": ["**/*.node", "node_modules/@lydell/**"],
+  "directories": {"output": "release-store"},
+  "win": {"icon": "assets/icon.ico", "target": ["appx"], "signAndEditExecutable": true},
+  "appx": {
+    "applicationId": "OrchestraDesktop",
+    "identityName": "tNguyn.OrchestraDesktop",
+    "publisher": "CN=EC19BE28-3DD8-47CF-9951-1CF43B3974C7",
+    "publisherDisplayName": "Đạt Nguyễn",
+    "displayName": "Orchestra Desktop",
+    "artifactName": "Orchestra-Desktop-${version}-${arch}.msix",
+    "languages": ["en-US", "vi-VN"],
+    "minVersion": "10.0.17763.0",
+    "maxVersionTested": "10.0.26100.0",
+    "electronUpdaterAware": false
+  },
+  "protocols": [{"name": "Orchestra approval", "schemes": ["orchestra"]}]
+}

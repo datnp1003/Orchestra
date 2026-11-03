@@ -549,6 +549,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   }));
   // P-D3: update check — autoUpdater is wired in setupAutoUpdater; this channel re-triggers it
   ipcMain.handle(IPC.UPDATE_CHECK, async () => {
+    if (process.windowsStore) return { status: 'store-managed' };
     if (!app.isPackaged) return { status: 'skipped-dev' };
     try {
       const { autoUpdater } = await import('electron-updater');
@@ -699,6 +700,7 @@ export function wireTerminals(ipcMain: IpcMain, ctx: IpcContext): void {
 
 // ---------- P-D3: Auto-update (electron-updater) — wired,guarded: only active once GitHub Releases exist ----------
 export function setupAutoUpdater(getWin: () => BrowserWindow | null, notify: (t: string, b: string) => void): void {
+  if (process.windowsStore) return; // Store owns package updates; never launch the NSIS updater.
   if (!app.isPackaged) {
     console.log('[updater] dev mode — skip auto-update');
     return;
