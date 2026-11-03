@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, existsSync }
 import os from 'node:os';
 import path from 'node:path';
 import { parseChatSession, SESSION_ID_RE, listChatSessions, chatSessionsView, sessionFile, findProject, newProjectId, deleteProjectData, addRepoDir } from '../out/desktop/src/main/chatSessions.js';
-import { setLocale } from '../out/prototype/src/i18n/index.js';
+import { setLocale, t } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, chatDir } from '../out/prototype/src/home.js';
 import { setMemoryText, loadMemory } from '../out/prototype/src/agentMemory.js';
 
@@ -41,6 +41,30 @@ assert.deepEqual(parseChatSession(''), { history: [], messages: [], title: '(tr�
 setLocale('en');
 assert.equal(parseChatSession('').title, '(empty)', 'empty title follows locale');
 console.log('✓ parseChatSession: thinking dropped, dangling tool_use dropped, title, tool_result-only dropped');
+
+// legacy records with reasoning leaked into text: placeholder shown, never replayed; user text + tool pairing kept (synthetic sentinel)
+const SENT = 'PRIVATE_SENTINEL';
+const leak = parseChatSession([
+  L('user', 'chào'),
+  L('assistant', [{ type: 'reasoning', text: SENT }, { type: 'text', text: `antml:thinking_mode\n${SENT}` }, { type: 'tool_use', id: 't1', name: 'fleet_status', input: {} }]),
+  L('user', [{ type: 'tool_result', tool_use_id: 't1', content: 'tool out' }]),
+  L('assistant', `antml:thinking_mode\n${SENT}Xin chào`),
+  L('user', 'lượt 2'),
+  L('assistant', [{ type: 'text', text: `<think>${SENT}</think>Đây` }]),
+].join('\n'));
+const placeholder = t('brain.reasoningLeak');
+assert.ok(!JSON.stringify(leak).includes(SENT) && !JSON.stringify(leak).includes('antml:'), 'no marker/sentinel in history or view');
+assert.deepEqual(leak.messages, [
+  { role: 'user', text: 'chào' },
+  { role: 'orch', text: placeholder },
+  { role: 'step', text: '🔧 fleet_status' },
+  { role: 'orch', text: placeholder },
+  { role: 'user', text: 'lượt 2' },
+  { role: 'orch', text: 'Đây' },
+]);
+assert.deepEqual(leak.history[1].content.map((b) => b.type), ['text', 'tool_use'], 'tool_use kept');
+assert.deepEqual(leak.history[2].content, [{ type: 'tool_result', tool_use_id: 't1', content: 'tool out' }], 'tool_result kept');
+console.log('✓ parseChatSession: leaked reasoning in legacy records → placeholder, tool pairing kept');
 
 for (const bad of ['../x', 'a/b', 'a\\b', '']) assert.ok(!SESSION_ID_RE.test(bad), `id ${bad} blocked`);
 assert.ok(SESSION_ID_RE.test('2026-11-02T08-00-00-000Z'));

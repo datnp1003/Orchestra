@@ -308,6 +308,7 @@ export const vi: Record<keyof typeof en, string> = {
   Chung: --lang en|vi (hoặc env ORCHESTRA_LANG)`,
   'brain.aborted': '⏹ đã dừng',
   'brain.badResponse': 'Model {model} trả về không đúng định dạng Messages: {body}',
+  'brain.reasoningLeak': 'Phản hồi của model lẫn suy luận nội bộ, không tách được ranh giới nên đã bị ẩn. Hãy hỏi lại.',
   'brain.turnCap': 'Đã chạm trần {n} lượt tool — dừng lượt này. Nhắn tiếp để Orchestra làm tiếp.',
   'core.memory.overBudget': 'memory dài {used} ký tự, vượt budget {budget} — rút gọn lại',
   'core.brief.noGoal': 'B1: goal rỗng',

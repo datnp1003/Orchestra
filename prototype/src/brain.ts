@@ -61,6 +61,32 @@ export async function listBrainModels(c: BrainCreds, fetchImpl: FetchFn = fetch)
   }
 }
 
+// Reasoning boundary: a LEADING reasoning envelope in text must never be displayed/persisted/replayed.
+// Closed envelope → stripped; bare marker or unclosed envelope → no reliable boundary → null (caller fails closed).
+const ENVELOPE = /^\s*<(think|thinking|analysis|antml:thinking(?:_mode)?)>/;
+export function stripReasoning(text: string): string | null {
+  for (let m; (m = ENVELOPE.exec(text)); ) {
+    const close = `</${m[1]}>`;
+    const end = text.indexOf(close, m[0].length);
+    if (end < 0) return null;
+    text = text.slice(end + close.length).trimStart();
+  }
+  return /^\s*<?antml:thinking/.test(text) ? null : text;
+}
+const leakError = (): never => {
+  throw new Error(t('brain.reasoningLeak'));
+};
+const leakPlaceholder = () => t('brain.reasoningLeak');
+/** allowlist text/tool_use (typed thinking/redacted_thinking/reasoning dropped); leaked text → onLeak() */
+function cleanBlocks(content: unknown, onLeak: () => string): Block[] {
+  return (Array.isArray(content) ? content : []).flatMap((b: Block): Block[] =>
+    b?.type === 'tool_use' ? [b] : b?.type === 'text' ? [{ type: 'text', text: stripReasoning(String(b.text)) ?? onLeak() }] : [],
+  );
+}
+/** prior/saved assistant turn: leaked text → generic placeholder; user turns (text, tool_result) untouched */
+export const safeAssistantMsg = (m: Msg): Msg =>
+  m.role !== 'assistant' ? m : { role: 'assistant', content: typeof m.content === 'string' ? (stripReasoning(m.content) ?? leakPlaceholder()) : cleanBlocks(m.content, leakPlaceholder) };
+
 /** single tool-less turn (system + 1 user message) → text — used for memory reflection/consolidate */
 export async function callBrainText(c: BrainCreds & { model: string; fetchImpl?: FetchFn }, system: string, user: string, maxTokens = 2048): Promise<string> {
   const r = await callJson(
@@ -69,7 +95,7 @@ export async function callBrainText(c: BrainCreds & { model: string; fetchImpl?:
     { method: 'POST', headers: headers(c.apiKey), body: JSON.stringify({ model: c.model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }], stream: false }) },
     c.apiKey,
   );
-  return (Array.isArray(r?.content) ? r.content : []).flatMap((b: Block) => (b.type === 'text' ? [b.text] : [])).join('\n');
+  return cleanBlocks(r?.content, leakError).flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
 }
 
 const MAX_RESULT = 20_000;
@@ -88,7 +114,7 @@ export interface BrainTurnOpts extends BrainCreds {
 }
 
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
-  const history: Msg[] = [...o.history, { role: 'user', content: o.userText }];
+  const history: Msg[] = [...o.history.map(safeAssistantMsg), { role: 'user', content: o.userText }];
   const maxTurns = o.maxTurns ?? 12;
   // stopped midway: history always ends with assistant, every tool_use has a tool_result
   const stopped = () => {
@@ -116,7 +142,7 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
     }
     // no content[] = not a Messages API response → fail clearly instead of silently returning "(empty)"
     if (!Array.isArray(r?.content)) throw new Error(t('brain.badResponse', { model: o.model, body: JSON.stringify(r ?? null).slice(0, 200) }));
-    const content: Block[] = r.content;
+    const content = cleanBlocks(r.content, leakError); // before onStep/history/tool execution
     const text = content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
     const uses = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     if (r?.stop_reason !== 'tool_use' || !uses.length) {

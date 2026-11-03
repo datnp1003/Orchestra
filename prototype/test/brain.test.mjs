@@ -1,7 +1,7 @@
 // M1: Orchestra brain agent loop — fake fetch, no real network
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runBrainTurn, listBrainModels } from '../dist/brain.js';
+import { runBrainTurn, listBrainModels, callBrainText } from '../dist/brain.js';
 import { t } from '../dist/i18n/index.js';
 
 const KEY = 'SECRET-123';
@@ -114,4 +114,89 @@ test('listBrainModels: ok + error', async () => {
   const r = await listBrainModels({ baseUrl: 'https://gw.test', apiKey: KEY }, bad.fn);
   assert.deepEqual(r.models, []);
   assert.match(r.error, /HTTP 401/);
+});
+
+// reasoning boundary: leading reasoning envelopes never reach display/history/tools (synthetic sentinel only)
+const SENT = 'PRIVATE_SENTINEL';
+const LEAK_TEXT = `antml:thinking_mode\n${SENT} plan steps.Câu trả lời`;
+const final = (content) => ({ body: { stop_reason: 'end_turn', content } });
+const turn = (fn, extra = {}) => {
+  const steps = [];
+  const executed = [];
+  const p = runBrainTurn({
+    baseUrl: 'https://gw.test', apiKey: KEY, history: [], userText: 'hi', model: 'm', system: 's', tools: TOOLS,
+    execTool: async (n, i) => (executed.push([n, i]), { ok: true, content: 'done' }), onStep: (s) => steps.push(s), fetchImpl: fn, ...extra,
+  });
+  return { p, steps, executed };
+};
+const failsClosed = (err) => {
+  assert.equal(err.message, t('brain.reasoningLeak'));
+  assert.ok(!err.message.includes(SENT));
+  return true;
+};
+
+test('reasoning: bare marker in final reply → localized error, nothing leaked', async () => {
+  const { fn } = fakeFetch([final([{ type: 'text', text: LEAK_TEXT }])]);
+  const { p, steps } = turn(fn);
+  await assert.rejects(p, failsClosed);
+  assert.ok(!JSON.stringify(steps).includes(SENT));
+});
+
+test('reasoning: bare marker / unclosed envelope in tool turn → no step, no tool executed', async () => {
+  for (const text of [LEAK_TEXT, `<thinking>${SENT} never closed`, `  <think>${SENT}`, `<analysis>${SENT}`]) {
+    const { fn, calls } = fakeFetch([{ body: { stop_reason: 'tool_use', content: [{ type: 'text', text }, { type: 'tool_use', id: 'x', name: 'dummy', input: {} }] } }]);
+    const { p, steps, executed } = turn(fn);
+    await assert.rejects(p, failsClosed);
+    assert.deepEqual([steps, executed, calls.length], [[], [], 1]);
+  }
+});
+
+test('reasoning: typed thinking/redacted_thinking/reasoning blocks never stored or replayed', async () => {
+  const { fn, calls } = fakeFetch([
+    { body: { stop_reason: 'tool_use', content: [
+      { type: 'thinking', thinking: SENT, signature: 'sig' }, { type: 'redacted_thinking', data: SENT }, { type: 'reasoning', text: SENT },
+      { type: 'text', text: 'working' }, { type: 'tool_use', id: 't', name: 'dummy', input: {} },
+    ] } },
+    final([{ type: 'thinking', thinking: SENT }, { type: 'text', text: 'xong' }]),
+  ]);
+  const { p, steps, executed } = turn(fn);
+  const r = await p;
+  assert.equal(r.text, 'xong');
+  assert.equal(executed.length, 1);
+  assert.deepEqual(r.history[1].content.map((b) => b.type), ['text', 'tool_use']);
+  assert.ok(!JSON.stringify([r.history, steps, calls[1].body.messages]).includes(SENT));
+});
+
+test('reasoning: closed leading envelope stripped, answer kept', async () => {
+  const { fn, calls } = fakeFetch([
+    { body: { stop_reason: 'tool_use', content: [{ type: 'text', text: `<think>${SENT}</think>\n\nKhảo sát` }, { type: 'tool_use', id: 't', name: 'dummy', input: {} }] } },
+    final([{ type: 'text', text: `<analysis>${SENT}</analysis><thinking>${SENT}</thinking>Xin chào` }]),
+  ]);
+  const { p, steps } = turn(fn);
+  const r = await p;
+  assert.equal(r.text, 'Xin chào');
+  assert.deepEqual(steps[0], { kind: 'text', text: 'Khảo sát' });
+  assert.ok(!JSON.stringify([r.history, steps, calls[1].body.messages]).includes(SENT));
+});
+
+test('reasoning: ordinary text mentioning <think> stays intact', async () => {
+  for (const text of ['Use `<think>` tags like <think>x</think> in prompts', 'Thinking about it: yes', 'analysis: done', '```\n<think>\n```', 'The antml:thinking_mode marker']) {
+    const { fn } = fakeFetch([final([{ type: 'text', text }])]);
+    assert.equal((await turn(fn).p).text, text);
+  }
+});
+
+test('reasoning: leaked prior assistant history is not replayed', async () => {
+  const { fn, calls } = fakeFetch([final([{ type: 'text', text: 'ok' }])]);
+  const history = [{ role: 'user', content: 'q' }, { role: 'assistant', content: [{ type: 'thinking', thinking: SENT }, { type: 'text', text: LEAK_TEXT }] }];
+  await turn(fn, { history }).p;
+  const sent = calls[0].body.messages;
+  assert.deepEqual(sent.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.ok(!JSON.stringify(sent).includes(SENT));
+});
+
+test('reasoning: callBrainText strips closed envelope, drops typed thinking, fails closed on bare marker', async () => {
+  const c = (content) => ({ baseUrl: 'https://gw.test', apiKey: KEY, model: 'm', fetchImpl: fakeFetch([final(content)]).fn });
+  assert.equal(await callBrainText(c([{ type: 'thinking', thinking: SENT }, { type: 'text', text: `<think>${SENT}</think>- fact` }]), 's', 'u'), '- fact');
+  await assert.rejects(callBrainText(c([{ type: 'text', text: LEAK_TEXT }]), 's', 'u'), failsClosed);
 });

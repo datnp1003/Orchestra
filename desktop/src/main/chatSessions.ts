@@ -3,7 +3,7 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import type { Block, Msg } from '../../../prototype/src/brain.js';
+import { safeAssistantMsg, type Block, type Msg } from '../../../prototype/src/brain.js';
 import { chatDir, projectDir } from '../../../prototype/src/home.js';
 import { t } from '../../../prototype/src/i18n/index.js';
 import type { Project } from './contract.js';
@@ -129,8 +129,10 @@ export function parseChatSession(text: string): ChatSession {
     const content = typeof raw.content === 'string'
       ? raw.content
       : (raw.content as { type?: string }[]).filter((b) => b && b.type !== 'thinking' && b.type !== 'redacted_thinking') as Block[];
-    if (Array.isArray(content) && !content.length) continue;
-    history.push({ role: raw.role, content });
+    // older records may carry reasoning leaked into text → placeholder (display only; file untouched)
+    const m = safeAssistantMsg({ role: raw.role, content });
+    if (Array.isArray(m.content) && !m.content.length) continue;
+    history.push(m);
   }
   // history must end with a finished assistant reply — drop trailing dangling tool_use / unanswered user
   // ponytail: only handles dangling turns at end of file (persistChat only writes finished turns); mid-file → filter by tool_use_id
