@@ -1,6 +1,7 @@
 {
   "name": "orchestra-prototype",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "P1 prototype: registry + headless spawn + stream-json normalization per Worker Protocol spec v0.1",

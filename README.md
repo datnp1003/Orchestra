@@ -182,3 +182,7 @@ cd desktop && node test/e2e-headless.mjs   # real model calls (~$1)
   [Role Policy](docs/role-policy-spec.md) · [Memory Interface](docs/memory-interface-spec.md)
 - [Roadmap](docs/roadmap.md) · [Desktop plan](docs/desktop-plan.md) ·
   [Desktop E2E gate](docs/desktop-e2e-gate.md) · [P7 launch kit](docs/p7-launch-kit.md)
+
+## License
+
+[MIT](LICENSE)

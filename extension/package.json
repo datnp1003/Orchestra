@@ -4,6 +4,7 @@
   "description": "%ext.description%",
   "publisher": "orchestra-dev",
   "version": "0.2.4",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
