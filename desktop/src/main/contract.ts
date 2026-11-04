@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { t, type Locale } from '../../../prototype/src/i18n/index.js';
 import { PROJECT_ID_RE } from '../../../prototype/src/home.js';
-import { isPermissionMode, type PermissionMode } from '../../../prototype/src/permissions.js';
+import { isConversationMode, isPermissionMode, type ConversationMode, type PermissionMode } from '../../../prototype/src/permissions.js';
 
 export const IPC = {
   APP_INFO: 'app:info',
@@ -111,8 +111,9 @@ export interface AppSettings {
   language: Locale;
   /** chat: ask | auto | full — enforced at the tool layer (needsApproval) */
   permissionMode: PermissionMode;
-  /** chat Plan mode — independent of permissionMode; blocks execution tools and is announced in the conversation */
-  planEnabled: boolean;
+  /** conversation mode chat | plan | goal — independent of permissionMode; refuses tools + announced in the conversation.
+   *  New chat → 'chat'; reopened chat → the mode of its last message */
+  chatMode: ConversationMode;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -126,7 +127,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   templatesDir: '',
   language: 'en',
   permissionMode: 'ask',
-  planEnabled: false,
+  chatMode: 'chat',
 };
 
 export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SETTINGS.language): AppSettings {
@@ -147,9 +148,10 @@ export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SE
     hooksEnabled: r.hooksEnabled !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
     language: r.language === 'en' || r.language === 'vi' ? r.language : fallbackLang,
-    // old settings stored Plan as a permission ('plan') → Plan on + safe 'ask'
+    // old settings stored Plan as a permission ('plan') or a flag → Plan mode + safe 'ask'
     permissionMode: isPermissionMode(r.permissionMode) ? r.permissionMode : DEFAULT_SETTINGS.permissionMode,
-    planEnabled: r.planEnabled === true || (r as { permissionMode?: unknown }).permissionMode === 'plan',
+    chatMode: isConversationMode(r.chatMode) ? r.chatMode
+      : (r as { planEnabled?: unknown }).planEnabled === true || (r as { permissionMode?: unknown }).permissionMode === 'plan' ? 'plan' : DEFAULT_SETTINGS.chatMode,
   };
 }
 

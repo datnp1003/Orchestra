@@ -27,7 +27,7 @@ import { startRouter, type RouterHandle } from '../../../prototype/src/router/se
 import type { RouterInfo } from '../../../prototype/src/types.js';
 import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
-import { needsApproval, planReminder, planStateOf, type ApprovalKind } from '../../../prototype/src/permissions.js';
+import { convModeOf, convReminder, needsApproval, type ApprovalKind, type ConversationMode } from '../../../prototype/src/permissions.js';
 import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -81,6 +81,10 @@ export const cancelApprovals = (): void => broker?.cancelAll();
 
 export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   const settings = () => loadSettings(ctx.settingsFile);
+  const setChatMode = (chatMode: ConversationMode) => {
+    const s = settings();
+    if (s.chatMode !== chatMode) saveSettings(ctx.settingsFile, { ...s, chatMode });
+  };
   // run fn with a valid repo; no repo → fallback(error) instead of running in process cwd
   const withRepo = <T, F>(fn: (repo: string) => T, fallback: (err: string) => F): T | F => {
     let repo: string;
@@ -404,8 +408,10 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         ...creds,
         history: conv.history,
         userText: p.text,
-        // Plan is announced inside the conversation (saved with the message), not only in the system prompt
-        reminder: planReminder(planStateOf(conv.history), s.planEnabled),
+        // conversation mode is announced inside the conversation (saved with the message), not only in the system prompt
+        reminder: convReminder(convModeOf(conv.history), s.chatMode),
+        // ponytail: goal = longer tool loop, no separate verifier turn — add an auto-continue check if goals stop early
+        maxTurns: s.chatMode === 'goal' ? 40 : undefined,
         model: s.brainModel,
         system: brainSystemPrompt({
           project: project && refs ? { name: project.name, repos: refs } : undefined,
@@ -425,7 +431,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           approve: (q, kind) => ask(q, kind, ac.signal),
           askUser: (q) => askContinue(q, ac.signal),
           mode: s.permissionMode,
-          plan: s.planEnabled,
+          conv: s.chatMode,
           hooksEnabled: s.hooksEnabled,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,
@@ -473,6 +479,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     // ponytail: reflectedUpTo is RAM-only — reopened old sessions count as fully reflected (history not rescanned)
     chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0, attached: [] };
     chat.attached = loadAttached(chat);
+    setChatMode(convModeOf(history) ?? 'chat'); // reopened chat continues in the mode of its last message
     followProject(sf.project);
     return { ok: true, messages, projectId, projectName: sf.project?.name ?? null };
   });
@@ -482,6 +489,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if ('error' in f) return { ok: false, error: f.error };
     void reflect(chat);
     resetChat(f.project?.id ?? null);
+    setChatMode('chat'); // new chat starts as talk
     followProject(f.project);
     return { ok: true, projectId: f.project?.id ?? null, projectName: f.project?.name ?? null };
   });

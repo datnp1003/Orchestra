@@ -134,7 +134,8 @@ console.log(`✓ i18n: no hardcoded Vietnamese strings (app.js, index.html, main
   assert.ok(html.includes('id="approvalBadge"') && html.includes('id="cbMode"') && html.includes('id="modeMenu"') && html.includes('id="stMode"'), 'badge + mode selector + statusbar mode');
   assert.ok(['emptyHero', 'emptyCtx', 'emptyChips'].every((x) => html.includes(`id="${x}"`)) && html.includes('assets/icon.png" alt="" />') && js.includes("classList.toggle('chat-empty'"), 'empty state');
   assert.equal((html.match(/id="chatInput"/g) || []).length, 1, 'only 1 #chatInput (no copy)');
-  for (const m of ['plan', 'ask', 'auto', 'full']) for (const k of [`desktop.mode.${m}`, `desktop.mode.${m}Desc`]) assert.ok(k in en, `key ${k}`); // plan = toggle label
+  for (const m of ['ask', 'auto', 'full']) for (const k of [`desktop.mode.${m}`, `desktop.mode.${m}Desc`]) assert.ok(k in en, `key ${k}`);
+  for (const c of ['chat', 'plan', 'goal']) for (const k of [`desktop.conv.${c}`, `desktop.conv.${c}Desc`]) assert.ok(k in en, `key ${k}`);
   for (const k of ['merge', 'policy', 'repo', 'plan', 'risk']) assert.ok(`desktop.approval.kind.${k}` in en, `key kind.${k}`);
   console.log('✓ inline approval card (no showMessageBox), mode selector, empty state, i18n keys complete');
 }
@@ -148,11 +149,11 @@ console.log(`✓ i18n: no hardcoded Vietnamese strings (app.js, index.html, main
 
 // "/" lists conversation modes only (/plan) — permissions are not slash commands; Plan is a toggle independent of permission
 {
-  assert.ok(html.includes('id="slashMenu"') && js.includes('function slashUpdate()') && js.includes('if (slashKey(e)) return;') && js.includes("cmd: 'plan'") && js.includes('c.run()'), 'slash menu = /plan, keys handled before send');
-  assert.ok(js.includes("const MODES = ['ask', 'auto', 'full'];") && js.includes('planEnabled: on') && html.includes('id="cbPlan"') && js.includes('data-plan="1"') && js.includes('mode-sep'), 'menu: Plan checkbox, separator, 3 permissions; Plan marker chip');
+  assert.ok(html.includes('id="slashMenu"') && js.includes('function slashUpdate()') && js.includes('if (slashKey(e)) return;') && js.includes("const SLASH = CONVS.map(") && js.includes('c.run()'), 'slash menu = /chat /plan /goal, keys handled before send');
+  assert.ok(js.includes("const MODES = ['ask', 'auto', 'full'];") && js.includes("const CONVS = ['chat', 'plan', 'goal'];") && html.includes('id="cbConv"') && html.includes('id="convMenu"') && js.includes('{ ...SETTINGS, chatMode }'), 'two pickers: conversation mode + permission');
   const re = /^\/(\S*)$/;
   assert.ok(re.test('/') && re.test('/pl') && !re.test('/plan now') && !re.test('a /plan'), 'only a bare "/query" opens the menu');
-  console.log('✓ slash menu: /plan only; Plan toggle separate from permission');
+  console.log('✓ conversation mode picker (chat/plan/goal) + /chat /plan /goal, separate from permission');
 }
 
 // fleet: Settings/Dashboard render immediately, no await on fleet probe; fleet:changed patches; Refresh button → fleet:refresh

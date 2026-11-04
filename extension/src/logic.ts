@@ -11,7 +11,7 @@ import { globToRegex } from '../../prototype/src/dispatch.js';
 import { t } from '../../prototype/src/i18n/index.js';
 import { renderMemoryBlock, writeMemoryOps, type CallModel, type ScopedOp } from '../../prototype/src/agentMemory.js';
 import { availableSkills } from '../../prototype/src/skills.js';
-import { needsApproval, MODE_PROMPT, PLAN_BLOCKED, isPermissionMode, type ApprovalAction, type ApprovalKind, type PermissionMode } from '../../prototype/src/permissions.js';
+import { needsApproval, MODE_PROMPT, CONV_BLOCKED, isPermissionMode, isConversationMode, type ApprovalAction, type ApprovalKind, type ConversationMode, type PermissionMode } from '../../prototype/src/permissions.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
@@ -384,7 +384,7 @@ Rules:
 5. Before fleet_merge you must call task_diff and read the diff; state what you checked.
 6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.
 7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.
-8. <system-reminder> blocks inside user messages are injected by Orchestra, not typed by the user. They state the conversation mode for that message (e.g. Plan mode = plan only, do not execute); the most recent one wins.`;
+8. <system-reminder> blocks inside user messages are injected by Orchestra, not typed by the user. They state the conversation mode the message was sent in — chat (talk only), plan (plan only) or goal (execute until done); the most recent one wins.`;
 
 // language is decided by the user (from their messages), NOT by UI locale/i18n
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
@@ -495,8 +495,8 @@ export interface BrainToolDeps {
   approve: (question: string, kind?: ApprovalKind) => Promise<boolean>;
   /** chat permission mode — missing = 'ask' */
   mode?: PermissionMode;
-  /** Plan mode on — execution tools refused regardless of `mode` */
-  plan?: boolean;
+  /** conversation mode (chat/plan/goal) — refuses tools regardless of `mode`; missing = no extra limit */
+  conv?: ConversationMode;
   /** pipeline plan approval */
   askUser?: (q: string) => Promise<string>;
   hooksEnabled?: boolean;
@@ -514,10 +514,11 @@ export interface BrainToolDeps {
 }
 type ToolOut = { ok: boolean; content: string };
 
-/** permission mode gate: null = allowed; ToolOut = blocked (plan mode) or user rejected */
+const blockedMsg = (deps: BrainToolDeps) => (isConversationMode(deps.conv) && CONV_BLOCKED[deps.conv]) || 'refused';
+/** permission + conversation mode gate: null = allowed; ToolOut = blocked (chat/plan mode) or user rejected */
 async function gate(deps: BrainToolDeps, action: ApprovalAction, kind: ApprovalKind, question: () => string): Promise<ToolOut | null> {
-  const need = needsApproval(deps.mode, action, deps.plan);
-  if (need === 'block') return bad(PLAN_BLOCKED);
+  const need = needsApproval(deps.mode, action, deps.conv);
+  if (need === 'block') return bad(blockedMsg(deps));
   if (need === 'ask' && !(await deps.approve(question(), kind))) return bad('user declined');
   return null;
 }
@@ -707,7 +708,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         const ro = i.readonly === true;
         const acceptance = (i.acceptance as string[] | undefined) ?? [];
         const scope = i.scope;
-        const g = ro ? null : await gate(deps, 'dispatch_write', 'risk', () => t('ext.dispatch.ask', { goal: i.goal as string, scope: scope.join(', '), worker: isStr(i.worker) ? i.worker : 'auto' }));
+        const g = await gate(deps, ro ? 'dispatch_read' : 'dispatch_write', 'risk', () => t('ext.dispatch.ask', { goal: i.goal as string, scope: scope.join(', '), worker: isStr(i.worker) ? i.worker : 'auto' }));
         if (g) return g;
         // read-only: plan node (read-only sandbox, no no_change, not counted in coder EMA) — prompt answers directly, no plan required
         const r = await (deps.dispatch ?? dispatchTracked)(repo, {
@@ -754,7 +755,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       }
       case 'fleet_merge': {
         if (!isStr(i.taskId)) return bad('taskId must be a string');
-        if (needsApproval(deps.mode, 'merge', deps.plan) === 'block') return bad(PLAN_BLOCKED); // before running tests
+        if (needsApproval(deps.mode, 'merge', deps.conv) === 'block') return bad(blockedMsg(deps)); // before running tests
         // gate in code — brain can't merge empty / out-of-scope / test-failing tasks
         const rec = loadTask(repo, i.taskId);
         if (typeof rec === 'string') return bad(rec);

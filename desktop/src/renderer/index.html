@@ -72,10 +72,13 @@
           </div>
           <div id="composerBar">
             <span class="mode-wrap">
+              <button id="cbConv" class="secondary" data-i18n-title="desktop.conv.title" aria-haspopup="true"></button>
+              <div id="convMenu" class="mode-menu" role="menu" hidden></div>
+            </span>
+            <span class="mode-wrap">
               <button id="cbMode" class="secondary" data-i18n-title="desktop.mode.title" aria-haspopup="true"></button>
               <div id="modeMenu" class="mode-menu" role="menu" hidden></div>
             </span>
-            <button id="cbPlan" class="secondary plan-chip" data-i18n-title="desktop.mode.planOff" hidden><span class="plan-ico" aria-hidden="true"></span><span data-i18n="desktop.mode.plan"></span></button>
             <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
             <span class="bar-gap"></span>
             <button id="cbNew" class="secondary" data-i18n="desktop.composer.newChat" data-i18n-title="desktop.newChat.title"></button>

@@ -138,10 +138,12 @@ for (const e of ['approval:request', 'approval:resolved', 'approval:focus']) ass
 assert.equal(DEFAULT_SETTINGS.permissionMode, 'ask');
 assert.equal(old.permissionMode, 'ask', 'old settings missing permissionMode → ask');
 for (const m of ['ask', 'auto', 'full']) assert.equal(validateSettings({ permissionMode: m }).permissionMode, m);
-assert.equal(DEFAULT_SETTINGS.planEnabled, false);
-assert.deepEqual([validateSettings({ permissionMode: 'plan' })].map((s) => [s.permissionMode, s.planEnabled])[0], ['ask', true], 'old Plan-as-permission → Plan on + ask');
-assert.deepEqual([validateSettings({ permissionMode: 'full', planEnabled: true })].map((s) => [s.permissionMode, s.planEnabled])[0], ['full', true], 'Plan independent of permission');
-assert.equal(validateSettings({ planEnabled: 'yes' }).planEnabled, false);
+assert.equal(DEFAULT_SETTINGS.chatMode, 'chat', 'new chats default to talk');
+const pm = (r) => { const s = validateSettings(r); return [s.permissionMode, s.chatMode]; };
+assert.deepEqual(pm({ permissionMode: 'plan' }), ['ask', 'plan'], 'old Plan-as-permission → plan + ask');
+assert.deepEqual(pm({ permissionMode: 'full', planEnabled: true }), ['full', 'plan'], 'old planEnabled flag → plan');
+assert.deepEqual(pm({ permissionMode: 'full', chatMode: 'goal' }), ['full', 'goal'], 'conversation mode independent of permission');
+assert.equal(validateSettings({ chatMode: 'yolo' }).chatMode, 'chat');
 for (const junk of ['yolo', 1, null, 'FULL']) assert.equal(validateSettings({ permissionMode: junk }).permissionMode, 'ask', `permissionMode ${JSON.stringify(junk)} → ask`);
 const { createApprovalBroker, parseApprovalUrl, approvalToastXml } = await import('../out/desktop/src/main/approvals.js');
 const sent = [];

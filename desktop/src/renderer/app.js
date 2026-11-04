@@ -169,51 +169,64 @@ function renderRepo() {
 }
 const onChatPage = () => !location.hash || location.hash.startsWith('#/chat');
 
-// ---------- Permission (ask / auto / full) + Plan toggle — independent (ZCode-style); main enforces both at the tool layer ----------
-// Plan = conversation mode (announced inside the chat as a <system-reminder>), permission = how often Orchestra asks.
+// ---------- Two independent pickers (ZCode-style); main enforces both at the tool layer ----------
+// conversation mode chat | plan | goal = what the messages ARE (announced inside the chat as a <system-reminder>)
+// permission ask | auto | full = how often Orchestra asks before acting
 const MODES = ['ask', 'auto', 'full'];
-const planOn = () => !!SETTINGS?.planEnabled;
-function renderMode() {
-  const m = SETTINGS?.permissionMode || 'ask';
-  $('#cbMode').textContent = `${t('desktop.mode.' + m)} ▾`;
-  $('#cbPlan').hidden = !planOn();
-  $('#stMode').textContent = t('desktop.mode.status', { mode: t('desktop.mode.' + m) }) + (planOn() ? ` · ${t('desktop.mode.plan')}` : '');
-  const item = (attrs, checked, title, desc) => `
+const CONVS = ['chat', 'plan', 'goal'];
+const CONV_ICON = { chat: '💬', plan: '💡', goal: '🎯' };
+const convMode = () => (CONVS.includes(SETTINGS?.chatMode) ? SETTINGS.chatMode : 'chat');
+const menuItem = (attrs, checked, title, desc) => `
     <button class="mode-item" ${attrs} aria-checked="${checked}">
       <span class="mode-check">${checked ? '✓' : ''}</span>
       <span><b>${esc(title)}</b><span class="dim">${esc(desc)}</span></span>
     </button>`;
-  $('#modeMenu').innerHTML = item('role="menuitemcheckbox" data-plan="1"', planOn(), '💡 ' + t('desktop.mode.plan'), t('desktop.mode.planDesc')) +
-    '<div class="mode-sep" role="separator"></div>' +
-    MODES.map((x) => item(`role="menuitemradio" data-mode="${x}"`, x === m, t('desktop.mode.' + x), t('desktop.mode.' + x + 'Desc'))).join('');
+function renderMode() {
+  const m = SETTINGS?.permissionMode || 'ask';
+  const c = convMode();
+  $('#cbMode').textContent = `${t('desktop.mode.' + m)} ▾`;
+  $('#cbConv').textContent = `${CONV_ICON[c]} ${t('desktop.conv.' + c)} ▾`;
+  $('#cbConv').dataset.conv = c;
+  $('#stMode').textContent = `${t('desktop.conv.' + c)} · ${t('desktop.mode.status', { mode: t('desktop.mode.' + m) })}`;
+  $('#modeMenu').innerHTML = MODES.map((x) => menuItem(`role="menuitemradio" data-mode="${x}"`, x === m, t('desktop.mode.' + x), t('desktop.mode.' + x + 'Desc'))).join('');
+  $('#convMenu').innerHTML = CONVS.map((x) => menuItem(`role="menuitemradio" data-conv="${x}"`, x === c, `${CONV_ICON[x]} ${t('desktop.conv.' + x)}`, t('desktop.conv.' + x + 'Desc'))).join('');
 }
-$('#cbMode').addEventListener('click', (e) => {
+for (const [btn, menu, other] of [['#cbMode', '#modeMenu', '#convMenu'], ['#cbConv', '#convMenu', '#modeMenu']]) {
+  $(btn).addEventListener('click', (e) => {
+    e.stopPropagation();
+    $(other).hidden = true;
+    $(menu).hidden = !$(menu).hidden;
+    if (!$(menu).hidden) $(menu + ' [aria-checked="true"]')?.focus();
+  });
+  $(menu).addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { $(menu).hidden = true; $(btn).focus(); }
+  });
+}
+$('#convMenu').addEventListener('click', (e) => {
   e.stopPropagation();
-  $('#modeMenu').hidden = !$('#modeMenu').hidden;
-  if (!$('#modeMenu').hidden) $('#modeMenu [aria-checked="true"]')?.focus();
+  const b = e.target.closest('[data-conv]');
+  if (!b) return;
+  $('#convMenu').hidden = true;
+  setConv(b.dataset.conv);
 });
+// only edits the setting; main announces the mode inside the conversation with the next message
+async function setConv(chatMode) {
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, chatMode });
+  renderChrome();
+}
 document.addEventListener('click', () => {
   $('#modeMenu').hidden = true;
+  $('#convMenu').hidden = true;
   slashClose();
   for (const w of document.querySelectorAll('.msel')) { w.querySelector('.msel-pop').hidden = true; w.querySelector('.msel-btn').setAttribute('aria-expanded', 'false'); }
 });
-$('#modeMenu').addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { $('#modeMenu').hidden = true; $('#cbMode').focus(); }
-});
 $('#modeMenu').addEventListener('click', (e) => {
   e.stopPropagation();
-  const b = e.target.closest('[data-mode], [data-plan]');
+  const b = e.target.closest('[data-mode]');
   if (!b) return;
   $('#modeMenu').hidden = true;
-  if (b.dataset.plan) setPlan(!planOn());
-  else setMode(b.dataset.mode);
+  setMode(b.dataset.mode);
 });
-$('#cbPlan').addEventListener('click', (e) => { e.stopPropagation(); setPlan(false); });
-// Plan only edits the setting; main announces the change inside the conversation with the next message
-async function setPlan(on) {
-  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, planEnabled: on });
-  renderChrome();
-}
 async function setMode(mode) {
   const prev = SETTINGS.permissionMode;
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: mode });
@@ -232,9 +245,9 @@ async function setMode(mode) {
   }
 }
 
-// ---------- Slash menu: input is exactly "/<query>" → conversation modes (/plan toggles Plan); ↑/↓, Enter/Tab picks, Esc closes ----------
+// ---------- Slash menu: input is exactly "/<query>" → conversation modes /chat /plan /goal; ↑/↓, Enter/Tab picks, Esc closes ----------
 // Permissions are NOT slash commands (they are not a conversation mode) — they live in the permission button only.
-const SLASH = [{ cmd: 'plan', title: () => t('desktop.mode.plan'), desc: () => t('desktop.mode.planDesc'), on: planOn, run: () => setPlan(!planOn()) }];
+const SLASH = CONVS.map((x) => ({ cmd: x, title: () => `${CONV_ICON[x]} ${t('desktop.conv.' + x)}`, desc: () => t('desktop.conv.' + x + 'Desc'), on: () => convMode() === x, run: () => setConv(x) }));
 let slashItems = [];
 let slashActive = 0;
 const slashOpen = () => !$('#slashMenu').hidden;
@@ -1343,7 +1356,7 @@ window.addEventListener('hashchange', route);
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const project = { id: 'payments-a1b2', name: 'Payments', repos };
-  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en', permissionMode: 'ask', planEnabled: false };
+  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en', permissionMode: 'ask', chatMode: 'chat' };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },

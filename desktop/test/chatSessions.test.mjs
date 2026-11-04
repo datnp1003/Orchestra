@@ -36,9 +36,9 @@ assert.deepEqual(s.messages, [
 assert.equal(s.title.length, 60);
 assert.ok(long.startsWith(s.title.slice(0, -1)) && s.title.endsWith('…'), 'title from first user message');
 assert.equal(s.turns, 1);
-// Plan reminder: kept in history (brain sees which turns were plan-only), hidden from the visible text + title
+// conversation-mode reminder: kept in history (brain sees which turns were talk/plan/goal), hidden from the visible text + title
 {
-  const rem = '<system-reminder>\nPlan mode is active.\n</system-reminder>';
+  const rem = '<system-reminder>\nConversation mode: plan. The user wants a plan.\n</system-reminder>';
   const p = parseChatSession([L('user', [{ type: 'text', text: rem }, { type: 'text', text: 'lên plan thêm X' }]), L('assistant', [{ type: 'text', text: 'Kế hoạch…' }])].join('\n'));
   assert.equal(p.history[0].content[0].text, rem, 'reminder kept in history');
   assert.deepEqual(p.messages[0], { role: 'user', text: 'lên plan thêm X' }, 'reminder hidden from display');
