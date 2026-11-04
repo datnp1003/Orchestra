@@ -146,6 +146,14 @@ console.log(`✓ i18n: no hardcoded Vietnamese strings (app.js, index.html, main
   console.log('✓ model picker: searchable dropdown (no separate search box)');
 }
 
+// "/" in the composer lists the permission modes; picking one goes through the same setMode as the mode button
+{
+  assert.ok(html.includes('id="slashMenu"') && js.includes('function slashUpdate()') && js.includes('if (slashKey(e)) return;') && js.includes('setMode(b.dataset.mode)') && js.includes('setMode(mode)'), 'slash menu wired to setMode, keys handled before send');
+  const re = /^\/(\S*)$/;
+  assert.ok(re.test('/') && re.test('/pl') && !re.test('/plan now') && !re.test('a /plan'), 'only a bare "/query" opens the menu');
+  console.log('✓ slash menu: / lists permission modes');
+}
+
 // fleet: Settings/Dashboard render immediately, no await on fleet probe; fleet:changed patches; Refresh button → fleet:refresh
 {
   const fn = (name) => js.slice(js.indexOf(`async function ${name}`), js.indexOf('\n}\n', js.indexOf(`async function ${name}`)));

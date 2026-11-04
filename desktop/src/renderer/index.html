@@ -57,9 +57,11 @@
         <div class="composer-hints">
           <span><b>Enter</b> <span data-i18n="desktop.composer.hintSend"></span></span>
           <span><b>Shift+Enter</b> <span data-i18n="desktop.composer.hintNewline"></span></span>
+          <span><b>/</b> <span data-i18n="desktop.composer.hintSlash"></span></span>
         </div>
         <!-- everything about the message lives inside the box: input + stop/send on top, mode/model/new chat below -->
         <div id="composer">
+          <div id="slashMenu" class="mode-menu slash-menu" role="listbox" hidden></div>
           <div class="composer-main">
             <span class="composer-caret">›</span>
             <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>

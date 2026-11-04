@@ -188,18 +188,22 @@ $('#cbMode').addEventListener('click', (e) => {
 });
 document.addEventListener('click', () => {
   $('#modeMenu').hidden = true;
+  slashClose();
   for (const w of document.querySelectorAll('.msel')) { w.querySelector('.msel-pop').hidden = true; w.querySelector('.msel-btn').setAttribute('aria-expanded', 'false'); }
 });
 $('#modeMenu').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { $('#modeMenu').hidden = true; $('#cbMode').focus(); }
 });
-$('#modeMenu').addEventListener('click', async (e) => {
+$('#modeMenu').addEventListener('click', (e) => {
   e.stopPropagation();
   const b = e.target.closest('[data-mode]');
   if (!b) return;
   $('#modeMenu').hidden = true;
+  setMode(b.dataset.mode);
+});
+async function setMode(mode) {
   const prev = SETTINGS.permissionMode;
-  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: b.dataset.mode });
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: mode });
   renderChrome();
   if (SETTINGS.permissionMode !== 'full' || prev === 'full') return;
   // 1-line warning when switching to full; empty screen → shown in the context line
@@ -213,6 +217,55 @@ $('#modeMenu').addEventListener('click', async (e) => {
     $('#chatMsgs').insertBefore(d, $('#chatMsgs .pending'));
     $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
   }
+}
+
+// ---------- Slash menu: input is exactly "/<query>" → list modes (/plan /ask /auto /full); ↑/↓, Enter/Tab picks, Esc closes ----------
+let slashItems = [];
+let slashActive = 0;
+const slashOpen = () => !$('#slashMenu').hidden;
+function slashClose() { $('#slashMenu').hidden = true; slashItems = []; }
+function slashUpdate() {
+  const m = /^\/(\S*)$/.exec($('#chatInput').value);
+  if (!m) return slashClose();
+  const q = m[1].toLowerCase();
+  slashItems = MODES.filter((x) => !q || x.startsWith(q) || t('desktop.mode.' + x).toLowerCase().includes(q));
+  if (!slashItems.length) return slashClose();
+  const cur = SETTINGS?.permissionMode || 'ask';
+  slashActive = Math.min(slashActive, slashItems.length - 1);
+  $('#slashMenu').innerHTML = `<div class="slash-head">${esc(t('desktop.slash.modes'))}</div>` + slashItems.map((x, i) => `
+    <div class="mode-item${i === slashActive ? ' active' : ''}" role="option" data-i="${i}" aria-selected="${i === slashActive}">
+      <span class="mode-check">${x === cur ? '✓' : ''}</span>
+      <span><b>/${x} · ${esc(t('desktop.mode.' + x))}</b><span class="dim">${esc(t('desktop.mode.' + x + 'Desc'))}</span></span>
+    </div>`).join('');
+  $('#slashMenu').hidden = false;
+}
+function slashPick(i) {
+  const mode = slashItems[i];
+  if (!mode) return;
+  const input = $('#chatInput');
+  input.value = '';
+  input.oninput?.();
+  slashClose();
+  input.focus();
+  setMode(mode);
+}
+// returns true when the key was handled by the menu (caller must not send)
+function slashKey(e) {
+  if (!slashOpen()) return false;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    slashActive = (slashActive + (e.key === 'ArrowDown' ? 1 : -1) + slashItems.length) % slashItems.length;
+    slashUpdate();
+  } else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') slashPick(slashActive);
+  else if (e.key === 'Escape') slashClose();
+  else return false;
+  e.preventDefault();
+  return true;
+}
+$('#slashMenu').addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the input
+$('#slashMenu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const it = e.target.closest('[data-i]');
+  if (it) slashPick(+it.dataset.i);
 });
 
 // ---------- Approval card in chat (replaces native modal): main sends approval:request, user answers via approval:respond ----------
@@ -478,9 +531,12 @@ async function renderChat() {
   $('#chatStop').onclick = () => api.invoke('chat:cancel');
   // assign property (not addEventListener): #chatInput survives re-renders → avoids duplicate sends
   input.onkeydown = (e) => {
+    if (slashKey(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
   input.oninput = () => {
+    slashActive = 0;
+    slashUpdate();
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   };

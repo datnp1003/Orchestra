@@ -75,6 +75,8 @@ export const en = {
   'desktop.composer.sendTitle': 'Send (Enter)',
   'desktop.composer.hintSend': 'send',
   'desktop.composer.hintNewline': 'new line',
+  'desktop.composer.hintSlash': 'modes',
+  'desktop.slash.modes': 'Permission mode',
   'desktop.composer.newChat': 'New chat',
   'desktop.composer.modelTitle': 'Orchestra model (brain)',
   'desktop.composer.pickModel': '(select model)',

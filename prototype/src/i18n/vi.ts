@@ -76,6 +76,8 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.composer.sendTitle': 'Gửi (Enter)',
   'desktop.composer.hintSend': 'gửi',
   'desktop.composer.hintNewline': 'dòng mới',
+  'desktop.composer.hintSlash': 'chế độ',
+  'desktop.slash.modes': 'Chế độ quyền',
   'desktop.composer.newChat': 'Chat mới',
   'desktop.composer.modelTitle': 'Model Orchestra (brain)',
   'desktop.composer.pickModel': '(chọn model)',
