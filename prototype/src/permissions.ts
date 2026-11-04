@@ -135,6 +135,9 @@ export function convModeOf(history: readonly HistMsg[]): ConversationMode | null
   }
   return null;
 }
+/** images attached to this message, saved as files — the brain passes these ids to fleet_dispatch.images */
+export const imagesReminder = (ids: string[]) =>
+  systemReminder(`Images attached to this message are saved as ${ids.join(', ')}. When a worker must see them (UI mockup, screenshot, diagram), pass these ids in fleet_dispatch.images — workers cannot see this conversation, and your text description alone loses visual detail. Still state in goal/acceptance what to change in the image.`);
 /** reminder for the next user message: mode changed (or first message) → full, unchanged → sparse */
 export const convReminder = (prev: ConversationMode | null, mode: ConversationMode) =>
   systemReminder(prev === mode ? CONV_REMINDER[mode].sparse : CONV_REMINDER[mode].full);

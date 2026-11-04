@@ -1,6 +1,6 @@
 // Session chat — parse ~/.orchestra/{projects/<id>/chat,chats}/<sessionId>.jsonl to resume brain conversations.
 // Each session belongs to 1 project (many repos) or is a chat outside any project (projectId null).
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { safeAssistantMsg, type Block, type Msg } from '../../../prototype/src/brain.js';
@@ -23,6 +23,36 @@ export interface ChatSession {
 }
 
 export const SESSION_ID_RE = /^[\w.-]+$/;
+
+// ---------- attached images as files (workers can't read the conversation) ----------
+// <chat dir>/<sessionId>.images/img-N.<ext> — id img-N is announced to the brain, which passes it to fleet_dispatch
+export const IMAGE_ID_RE = /^img-\d{1,4}$/;
+const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+export const imagesDir = (projectId: string | null, sessionId: string) => path.join(chatDir(projectId), `${sessionId}.images`);
+/** save base64 images → ids continuing the session's numbering */
+export function saveSessionImages(projectId: string | null, sessionId: string, images: { media_type: string; data: string }[]): string[] {
+  if (!images.length) return [];
+  const dir = imagesDir(projectId, sessionId);
+  mkdirSync(dir, { recursive: true });
+  let n = existsSync(dir) ? readdirSync(dir).filter((f) => IMAGE_ID_RE.test(f.replace(/\.\w+$/, ''))).length : 0;
+  return images.map((im) => {
+    const id = `img-${++n}`;
+    writeFileSync(path.join(dir, `${id}.${EXT[im.media_type] ?? 'png'}`), Buffer.from(im.data, 'base64'));
+    return id;
+  });
+}
+/** ids → absolute files of THIS session only (id format checked → no traversal) */
+export function sessionImageFiles(projectId: string | null, sessionId: string, ids: string[]): { paths: string[] } | { error: string } {
+  const dir = imagesDir(projectId, sessionId);
+  const files = existsSync(dir) ? readdirSync(dir) : [];
+  const paths: string[] = [];
+  for (const id of [...new Set(ids)]) {
+    const f = IMAGE_ID_RE.test(id) ? files.find((x) => x.replace(/\.\w+$/, '') === id) : undefined;
+    if (!f) return { error: `unknown image id: ${id} — use ids named in the conversation (${files.map((x) => x.replace(/\.\w+$/, '')).join(', ') || 'none attached'})` };
+    paths.push(path.join(dir, f));
+  }
+  return { paths };
+}
 
 const legacyChatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
 

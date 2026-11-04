@@ -105,8 +105,8 @@ const MAX_RESULT = 20_000;
 export interface BrainTurnOpts extends BrainCreds {
   history: Msg[];
   userText: string;
-  /** injected context block sent (and saved) before the user's text in the same message — e.g. conversation mode reminder */
-  reminder?: string;
+  /** injected context block(s) sent (and saved) before the user's text in the same message — e.g. conversation mode, attached image ids */
+  reminder?: string | string[];
   /** images attached to the user's message (already validated by the caller) — sent before the text, like Claude apps */
   images?: ImageSource[];
   model: string;
@@ -121,7 +121,7 @@ export interface BrainTurnOpts extends BrainCreds {
 
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
   const blocks: Block[] = [
-    ...(o.reminder ? [{ type: 'text', text: o.reminder } as const] : []),
+    ...([] as string[]).concat(o.reminder ?? []).map((text) => ({ type: 'text', text }) as const),
     ...(o.images ?? []).map((source): Block => ({ type: 'image', source })),
     ...(o.userText ? [{ type: 'text', text: o.userText } as const] : []),
   ];

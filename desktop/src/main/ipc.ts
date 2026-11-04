@@ -25,9 +25,9 @@ import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '
 import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
-import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData } from './chatSessions.js';
+import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData, saveSessionImages, sessionImageFiles } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
-import { convModeOf, convReminder, needsApproval, type ApprovalKind, type ConversationMode } from '../../../prototype/src/permissions.js';
+import { convModeOf, convReminder, imagesReminder, needsApproval, type ApprovalKind, type ConversationMode } from '../../../prototype/src/permissions.js';
 import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -407,13 +407,16 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         return { ok: true, content: `attached ${names.length} repo(s) — pass repo=<name>:\n${names.join('\n')}` };
       };
       const callModel = modelCaller(creds, s.brainModel);
+      // images also saved as files: the brain sees them inline AND can hand the originals to workers by id
+      let imageIds: string[] = [];
+      try { imageIds = saveSessionImages(conv.projectId, conv.startedAt, img.images); } catch (err) { console.log('[chat] save images:', err instanceof Error ? err.message : err); }
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
         userText: p.text.trim(),
         images: img.images,
         // conversation mode is announced inside the conversation (saved with the message), not only in the system prompt
-        reminder: convReminder(convModeOf(conv.history), s.chatMode),
+        reminder: [convReminder(convModeOf(conv.history), s.chatMode), ...(imageIds.length ? [imagesReminder(imageIds)] : [])],
         // ponytail: goal = longer tool loop, no separate verifier turn — add an auto-continue check if goals stop early
         maxTurns: s.chatMode === 'goal' ? 40 : undefined,
         model: s.brainModel,
@@ -436,6 +439,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           askUser: (q) => askContinue(q, ac.signal),
           mode: s.permissionMode,
           conv: s.chatMode,
+          imageFiles: (ids) => sessionImageFiles(conv.projectId, conv.startedAt, ids),
           hooksEnabled: s.hooksEnabled,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,

@@ -1,6 +1,6 @@
 // fleet.dispatch — orchestrate: resolve worker → worktree → brief → validate → run →
 // collect artifacts → scope check (Layer 4) → task record (episodic-lite, rule B4)
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { getManifest } from './manifests.js';
 import { t } from './i18n/index.js';
@@ -44,6 +44,8 @@ export interface DispatchOptions {
   signal?: AbortSignal;
   /** R2a: Orchestra router — CLI runs through the router instead of its own auth */
   router?: import('./types.js').RouterInfo;
+  /** user-attached reference images (absolute source paths) — copied into the worktree, git-ignored */
+  images?: string[];
 }
 
 export interface ScopeCheck {
@@ -132,6 +134,19 @@ function buildPlanPrompt(b: TaskBrief): string {
   ].join('\n');
 }
 
+/** copy reference images into <worktree>/.orchestra/images/ (git-ignored → never in the diff/scope check) */
+export function deliverImages(wtPath: string, images: string[]): { rel: string[]; abs: string[] } {
+  if (!images.length) return { rel: [], abs: [] };
+  const dir = path.join(wtPath, '.orchestra', 'images');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, '.gitignore'), '*\n', 'utf8');
+  const rel = images.map((src) => {
+    copyFileSync(src, path.join(dir, path.basename(src)));
+    return `.orchestra/images/${path.basename(src)}`;
+  });
+  return { rel, abs: rel.map((r) => path.join(wtPath, r)) };
+}
+
 export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   const taskId = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -192,12 +207,17 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   // skills: claude → .claude/skills/ in the worktree; codex → prompt section + support files (all git-ignored)
   const skills = o.skills?.length ? deliverSkills(wt.path, routing.pick, o.skills, o.projectId) : undefined;
   if (skills) prompt += skills.prompt;
+  const imgs = deliverImages(wt.path, o.images ?? []);
+  if (imgs.rel.length) {
+    prompt += `\n\nREFERENCE IMAGES from the user (screenshots/mockups — look at them before working; they are the source of truth for visual details):\n${imgs.rel.map((r) => `- ${r}`).join('\n')}`
+      + (routing.pick === 'claude' ? '\nOpen each one with the Read tool.' : '');
+  }
   const started = Date.now();
   const run = await runHeadless(manifest, prompt, {
     cwd: wt.path,
     rawDir: path.join(o.repo, '.orchestra', 'raw'),
     wallMs: o.wallMs ?? (brief.budget?.minutes ? brief.budget.minutes * 60_000 : 300_000),
-    headless: { sandbox: perm.sandbox, scope: o.node === 'implement' ? o.scope : undefined, model: resolvedModel },
+    headless: { sandbox: perm.sandbox, scope: o.node === 'implement' ? o.scope : undefined, model: resolvedModel, images: imgs.abs.length ? imgs.abs : undefined },
     onEvent: o.onEvent,
     watchDir: wt.path, // P6 Layer 3 — Observed vs Reported
     netOff: !perm.net, // P6.2 — guard hook blocks network patterns when net is off

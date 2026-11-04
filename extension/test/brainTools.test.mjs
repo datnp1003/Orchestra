@@ -106,6 +106,15 @@ test('fleet_dispatch readonly → plan/planner node, with worker answer; default
   assert.deepEqual([calls[1].node, calls[1].role, calls[1].promptOverride], ['implement', 'coder', undefined]);
   assert.equal((await x('fleet_dispatch', { goal: 'g', scope: ['a'], readonly: 'yes' })).ok, false);
   assert.equal(calls.length, 2, 'readonly wrong type → no dispatch');
+  // images: ids resolved by the session store → absolute paths handed to the worker; unknown id / no store → refused, no dispatch
+  const xi = brainToolExecutor(repo, { approve: async () => true, dispatch, imageFiles: (ids) => (ids.every((i) => i === 'img-1') ? { paths: ['/abs/img-1.png'] } : { error: `unknown image id: ${ids}` }) });
+  assert.ok((await xi('fleet_dispatch', { goal: 'match mockup', scope: ['src/**'], images: ['img-1'] })).ok);
+  assert.deepEqual(calls[2].images, ['/abs/img-1.png']);
+  assert.match((await xi('fleet_dispatch', { goal: 'g', scope: ['a'], images: ['img-9'] })).content, /unknown image id/);
+  assert.match((await x('fleet_dispatch', { goal: 'g', scope: ['a'], images: ['img-1'] })).content, /no attached images/);
+  assert.equal((await xi('fleet_dispatch', { goal: 'g', scope: ['a'], images: 'img-1' })).ok, false);
+  assert.equal(calls.length, 3, 'bad images → no dispatch');
+  assert.equal(calls[1].images, undefined, 'no images → none passed');
   assert.ok(BRAIN_TOOLS.find((d) => d.name === 'fleet_dispatch').input_schema.properties.readonly.type === 'boolean');
   const sys = brainSystemPrompt({ project: { name: 'P', repos: repoRefs([repo]) }, globalMemory: '' });
   assert.ok(sys.includes(`- ${path.basename(repo)}: ${path.resolve(repo)}`), 'system prompt has REPOS');

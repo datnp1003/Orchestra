@@ -1,9 +1,9 @@
 // Chat session — parse jsonl to resume; list/open by project, delete project, memory:set (temp dir)
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseChatSession, SESSION_ID_RE, listChatSessions, chatSessionsView, sessionFile, findProject, newProjectId, deleteProjectData, addRepoDir } from '../out/desktop/src/main/chatSessions.js';
+import { parseChatSession, SESSION_ID_RE, listChatSessions, chatSessionsView, sessionFile, findProject, newProjectId, deleteProjectData, addRepoDir, saveSessionImages, sessionImageFiles } from '../out/desktop/src/main/chatSessions.js';
 import { setLocale, t } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, chatDir } from '../out/prototype/src/home.js';
 import { setMemoryText, loadMemory } from '../out/prototype/src/agentMemory.js';
@@ -120,6 +120,23 @@ assert.deepEqual([open.active, open.turns, open.title], [true, 0, t('desktop.ses
 assert.deepEqual(chatSessionsView(projects, { projectId: 'pa-0001', id: 'g0' }).chats.map((x) => x.id), ['g1'], 'same id in another scope does not keep it');
 rmSync(path.join(chatDir(null), 'g0.jsonl'));
 console.log('✓ chat:sessions: grouped by project + global chats, newest first, top N, active; empty only while open');
+
+// attached images as files: ids continue per session, resolve only within the same session, no traversal
+{
+  const png = { media_type: 'image/png', data: Buffer.from('PNG1').toString('base64') };
+  const jpg = { media_type: 'image/jpeg', data: Buffer.from('JPG2').toString('base64') };
+  assert.deepEqual(saveSessionImages(null, 's1', [png, jpg]), ['img-1', 'img-2']);
+  assert.deepEqual(saveSessionImages(null, 's1', [png]), ['img-3'], 'numbering continues');
+  assert.deepEqual(saveSessionImages(null, 's1', []), []);
+  const r = sessionImageFiles(null, 's1', ['img-2', 'img-1', 'img-2']);
+  assert.deepEqual(r.paths.map((p) => path.basename(p)), ['img-2.jpg', 'img-1.png'], 'dedup, keeps order');
+  assert.equal(readFileSync(r.paths[0], 'utf8'), 'JPG2');
+  for (const bad of [['img-9'], ['../s1.jsonl'], ['img-1/../../x']]) assert.ok('error' in sessionImageFiles(null, 's1', bad), `rejects ${bad}`);
+  assert.ok('error' in sessionImageFiles('pa-0001', 's1', ['img-1']), 'other scope cannot read this session images');
+  assert.ok('error' in sessionImageFiles(null, 's2', ['img-1']), 'other session cannot read them');
+  rmSync(path.join(chatDir(null), 's1.images'), { recursive: true });
+}
+console.log('✓ session images: saved as img-N files, resolved per session only');
 
 assert.ok('error' in sessionFile(projects, 'nope-0000', 'a1'), 'nonexistent project blocked');
 assert.ok('error' in sessionFile(projects, 42, 'a1'));

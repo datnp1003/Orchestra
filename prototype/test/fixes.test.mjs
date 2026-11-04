@@ -12,6 +12,7 @@ import { t } from '../dist/i18n/index.js';
 import { getManifest } from '../dist/manifests.js';
 import { shouldCommit } from '../dist/dispatch.js';
 import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '../dist/worktree.js';
+import { deliverImages } from '../dist/dispatch.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const guard = path.join(here, '..', 'hooks', 'guard.cjs');
@@ -147,6 +148,28 @@ test('runHeadless: abort → kill_reason aborted', async (t) => {
 test('shouldCommit: only code-writing nodes', () => {
   assert.equal(shouldCommit('implement'), true);
   for (const n of ['plan', 'verify', 'review']) assert.equal(shouldCommit(n), false);
+});
+
+test('deliverImages: copied into the worktree, git-ignored → not a changed file (scope check / diff unaffected)', (t) => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'orch img-'));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const git = (...a) => assert.equal(spawnSync('git', a, { cwd: repo }).status, 0, a.join(' '));
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 't');
+  writeFileSync(path.join(repo, 'a.txt'), 'a');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  const src = path.join(repo, '..', `src-${path.basename(repo)}.png`);
+  writeFileSync(src, 'PNGDATA');
+  t.after(() => rmSync(src, { force: true }));
+  const wt = createWorktree(repo, 't-img');
+  const d = deliverImages(wt.path, [src]);
+  assert.deepEqual(d.rel, [`.orchestra/images/${path.basename(src)}`]);
+  assert.ok(existsSync(d.abs[0]));
+  stageAll(wt.path);
+  assert.deepEqual(changedFiles(wt.path), [], 'images never show up as worker changes');
+  assert.deepEqual(deliverImages(wt.path, []), { rel: [], abs: [] });
 });
 
 test('fix on a reused worktree is merged into main', (t) => {

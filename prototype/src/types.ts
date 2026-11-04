@@ -41,6 +41,8 @@ export interface HeadlessOpts {
   resume?: string;
   /** P5.6: extra system prompt (--append-system-prompt) — for orchestrator chat */
   systemPrompt?: string;
+  /** reference images (absolute paths inside the worktree) — CLIs with an image flag attach them to the prompt */
+  images?: string[];
 }
 
 /** Result of mapping 1 raw JSONL line */

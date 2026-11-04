@@ -55,6 +55,7 @@ test('images: sent and saved as image blocks after the reminder, before the text
   assert.deepEqual(await run({ userText: 'what is this', reminder: 'R', images: [img] }), [{ type: 'text', text: 'R' }, { type: 'image', source: img }, { type: 'text', text: 'what is this' }]);
   assert.deepEqual(await run({ userText: '', images: [img] }), [{ type: 'image', source: img }]);
   assert.equal(await run({ userText: 'plain' }), 'plain', 'no reminder/images → plain string');
+  assert.deepEqual(await run({ userText: 'x', reminder: ['A', 'B'] }), [{ type: 'text', text: 'A' }, { type: 'text', text: 'B' }, { type: 'text', text: 'x' }], 'several reminders in order');
 });
 
 test('reminder: sent and saved in the SAME user message, before the user text', async () => {

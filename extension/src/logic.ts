@@ -181,7 +181,7 @@ export function trackOverride(
 
 export async function dispatchTracked(
   repo: string,
-  o: { node: 'implement' | 'plan'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skills?: string[]; projectId?: string | null; signal?: AbortSignal; router?: RouterInfo; promptOverride?: string },
+  o: { node: 'implement' | 'plan'; role: string; goal: string; scope: string[]; acceptance: string[]; pin?: string; model?: string; onEvent?: (e: { t: string; [k: string]: unknown }) => void; hooksEnabled?: boolean; skills?: string[]; projectId?: string | null; signal?: AbortSignal; router?: RouterInfo; promptOverride?: string; images?: string[] },
 ): Promise<{ autoPick?: string; result: Awaited<ReturnType<typeof import('../../prototype/src/dispatch.js').dispatch>>; override: string }> {
   const pol = loadPolicy(repo);
   const stats = buildFleetStats(path.join(repo, '.orchestra', 'tasks'), pol.policy?.routing?.decay_days ?? 30);
@@ -190,7 +190,7 @@ export async function dispatchTracked(
   const result = await dispatch({
     repo, node: o.node, role: o.role, goal: o.goal, scope: o.scope,
     constraints: [], acceptance: o.acceptance, workerPin: o.pin, model: o.model,
-    hooksEnabled: o.hooksEnabled, skills: o.skills, projectId: o.projectId, signal: o.signal, router: o.router, promptOverride: o.promptOverride,
+    hooksEnabled: o.hooksEnabled, skills: o.skills, projectId: o.projectId, signal: o.signal, router: o.router, promptOverride: o.promptOverride, images: o.images,
     onEvent: o.onEvent as ((e: { t: string; [k: string]: unknown }) => void) | undefined,
   });
   const tr = trackOverride(repo, { autoPick: auto.pick, pin: o.pin, taskId: result.taskId, ok: result.ok });
@@ -452,7 +452,7 @@ export const BRAIN_TOOLS: { name: string; description: string; input_schema: Rec
   { name: 'git_diff', description: 'git diff (stat + content, truncated) against an optional ref (default: working tree vs HEAD). ref = task id (t-…) → same as task_diff.', input_schema: obj({ ref: { type: 'string' } }) },
   { name: 'task_diff', description: 'Show a task result: worker, changed files, scope check, outcome + patch. Call before fleet_merge.', input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'fleet_status', description: 'Fleet worker status + 5 most recent tasks.', input_schema: obj({}) },
-  { name: 'fleet_dispatch', description: 'Assign one task to a worker (own worktree, guarded + scope check). scope is REQUIRED. Coding by default; readonly:true runs it read-only and returns the worker answer.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr, readonly: { type: 'boolean', description: 'true for survey/list/explain/review tasks that must not modify files' }, skills: skillsArr }, ['goal', 'scope']) },
+  { name: 'fleet_dispatch', description: 'Assign one task to a worker (own worktree, guarded + scope check). scope is REQUIRED. Coding by default; readonly:true runs it read-only and returns the worker answer.', input_schema: obj({ goal: { type: 'string' }, scope: strArr, worker: { type: 'string', description: 'worker id, or empty = auto by policy' }, model: { type: 'string' }, acceptance: strArr, readonly: { type: 'boolean', description: 'true for survey/list/explain/review tasks that must not modify files' }, skills: skillsArr, images: { ...strArr, description: 'ids of images the user attached (img-N, named in the conversation) that the worker must see — mockups, screenshots' } }, ['goal', 'scope']) },
   { name: 'fleet_pipeline', description: 'Run a pipeline template (feature-dev | hotfix): plan → implement → verify → review → merge.', input_schema: obj({ template: { type: 'string' }, goal: { type: 'string' }, scope: strArr, model: { type: 'string' }, skills: skillsArr }, ['template', 'goal', 'scope']) },
   { name: 'fleet_merge', description: "Merge a task's branch into main (REQUIRES user approval). The system checks the task + runs tests before asking.", input_schema: obj({ taskId: { type: 'string' } }, ['taskId']) },
   { name: 'policy_promote', description: 'Move a worker to #1 for a role in the policy (REQUIRES user approval).', input_schema: obj({ role: { type: 'string' }, cli: { type: 'string' } }, ['role', 'cli']) },
@@ -511,6 +511,8 @@ export interface BrainToolDeps {
   router?: RouterInfo;
   /** test seam — defaults to dispatchTracked */
   dispatch?: typeof dispatchTracked;
+  /** image ids the user attached in this chat → absolute file paths; missing = chat has no image store */
+  imageFiles?: (ids: string[]) => { paths: string[] } | { error: string };
 }
 type ToolOut = { ok: boolean; content: string };
 
@@ -705,6 +707,9 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
         if (i.readonly !== undefined && typeof i.readonly !== 'boolean') return bad('readonly must be a boolean');
         const skills = checkSkills(i.skills, deps.projectId);
         if (typeof skills === 'string') return bad(skills);
+        if (i.images !== undefined && !isStrArr(i.images)) return bad('images must be an array of image ids');
+        const imgs = i.images?.length ? (deps.imageFiles ? deps.imageFiles(i.images) : { error: 'no attached images in this chat' }) : { paths: [] };
+        if ('error' in imgs) return bad(imgs.error);
         const ro = i.readonly === true;
         const acceptance = (i.acceptance as string[] | undefined) ?? [];
         const scope = i.scope;
@@ -719,7 +724,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
             : undefined,
           pin: isStr(i.worker) && i.worker !== 'auto' ? i.worker : undefined,
           model: isStr(i.model) ? i.model : undefined,
-          hooksEnabled: deps.hooksEnabled ?? true, skills, projectId: deps.projectId, signal: deps.signal, router: deps.router,
+          hooksEnabled: deps.hooksEnabled ?? true, skills, projectId: deps.projectId, signal: deps.signal, router: deps.router, images: imgs.paths.length ? imgs.paths : undefined,
           onEvent: deps.onLog
             ? (e) => deps.onLog!(e.t === 'tool_use' ? `[tool_use] ${e.tool} ${e.target}` : e.t === 'message' ? `[message] ${e.text}` : `[${e.t}] ${JSON.stringify(e).slice(0, 160)}`)
             : undefined,

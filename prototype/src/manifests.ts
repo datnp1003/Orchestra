@@ -293,6 +293,8 @@ const codex: Manifest = {
   headless: (prompt: string, opts: HeadlessOpts): SpawnSpec => {
     const args = [
       'exec',
+      // --image takes several values: keep it right after exec so the next flag ends the list (never eats the prompt)
+      ...(opts.images ?? []).flatMap((p) => ['--image', p]),
       '--json',
       '--skip-git-repo-check',
       '--sandbox',

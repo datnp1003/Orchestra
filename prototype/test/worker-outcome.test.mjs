@@ -18,6 +18,13 @@ test('codex sandbox: worktree-write win32 → danger-full-access, linux → work
   assert.equal(args[args.indexOf('--sandbox') + 1], 'read-only');
 });
 
+test('codex images: --image right after exec (a flag follows → the list never swallows the prompt), prompt last', () => {
+  const args = getManifest('codex').headless('PROMPT', { sandbox: 'read-only', images: ['C:/w/.orchestra/images/img-1.png', 'C:/w/.orchestra/images/img-2.jpg'] }).args;
+  assert.deepEqual(args.slice(0, 6), ['exec', '--image', 'C:/w/.orchestra/images/img-1.png', '--image', 'C:/w/.orchestra/images/img-2.jpg', '--json']);
+  assert.equal(args.at(-1), 'PROMPT');
+  assert.ok(!getManifest('codex').headless('P', { sandbox: 'read-only' }).args.includes('--image'));
+});
+
 test('buildFleetStats: implement with no file changes / outcome no_change = failure', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'orch-stats-'));
   const rec = (id, extra) =>
