@@ -70,37 +70,85 @@ function modelOptions(worker, cur, defLabel) {
   return `<option value="">${esc(defLabel)}</option>` + list.map((m) =>
     `<option value="${esc(m.id)}" title="${esc(m.reason)}" ${m.id === cur ? 'selected' : ''} ${m.ok ? '' : 'disabled'}>${esc(m.id)}</option>`).join('');
 }
-// search box filters a model select's <option>s (hundreds of router models): substring, case-insensitive;
-// selected option always shown; Enter = pick first match. Select re-rendered (innerHTML) → observer re-filters.
+// searchable model dropdown (hundreds of router models): the native <select> stays the source of truth, hidden —
+// callers keep using .value / innerHTML / 'change'. A button shows the pick; its popover = search box + filtered list.
+// ↑/↓ move, Enter picks, Esc closes. Select re-rendered (innerHTML) → observer refreshes the label.
 function modelSearch(sel) {
   if (!sel || sel.dataset.search) return;
   sel.dataset.search = '1';
-  const box = document.createElement('input');
-  box.type = 'search';
-  box.className = 'model-search';
-  box.placeholder = t('desktop.model.search');
-  box.setAttribute('aria-label', t('desktop.model.search'));
-  sel.before(box);
-  const apply = () => {
-    const q = box.value.trim().toLowerCase();
-    let n = 0;
-    for (const o of sel.options) {
-      const hit = !q || !o.value || o.selected || o.value.toLowerCase().includes(q);
-      o.hidden = !hit;
-      if (hit && o.value) n++;
-    }
-    box.title = q ? t('desktop.model.matches', { n }) : '';
+  sel.hidden = true;
+  const wrap = document.createElement('span');
+  wrap.className = 'msel';
+  wrap.innerHTML = '<button type="button" class="secondary msel-btn" aria-haspopup="listbox" aria-expanded="false"></button>' +
+    '<div class="msel-pop" hidden><input type="search" class="msel-q" autocomplete="off" /><div class="msel-list" role="listbox"></div></div>';
+  sel.after(wrap);
+  const btn = wrap.querySelector('.msel-btn');
+  const pop = wrap.querySelector('.msel-pop');
+  const q = wrap.querySelector('.msel-q');
+  const list = wrap.querySelector('.msel-list');
+  q.placeholder = t('desktop.model.search');
+  q.setAttribute('aria-label', t('desktop.model.search'));
+  let items = [];
+  let active = 0;
+  const label = () => {
+    const o = sel.selectedOptions[0];
+    btn.innerHTML = `<span class="msel-txt">${esc(o ? o.text : '')}</span><span aria-hidden="true">▾</span>`;
+    btn.title = o?.value ? o.text : sel.title;
   };
-  box.addEventListener('input', apply);
-  box.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const first = [...sel.options].find((o) => o.value && !o.hidden && !o.disabled && !o.selected);
-    if (!first) return;
-    sel.value = first.value;
+  const draw = () => {
+    const s = q.value.trim().toLowerCase();
+    items = [...sel.options].filter((o) => !s || o.text.toLowerCase().includes(s));
+    active = Math.max(0, items.findIndex((o) => o.selected && !o.disabled));
+    list.innerHTML = items.map((o, i) =>
+      `<div class="msel-item${i === active ? ' active' : ''}" role="option" data-i="${i}" aria-selected="${o.selected}" aria-disabled="${o.disabled}" title="${esc(o.title || o.text)}">${esc(o.text)}</div>`).join('') ||
+      `<div class="msel-empty">${esc(t('desktop.model.matches', { n: 0 }))}</div>`;
+    q.title = s ? t('desktop.model.matches', { n: items.length }) : '';
+  };
+  const move = (d) => {
+    if (!items.length) return;
+    active = (active + d + items.length) % items.length;
+    list.querySelectorAll('.msel-item').forEach((el, i) => el.classList.toggle('active', i === active));
+    list.children[active]?.scrollIntoView({ block: 'nearest' });
+  };
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const open = () => {
+    q.value = '';
+    draw();
+    // open toward the larger side (composer sits at the bottom once chat has messages); list never overflows the window
+    const r = btn.getBoundingClientRect();
+    const below = innerHeight - r.bottom;
+    const up = below < 240 && r.top > below;
+    wrap.classList.toggle('up', up);
+    list.style.maxHeight = Math.max(120, Math.min(280, (up ? r.top : below) - 64)) + 'px';
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    q.focus();
+    list.children[active]?.scrollIntoView({ block: 'nearest' });
+  };
+  const pick = (i) => {
+    const o = items[i];
+    if (!o || o.disabled) return;
+    close();
+    btn.focus();
+    if (o.selected) return;
+    sel.value = o.value;
     sel.dispatchEvent(new Event('change', { bubbles: true }));
+    label();
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); pop.hidden ? open() : close(); });
+  pop.addEventListener('click', (e) => e.stopPropagation());
+  list.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the search box
+  list.addEventListener('click', (e) => { const it = e.target.closest('.msel-item'); if (it) pick(+it.dataset.i); });
+  q.addEventListener('input', draw);
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); move(e.key === 'ArrowDown' ? 1 : -1); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(active); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); }
+    else if (e.key === 'Tab') close();
   });
-  new MutationObserver(apply).observe(sel, { childList: true });
+  sel.addEventListener('change', label);
+  new MutationObserver(label).observe(sel, { childList: true, subtree: true, attributes: true });
+  label();
 }
 
 // open session: projectId null = chat outside a project (global memory only); started = has messages (no longer the empty screen)
@@ -138,7 +186,10 @@ $('#cbMode').addEventListener('click', (e) => {
   $('#modeMenu').hidden = !$('#modeMenu').hidden;
   if (!$('#modeMenu').hidden) $('#modeMenu [aria-checked="true"]')?.focus();
 });
-document.addEventListener('click', () => { $('#modeMenu').hidden = true; });
+document.addEventListener('click', () => {
+  $('#modeMenu').hidden = true;
+  for (const w of document.querySelectorAll('.msel')) { w.querySelector('.msel-pop').hidden = true; w.querySelector('.msel-btn').setAttribute('aria-expanded', 'false'); }
+});
 $('#modeMenu').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { $('#modeMenu').hidden = true; $('#cbMode').focus(); }
 });

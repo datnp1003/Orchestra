@@ -233,19 +233,36 @@ h3 + .row, label:not(:has(input)) + .row { margin-top: 0; }
   padding: 9px 12px; transition: border-color 0.12s, box-shadow 0.12s;
 }
 #composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.composer-caret { color: var(--accent); font-family: var(--mono); font-size: 15px; font-weight: 700; padding-bottom: 2px; }
-#chatInput { background: transparent; border: none; padding: 2px 0; font-size: 13px; max-height: 140px; }
+.composer-caret { color: var(--accent); font-family: var(--mono); font-size: 15px; font-weight: 700; line-height: 1.2; padding-top: 2px; align-self: flex-start; } /* sits on the first text line, like a prompt */
+#chatInput { background: transparent; border: none; padding: 2px 0; font-size: 13px; max-height: 140px; resize: none; } /* auto-grows in app.js — no drag grip */
 #chatInput:focus { border: none; }
 #chatSend {
   margin: 0; padding: 6px 9px; border-radius: 9px; display: flex; align-items: center;
   background: #0e639c; color: #fff;
 }
-.composer-hints { display: flex; gap: 16px; padding: 6px 6px 0; font-size: 10.5px; color: var(--faint); }
+.composer-hints { display: flex; align-items: center; gap: 16px; padding: 6px 6px 0; font-size: 10.5px; color: var(--faint); white-space: nowrap; }
 .composer-hints b { color: var(--dim); font-weight: 600; }
-#composerBrain { display: flex; gap: 6px; margin-left: auto; }
-#composerBrain select, #composerBrain button { width: auto; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
-.model-search { margin-bottom: 4px; }
-#composerBrain .model-search { width: 150px; margin: 0; padding: 1px 6px; font-size: 10.5px; border-radius: 6px; }
+#composerBrain { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; }
+#composerBrain select, #composerBrain button { width: auto; margin: 0; padding: 2px 8px; font-size: 10.5px; border-radius: 6px; white-space: nowrap; flex: none; }
+.msel { position: relative; display: flex; min-width: 0; }
+button.msel-btn { display: flex; font-family: var(--sans); align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; text-align: left; font-weight: 400; }
+.msel-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#composerBrain .msel { flex: 0 1 280px; }
+#composerBrain .msel .msel-btn { width: 100%; flex: 1 1 auto; }
+.msel-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 100%; width: max-content; max-width: min(460px, 90vw);
+  background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6); display: flex; flex-direction: column; gap: 4px;
+}
+.msel.up .msel-pop { top: auto; bottom: calc(100% + 6px); }
+#composerBrain .msel-pop { left: auto; right: 0; }
+.msel-q { background: var(--panel); padding: 5px 8px; font-size: 12px; }
+.msel-list { max-height: 280px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.msel-item { flex: none; line-height: 1.4; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-family: var(--mono); color: var(--fg); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msel-item.active { background: var(--accent-soft); color: var(--accent-hi); }
+.msel-item[aria-selected="true"] { color: var(--accent-hi); }
+.msel-item[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
+.msel-empty { padding: 5px 8px; font-size: 12px; color: var(--faint); }
 
 /* ---------- permission mode popover ---------- */
 .mode-wrap { position: relative; display: flex; }
@@ -280,8 +297,8 @@ h3 + .row, label:not(:has(input)) + .row { margin-top: 0; }
 #main.chat-empty #page { display: none; }
 #main.chat-empty #composerWrap { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; padding-bottom: 12vh; }
 #main.chat-empty #composer, #main.chat-empty .composer-hints { width: 100%; max-width: 720px; }
-#main.chat-empty #composer { padding: 14px 16px; }
-#main.chat-empty #chatInput { min-height: 48px; }
+#main.chat-empty #composer { padding: 10px 14px; }
+#main.chat-empty #chatInput { min-height: 38px; } /* 2 lines */
 #main.chat-empty .empty-only { display: flex; }
 #emptyHero { flex-direction: column; align-items: center; gap: 8px; }
 /* large transparent hero, fades toward the composer (ZCode-style); negative margin tucks the faded tail behind the title */

@@ -139,6 +139,13 @@ console.log(`✓ i18n: no hardcoded Vietnamese strings (app.js, index.html, main
   console.log('✓ inline approval card (no showMessageBox), mode selector, empty state, i18n keys complete');
 }
 
+// model picker = one searchable dropdown (search lives inside the popover, not a separate box beside the select)
+{
+  assert.ok(!js.includes("className = 'model-search'") && js.includes("sel.hidden = true") && js.includes('class="msel-q"') && js.includes("sel.dispatchEvent(new Event('change'"), 'modelSearch: hidden native select + popover search, still fires change');
+  for (const id of ['cbModel', 'dModel', 'pModel', 'rDefault']) assert.ok(js.includes(`modelSearch($('#${id}'))`), `searchable dropdown on #${id}`);
+  console.log('✓ model picker: searchable dropdown (no separate search box)');
+}
+
 // fleet: Settings/Dashboard render immediately, no await on fleet probe; fleet:changed patches; Refresh button → fleet:refresh
 {
   const fn = (name) => js.slice(js.indexOf(`async function ${name}`), js.indexOf('\n}\n', js.indexOf(`async function ${name}`)));
