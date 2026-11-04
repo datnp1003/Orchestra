@@ -178,3 +178,7 @@ cd desktop && node test/e2e-headless.mjs   # gọi model thật (~$1)
   [Desktop E2E gate](docs/desktop-e2e-gate.md) · [P7 launch kit](docs/p7-launch-kit.md)
 
 Tài liệu trong `docs/` viết bằng tiếng Anh (trừ QUICKSTART có bản tiếng Việt).
+
+## Giấy phép
+
+[MIT](LICENSE)
