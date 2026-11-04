@@ -334,7 +334,6 @@ async function addImages(files) {
       ATTACH.push({ url: URL.createObjectURL(f), mediaType: f.type, data: await toBase64(f) });
       continue;
     }
-    if (/\.(doc|xls|ppt)$/i.test(f.name)) { alert(t('desktop.chat.err.fileLegacy', { name: f.name })); continue; }
     const cap = /\.zip$/i.test(f.name) ? MAX_ZIP_BYTES : MAX_FILE_BYTES;
     if (f.size > cap) { alert(t('desktop.chat.err.fileSize', { name: f.name, mb: cap / 1024 / 1024 })); continue; }
     if (ATTACH.filter((a) => !a.url).length >= MAX_FILES) { alert(t('desktop.chat.err.fileCount', { n: MAX_FILES })); continue; }

@@ -61,7 +61,6 @@ export const en = {
   'desktop.chat.err.file': 'cannot attach "{name}" — bad file name or data',
   'desktop.chat.err.fileSize': '"{name}" is too large (max {mb} MB)',
   'desktop.chat.err.fileCount': 'at most {n} files per message',
-  'desktop.chat.err.fileLegacy': '"{name}" is an old binary Office format — open it and Save As .docx / .xlsx / .pptx, then attach that',
   'desktop.chat.err.busy': 'Orchestra is still on the previous turn — wait for it to finish',
   'desktop.chat.err.busyOpen': 'Orchestra is still on the previous turn — wait for it to finish before opening another session',
   'desktop.chat.err.noModel': 'pick an Orchestra model in the composer',

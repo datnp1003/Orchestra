@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { t, type Locale } from '../../../prototype/src/i18n/index.js';
 import { PROJECT_ID_RE } from '../../../prototype/src/home.js';
 import { isConversationMode, isPermissionMode, type ConversationMode, type PermissionMode } from '../../../prototype/src/permissions.js';
-import { LEGACY_OFFICE_RE, safeEntryPath } from '../../../prototype/src/attachments.js';
+import { safeEntryPath } from '../../../prototype/src/attachments.js';
 
 export const IPC = {
   APP_INFO: 'app:info',
@@ -191,7 +191,7 @@ export function validateImages(raw: unknown): { images: { type: 'base64'; media_
 export const MAX_FILES = 5;
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 export const MAX_ZIP_BYTES = 50 * 1024 * 1024;
-/** [{ name, data(base64) }] → { name (bare, safe), buf }; anything off → error naming the file */
+/** [{ name, data(base64) }] → { name (bare, safe), buf }; anything off → error naming the file. Any type is accepted: unreadable ones still reach workers */
 export function validateFiles(raw: unknown): { files: { name: string; buf: Buffer }[] } | { error: string } {
   if (raw === undefined || raw === null) return { files: [] };
   if (!Array.isArray(raw)) return { error: t('desktop.chat.err.file', { name: '?' }) };
@@ -201,7 +201,6 @@ export function validateFiles(raw: unknown): { files: { name: string; buf: Buffe
     const name = typeof x?.name === 'string' ? x.name.split(/[\\/]/).pop()! : '';
     const data = x?.data;
     if (!name || safeEntryPath(name) !== name || name.length > 200 || name === '.meta.json' || typeof data !== 'string' || data.length % 4 !== 0 || (data && !B64_RE.test(data))) return { error: t('desktop.chat.err.file', { name: name || '?' }) };
-    if (LEGACY_OFFICE_RE.test(name)) return { error: t('desktop.chat.err.fileLegacy', { name }) };
     const cap = /\.zip$/i.test(name) ? MAX_ZIP_BYTES : MAX_FILE_BYTES;
     if ((data.length / 4) * 3 > cap + 2) return { error: t('desktop.chat.err.fileSize', { name, mb: cap / 1024 / 1024 }) };
     files.push({ name, buf: Buffer.from(data, 'base64') });

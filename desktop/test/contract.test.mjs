@@ -193,7 +193,7 @@ assert.ok(xml.includes('a &lt;b&gt; &amp; &quot;c&quot;') && !xml.includes('line
   assert.deepEqual(ok.files.map((x) => [x.name, x.buf.toString()]), [['Báo cáo.docx', 'hi'], ['a.txt', 'hi'], ['empty.txt', '']], 'path stripped to the bare name');
   for (const bad of ['x', [f('')], [f('..')], [f('a/..')], [f('CON')], [f('a:b.txt')], [f('.meta.json')], [f('a.txt', 'not base64!')], [f('a.txt', 'abc')], [{ name: 1, data: 'aGk=' }], [null]])
     assert.ok('error' in validateFiles(bad), `rejects ${JSON.stringify(bad).slice(0, 40)}`);
-  assert.match(validateFiles([f('old.doc')]).error, /Save As|old binary Office/);
+  assert.deepEqual(validateFiles([f('old.doc'), f('app.exe')]).files.map((x) => x.name), ['old.doc', 'app.exe'], 'any type accepted — unreadable ones still reach workers');
   assert.ok('error' in validateFiles(Array(MAX_FILES + 1).fill(f('a.txt'))), 'count cap');
   const b64 = (bytes) => 'A'.repeat(Math.ceil(bytes / 3) * 4);
   assert.ok('error' in validateFiles([f('a.pdf', b64(MAX_FILE_BYTES + 3))]), 'file size cap');

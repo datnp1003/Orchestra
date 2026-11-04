@@ -6,7 +6,7 @@ import path from 'node:path';
 import { safeAssistantMsg, type Block, type Msg } from '../../../prototype/src/brain.js';
 import { chatDir, projectDir } from '../../../prototype/src/home.js';
 import { isSystemReminder } from '../../../prototype/src/permissions.js';
-import { attachmentName, extractText, isAttachmentText, readZip, safeEntryPath, sliceText, decodeText, PDF_INLINE_BYTES, type AttachmentInfo } from '../../../prototype/src/attachments.js';
+import { attachmentName, extractText, isAttachmentText, readZip, safeEntryPath, sliceText, decodeText, LEGACY_OFFICE_RE, PDF_INLINE_BYTES, type AttachmentInfo } from '../../../prototype/src/attachments.js';
 import { t } from '../../../prototype/src/i18n/index.js';
 import type { Project } from './contract.js';
 
@@ -67,21 +67,38 @@ function unzipTo(buf: Buffer, dest: string): { tree: { path: string; size: numbe
   }
   return { tree, skipped };
 }
+/** legacy .doc/.xls/.ppt → OOXML file in dir (installed office suite), or null */
+export type LegacyConverter = (src: string, dir: string) => Promise<{ file: string; via: string } | null>;
 /** save + extract; pdfBudget = bytes still allowed inline in this conversation (PDFs are resent every turn) */
-export function saveSessionFiles(projectId: string | null, sessionId: string, files: { name: string; buf: Buffer }[], pdfBudget = PDF_INLINE_BYTES): AttachmentInfo[] {
+export async function saveSessionFiles(projectId: string | null, sessionId: string, files: { name: string; buf: Buffer }[], pdfBudget = PDF_INLINE_BYTES, convert?: LegacyConverter): Promise<AttachmentInfo[]> {
   if (!files.length) return [];
   const root = filesDir(projectId, sessionId);
   mkdirSync(root, { recursive: true });
   let n = readdirSync(root).filter((f) => FILE_ID_RE.test(f)).length;
-  return files.map(({ name, buf }) => {
+  const out: AttachmentInfo[] = [];
+  for (const { name, buf } of files) {
     const id = `file-${++n}`;
     const dir = path.join(root, id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, name), buf);
     const info: AttachmentInfo = { id, name, kind: 'binary', size: buf.length };
     const meta: FileMeta = { name, kind: 'binary', size: buf.length };
+    out.push(info);
+    // legacy binary Office: read through the converted copy (kept next to the original for workers)
+    let src = { name, buf };
+    if (LEGACY_OFFICE_RE.test(name)) {
+      const c = convert ? await convert(path.join(dir, name), dir).catch(() => null) : null;
+      if (c) {
+        src = { name: path.basename(c.file), buf: readFileSync(c.file) };
+        info.note = `converted from .${name.split('.').pop()} by ${c.via} to ${src.name}`;
+      } else {
+        info.note = 'legacy binary Office file — no LibreOffice / Microsoft Office available to convert it here';
+        writeFileSync(path.join(dir, '.meta.json'), JSON.stringify(meta), 'utf8');
+        continue;
+      }
+    }
     try {
-      const r = extractText(name, buf);
+      const r = extractText(src.name, src.buf);
       info.kind = meta.kind = r.kind;
       info.text = r.text;
       if (OFFICE.has(r.kind)) writeFileSync(path.join(dir, `${name}.txt`), r.text ?? '', 'utf8');
@@ -96,12 +113,12 @@ export function saveSessionFiles(projectId: string | null, sessionId: string, fi
         pdfBudget -= buf.length;
       }
     } catch (err) {
-      info.kind = meta.kind = /\.(docx|xlsx|pptx|zip)$/i.test(name) ? (name.split('.').pop()!.toLowerCase() as AttachmentInfo['kind']) : info.kind;
+      info.kind = meta.kind = /\.(docx|xlsx|pptx|zip)$/i.test(src.name) ? (src.name.split('.').pop()!.toLowerCase() as AttachmentInfo['kind']) : info.kind;
       info.error = err instanceof Error ? err.message : String(err);
     }
     writeFileSync(path.join(dir, '.meta.json'), JSON.stringify(meta), 'utf8');
-    return info;
-  });
+  }
+  return out;
 }
 const readMeta = (projectId: string | null, sessionId: string, id: string): FileMeta | null => {
   if (!FILE_ID_RE.test(id)) return null;

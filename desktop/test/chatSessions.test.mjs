@@ -159,7 +159,7 @@ console.log('✓ session images: saved as img-N files, resolved per session only
   const src = zip({ 'app/main.ts': 'console.log(1)', '../evil.txt': 'x', 'C:/abs.txt': 'x', 'app/CON': 'x', 'notes.md': 'y'.repeat(30000) });
   assert.equal(hasSessionFiles(null, 'f1'), false);
   const big = Buffer.alloc(11 * 1024 * 1024, 1);
-  const infos = saveSessionFiles(null, 'f1', [
+  const infos = await saveSessionFiles(null, 'f1', [
     { name: 'spec.docx', buf: docx }, { name: 'src.zip', buf: src }, { name: 'a.pdf', buf: Buffer.from('%PDF-1') }, { name: 'big.pdf', buf: big },
     { name: 'bad.xlsx', buf: Buffer.from('not a zip') }, { name: 'log.txt', buf: Buffer.from('dòng 1') },
   ]);
@@ -171,7 +171,19 @@ console.log('✓ session images: saved as img-N files, resolved per session only
   assert.equal(infos[2].pdfBase64, Buffer.from('%PDF-1').toString('base64'));
   assert.equal(infos[3].pdfBase64, undefined, 'PDF over the inline cap → workers only');
   assert.match(infos[4].error, /not a zip/);
-  assert.equal(saveSessionFiles(null, 'f1', [{ name: 'c.pdf', buf: Buffer.from('%PDF') }], 2)[0].pdfBase64, undefined, 'conversation PDF budget used up');
+  assert.equal((await saveSessionFiles(null, 'f1', [{ name: 'c.pdf', buf: Buffer.from('%PDF') }], 2))[0].pdfBase64, undefined, 'conversation PDF budget used up');
+  // legacy Office: converted copy read like a docx; no converter / failure → stored binary for workers, never an error
+  const fake = async (src, d) => { const out = path.join(d, path.basename(src).replace(/\.doc$/, '.docx')); writeFileSync(out, docx); return { file: out, via: 'TestOffice' }; };
+  const [old] = await saveSessionFiles(null, 'f1', [{ name: 'cu.doc', buf: Buffer.from('BINARY') }], 0, fake);
+  assert.deepEqual([old.kind, old.text, old.note], ['docx', 'Yêu cầu: API trả 200', 'converted from .doc by TestOffice to cu.docx']);
+  assert.equal(readSessionFile(null, 'f1', old.id, undefined, 0).content, 'Yêu cầu: API trả 200', 'attachment_read uses the converted text');
+  assert.ok(existsSync(path.join(chatDir(null), 'f1.files', old.id, 'cu.doc')) && existsSync(path.join(chatDir(null), 'f1.files', old.id, 'cu.docx')), 'original + converted kept for workers');
+  for (const conv of [undefined, async () => null, async () => { throw new Error('COM'); }]) {
+    const [x] = await saveSessionFiles(null, 'f1', [{ name: 'b.xls', buf: Buffer.from('BIN') }], 0, conv);
+    assert.equal(x.kind, 'binary');
+    assert.match(x.note, /no LibreOffice \/ Microsoft Office/);
+    assert.match(attachmentBlocks(x)[0].text, /no LibreOffice[\s\S]*binary file — not readable as text; hand it to a worker/);
+  }
   assert.equal(hasSessionFiles(null, 'f1'), true);
   const dir = path.join(chatDir(null), 'f1.files');
   assert.equal(readFileSync(path.join(dir, 'file-1', 'spec.docx.txt'), 'utf8'), 'Yêu cầu: API trả 200', 'extracted text kept for workers');

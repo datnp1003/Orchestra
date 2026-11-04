@@ -62,7 +62,6 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.chat.err.file': 'không đính kèm được "{name}" — tên file hoặc dữ liệu không hợp lệ',
   'desktop.chat.err.fileSize': '"{name}" quá lớn (tối đa {mb} MB)',
   'desktop.chat.err.fileCount': 'tối đa {n} file mỗi tin nhắn',
-  'desktop.chat.err.fileLegacy': '"{name}" là định dạng Office cũ — mở file rồi Save As sang .docx / .xlsx / .pptx rồi đính kèm lại',
   'desktop.chat.err.busy': 'Orchestra đang xử lý lượt trước — chờ xong rồi nhắn tiếp',
   'desktop.chat.err.busyOpen': 'Orchestra đang xử lý lượt trước — chờ xong rồi mở session khác',
   'desktop.chat.err.noModel': 'chọn Model Orchestra ở composer',

@@ -185,6 +185,8 @@ export interface AttachmentInfo {
   skipped?: number;
   /** extraction failed — the original is still stored for workers */
   error?: string;
+  /** one line for the brain, e.g. "converted from .doc by Microsoft Office" */
+  note?: string;
 }
 export const fmtSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const OPEN_RE = /^<attachment id="(file-\d+)" name="([^"]*)"/;
@@ -211,6 +213,7 @@ export function attachmentBlocks(a: AttachmentInfo): Block[] {
   } else {
     body = '(binary file — not readable as text; hand it to a worker via fleet_dispatch.files if needed)';
   }
+  if (a.note) body = `(${a.note})\n${body}`;
   const doc: Block[] = a.kind === 'pdf' && a.pdfBase64 ? [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: a.pdfBase64 }, title: a.name }] : [];
   return [...doc, { type: 'text', text: `${head}\n${body}\n</attachment>` }];
 }
