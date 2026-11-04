@@ -117,7 +117,7 @@ function modelSearch(sel) {
     // open toward the larger side (composer sits at the bottom once chat has messages); list never overflows the window
     const r = btn.getBoundingClientRect();
     const below = innerHeight - r.bottom;
-    const up = below < 240 && r.top > below;
+    const up = below < 320 && r.top > below;
     wrap.classList.toggle('up', up);
     list.style.maxHeight = Math.max(120, Math.min(280, (up ? r.top : below) - 64)) + 'px';
     pop.hidden = false;

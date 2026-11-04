@@ -55,23 +55,29 @@
           <div id="emptyCtx" class="empty-ctx"></div>
         </div>
         <div id="composer">
-          <span class="composer-caret">›</span>
-          <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>
-          <button id="chatStop" class="secondary" data-i18n="desktop.composer.stop" data-i18n-title="desktop.composer.stopTitle" hidden></button>
-          <button id="chatSend" data-i18n-title="desktop.composer.sendTitle">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
-          </button>
+          <div class="composer-main">
+            <span class="composer-caret">›</span>
+            <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>
+          </div>
+          <!-- per-message settings live inside the box (ChatGPT/Claude style): mode + model left, stop/send right -->
+          <div id="composerBar">
+            <span class="mode-wrap">
+              <button id="cbMode" class="secondary" data-i18n-title="desktop.mode.title" aria-haspopup="true"></button>
+              <div id="modeMenu" class="mode-menu" role="menu" hidden></div>
+            </span>
+            <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
+            <span class="bar-gap"></span>
+            <button id="chatStop" class="secondary" data-i18n="desktop.composer.stop" data-i18n-title="desktop.composer.stopTitle" hidden></button>
+            <button id="chatSend" data-i18n-title="desktop.composer.sendTitle">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+            </button>
+          </div>
         </div>
         <div class="composer-hints">
           <span><b>Enter</b> <span data-i18n="desktop.composer.hintSend"></span></span>
           <span><b>Shift+Enter</b> <span data-i18n="desktop.composer.hintNewline"></span></span>
           <span id="composerBrain">
             <button id="cbNew" class="secondary" data-i18n="desktop.composer.newChat" data-i18n-title="desktop.newChat.title"></button>
-            <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
-            <span class="mode-wrap">
-              <button id="cbMode" class="secondary" data-i18n-title="desktop.mode.title" aria-haspopup="true"></button>
-              <div id="modeMenu" class="mode-menu" role="menu" hidden></div>
-            </span>
           </span>
         </div>
         <div id="emptyChips" class="empty-only">
