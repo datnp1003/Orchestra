@@ -44,6 +44,15 @@ test('tool_use → tool_result sent back → end_turn', async () => {
   assert.ok(!JSON.stringify(r.history).includes(KEY));
 });
 
+test('reminder: sent and saved in the SAME user message, before the user text', async () => {
+  const { fn, calls } = fakeFetch([{ body: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'plan' }] } }]);
+  const reminder = '<system-reminder>\nPlan mode is active.\n</system-reminder>';
+  const r = await runBrainTurn({ baseUrl: 'https://gw.test/', apiKey: KEY, history: [], userText: 'add X', reminder, model: 'm', system: 's', tools: TOOLS, execTool: async () => ({ ok: true, content: '' }), fetchImpl: fn });
+  const want = { role: 'user', content: [{ type: 'text', text: reminder }, { type: 'text', text: 'add X' }] };
+  assert.deepEqual(calls[0].body.messages, [want]);
+  assert.deepEqual(r.history[0], want);
+});
+
 test('maxTurns cap', async () => {
   const { fn, calls } = fakeFetch([toolUse('tu_x')]);
   const r = await runBrainTurn({

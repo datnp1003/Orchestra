@@ -238,7 +238,7 @@ h3 + .row, label:not(:has(input)) + .row { margin-top: 0; }
 #composerBar { display: flex; align-items: center; gap: 4px; margin: 0 -4px -2px; min-width: 0; }
 #composerBar .bar-gap { flex: 1; }
 /* ghost controls inside the box — the box itself is the surface */
-#composerBar .mode-wrap > button, #composerBar .msel-btn, #cbNew {
+#composerBar .mode-wrap > button, #composerBar .msel-btn, #cbNew, #composerBar .plan-chip {
   width: auto; margin: 0; padding: 3px 8px; font-size: 11px; border-radius: 7px; white-space: nowrap; flex: none;
   background: transparent; border-color: transparent; color: var(--dim);
 }
@@ -289,6 +289,12 @@ button.msel-btn { display: flex; font-family: var(--sans); align-items: center; 
 .mode-item b { display: block; font-weight: 600; }
 .mode-item .dim { font-size: 11px; }
 .mode-check { width: 12px; flex: none; color: var(--accent); }
+.mode-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+/* Plan marker next to the permission button (ZCode): bulb + label, hover shows a cross — click turns Plan off */
+#composerBar .plan-chip { display: flex; align-items: center; gap: 4px; color: var(--accent-hi); }
+#composerBar .plan-chip[hidden] { display: none; }
+.plan-ico::before { content: "💡"; font-size: 11px; }
+.plan-chip:hover .plan-ico::before, .plan-chip:focus-visible .plan-ico::before { content: "✕"; }
 
 /* ---------- approval card (inline trong chat) ---------- */
 .m.approval { align-self: stretch; max-width: 100%; background: var(--panel); border: 1px solid var(--warn); white-space: normal; }

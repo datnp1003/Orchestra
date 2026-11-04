@@ -383,13 +383,14 @@ Rules:
 4. Approvals follow PERMISSION MODE below — the system asks the user (or refuses) automatically when you call the tool.
 5. Before fleet_merge you must call task_diff and read the diff; state what you checked.
 6. Report results briefly: worker, task id, files changed, ok/fail. Never tell the user to talk to a worker themselves.
-7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.`;
+7. fleet_dispatch with readonly:true for tasks that only read/survey/list/explain/review; NEVER readonly for code changes.
+8. <system-reminder> blocks inside user messages are injected by Orchestra, not typed by the user. They state the conversation mode for that message (e.g. Plan mode = plan only, do not execute); the most recent one wins.`;
 
 // language is decided by the user (from their messages), NOT by UI locale/i18n
 const BRAIN_LANGUAGE = `\nLANGUAGE: always reply in the same language as the user's latest message. When you dispatch work, write goal/acceptance in the user's own words and language — do not translate them.`;
 const MEMORY_RULE = `\nMEMORY: save durable facts proactively and silently with memory_update — no permission needed. User preferences/style → scope "global"; project facts (decisions, conventions, architecture, repo roles, recurring pitfalls) → scope "project". One short line per fact; replace outdated entries instead of adding duplicates. Never store secrets or transient task progress.`;
-const PROJECT_RULES = `\n8. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
-const WORKSPACE_RULES = `\n8. This chat is NOT inside a project — that is fine, never ask the user to create one. When the user mentions a local folder or repo path, call repo_attach with that absolute path (the user approves once), then work on it directly with the repo/worker tools (\`repo\` = a name returned by repo_attach). Without an attached repo, tools run in the scratch WORKSPACE below (Orchestra's private git repo, for experiments/throwaway scripts/fleet tests).\nOnly scope "global" exists for memory_update in this chat.`;
+const PROJECT_RULES = `\n9. This project may span several repos (microservices). Repo tools take \`repo\` = a name from REPOS (required when there is more than one). Work that touches several services = one fleet_dispatch per repo, each with its own scope.`;
+const WORKSPACE_RULES = `\n9. This chat is NOT inside a project — that is fine, never ask the user to create one. When the user mentions a local folder or repo path, call repo_attach with that absolute path (the user approves once), then work on it directly with the repo/worker tools (\`repo\` = a name returned by repo_attach). Without an attached repo, tools run in the scratch WORKSPACE below (Orchestra's private git repo, for experiments/throwaway scripts/fleet tests).\nOnly scope "global" exists for memory_update in this chat.`;
 const GLOBAL_PROMPT = `You are Orchestra — the coordinating agent of an AI coding fleet. You talk to the user directly.
 This chat is NOT inside a project: you have no repo or worker tools here. Reply BRIEFLY. For code work, ask the user to open a chat inside a project (sidebar → Projects) so you can see its repos.
 Only scope "global" exists for memory_update in this chat.`;
@@ -494,6 +495,8 @@ export interface BrainToolDeps {
   approve: (question: string, kind?: ApprovalKind) => Promise<boolean>;
   /** chat permission mode — missing = 'ask' */
   mode?: PermissionMode;
+  /** Plan mode on — execution tools refused regardless of `mode` */
+  plan?: boolean;
   /** pipeline plan approval */
   askUser?: (q: string) => Promise<string>;
   hooksEnabled?: boolean;
@@ -513,7 +516,7 @@ type ToolOut = { ok: boolean; content: string };
 
 /** permission mode gate: null = allowed; ToolOut = blocked (plan mode) or user rejected */
 async function gate(deps: BrainToolDeps, action: ApprovalAction, kind: ApprovalKind, question: () => string): Promise<ToolOut | null> {
-  const need = needsApproval(deps.mode, action);
+  const need = needsApproval(deps.mode, action, deps.plan);
   if (need === 'block') return bad(PLAN_BLOCKED);
   if (need === 'ask' && !(await deps.approve(question(), kind))) return bad('user declined');
   return null;
@@ -751,7 +754,7 @@ export function brainToolExecutor(repo: string, deps: BrainToolDeps): (name: str
       }
       case 'fleet_merge': {
         if (!isStr(i.taskId)) return bad('taskId must be a string');
-        if (needsApproval(deps.mode, 'merge') === 'block') return bad(PLAN_BLOCKED); // before running tests
+        if (needsApproval(deps.mode, 'merge', deps.plan) === 'block') return bad(PLAN_BLOCKED); // before running tests
         // gate in code — brain can't merge empty / out-of-scope / test-failing tasks
         const rec = loadTask(repo, i.taskId);
         if (typeof rec === 'string') return bad(rec);

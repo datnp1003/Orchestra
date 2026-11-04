@@ -109,8 +109,10 @@ export interface AppSettings {
   templatesDir: string;
   /** UI language; missing (old settings / first run) → fallbackLang (main: detectLocale(app.getLocale())) */
   language: Locale;
-  /** chat: plan | ask | auto | full — enforced at the tool layer (needsApproval) */
+  /** chat: ask | auto | full — enforced at the tool layer (needsApproval) */
   permissionMode: PermissionMode;
+  /** chat Plan mode — independent of permissionMode; blocks execution tools and is announced in the conversation */
+  planEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -124,6 +126,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   templatesDir: '',
   language: 'en',
   permissionMode: 'ask',
+  planEnabled: false,
 };
 
 export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SETTINGS.language): AppSettings {
@@ -144,7 +147,9 @@ export function validateSettings(raw: unknown, fallbackLang: Locale = DEFAULT_SE
     hooksEnabled: r.hooksEnabled !== false,
     templatesDir: typeof r.templatesDir === 'string' ? r.templatesDir : '',
     language: r.language === 'en' || r.language === 'vi' ? r.language : fallbackLang,
+    // old settings stored Plan as a permission ('plan') → Plan on + safe 'ask'
     permissionMode: isPermissionMode(r.permissionMode) ? r.permissionMode : DEFAULT_SETTINGS.permissionMode,
+    planEnabled: r.planEnabled === true || (r as { permissionMode?: unknown }).permissionMode === 'plan',
   };
 }
 

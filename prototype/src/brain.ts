@@ -103,6 +103,8 @@ const MAX_RESULT = 20_000;
 export interface BrainTurnOpts extends BrainCreds {
   history: Msg[];
   userText: string;
+  /** injected context block sent (and saved) before the user's text in the same message — e.g. Plan mode reminder */
+  reminder?: string;
   model: string;
   system: string;
   tools: ToolDef[];
@@ -114,7 +116,8 @@ export interface BrainTurnOpts extends BrainCreds {
 }
 
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
-  const history: Msg[] = [...o.history.map(safeAssistantMsg), { role: 'user', content: o.userText }];
+  const user: Msg = o.reminder ? { role: 'user', content: [{ type: 'text', text: o.reminder }, { type: 'text', text: o.userText }] } : { role: 'user', content: o.userText };
+  const history: Msg[] = [...o.history.map(safeAssistantMsg), user];
   const maxTurns = o.maxTurns ?? 12;
   // stopped midway: history always ends with assistant, every tool_use has a tool_result
   const stopped = () => {

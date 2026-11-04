@@ -27,7 +27,7 @@ import { startRouter, type RouterHandle } from '../../../prototype/src/router/se
 import type { RouterInfo } from '../../../prototype/src/types.js';
 import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
-import { needsApproval, type ApprovalKind } from '../../../prototype/src/permissions.js';
+import { needsApproval, planReminder, planStateOf, type ApprovalKind } from '../../../prototype/src/permissions.js';
 import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -404,6 +404,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
         ...creds,
         history: conv.history,
         userText: p.text,
+        // Plan is announced inside the conversation (saved with the message), not only in the system prompt
+        reminder: planReminder(planStateOf(conv.history), s.planEnabled),
         model: s.brainModel,
         system: brainSystemPrompt({
           project: project && refs ? { name: project.name, repos: refs } : undefined,
@@ -423,6 +425,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           approve: (q, kind) => ask(q, kind, ac.signal),
           askUser: (q) => askContinue(q, ac.signal),
           mode: s.permissionMode,
+          plan: s.planEnabled,
           hooksEnabled: s.hooksEnabled,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,

@@ -169,17 +169,23 @@ function renderRepo() {
 }
 const onChatPage = () => !location.hash || location.hash.startsWith('#/chat');
 
-// ---------- Permission mode (plan / ask / auto / full) — main enforces at the tool layer; this only selects + displays ----------
-const MODES = ['plan', 'ask', 'auto', 'full'];
+// ---------- Permission (ask / auto / full) + Plan toggle — independent (ZCode-style); main enforces both at the tool layer ----------
+// Plan = conversation mode (announced inside the chat as a <system-reminder>), permission = how often Orchestra asks.
+const MODES = ['ask', 'auto', 'full'];
+const planOn = () => !!SETTINGS?.planEnabled;
 function renderMode() {
   const m = SETTINGS?.permissionMode || 'ask';
   $('#cbMode').textContent = `${t('desktop.mode.' + m)} ▾`;
-  $('#stMode').textContent = t('desktop.mode.status', { mode: t('desktop.mode.' + m) });
-  $('#modeMenu').innerHTML = MODES.map((x) => `
-    <button class="mode-item" role="menuitemradio" aria-checked="${x === m}" data-mode="${x}">
-      <span class="mode-check">${x === m ? '✓' : ''}</span>
-      <span><b>${esc(t('desktop.mode.' + x))}</b><span class="dim">${esc(t('desktop.mode.' + x + 'Desc'))}</span></span>
-    </button>`).join('');
+  $('#cbPlan').hidden = !planOn();
+  $('#stMode').textContent = t('desktop.mode.status', { mode: t('desktop.mode.' + m) }) + (planOn() ? ` · ${t('desktop.mode.plan')}` : '');
+  const item = (attrs, checked, title, desc) => `
+    <button class="mode-item" ${attrs} aria-checked="${checked}">
+      <span class="mode-check">${checked ? '✓' : ''}</span>
+      <span><b>${esc(title)}</b><span class="dim">${esc(desc)}</span></span>
+    </button>`;
+  $('#modeMenu').innerHTML = item('role="menuitemcheckbox" data-plan="1"', planOn(), '💡 ' + t('desktop.mode.plan'), t('desktop.mode.planDesc')) +
+    '<div class="mode-sep" role="separator"></div>' +
+    MODES.map((x) => item(`role="menuitemradio" data-mode="${x}"`, x === m, t('desktop.mode.' + x), t('desktop.mode.' + x + 'Desc'))).join('');
 }
 $('#cbMode').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -196,11 +202,18 @@ $('#modeMenu').addEventListener('keydown', (e) => {
 });
 $('#modeMenu').addEventListener('click', (e) => {
   e.stopPropagation();
-  const b = e.target.closest('[data-mode]');
+  const b = e.target.closest('[data-mode], [data-plan]');
   if (!b) return;
   $('#modeMenu').hidden = true;
-  setMode(b.dataset.mode);
+  if (b.dataset.plan) setPlan(!planOn());
+  else setMode(b.dataset.mode);
 });
+$('#cbPlan').addEventListener('click', (e) => { e.stopPropagation(); setPlan(false); });
+// Plan only edits the setting; main announces the change inside the conversation with the next message
+async function setPlan(on) {
+  SETTINGS = await api.invoke('settings:set', { ...SETTINGS, planEnabled: on });
+  renderChrome();
+}
 async function setMode(mode) {
   const prev = SETTINGS.permissionMode;
   SETTINGS = await api.invoke('settings:set', { ...SETTINGS, permissionMode: mode });
@@ -219,7 +232,9 @@ async function setMode(mode) {
   }
 }
 
-// ---------- Slash menu: input is exactly "/<query>" → list modes (/plan /ask /auto /full); ↑/↓, Enter/Tab picks, Esc closes ----------
+// ---------- Slash menu: input is exactly "/<query>" → conversation modes (/plan toggles Plan); ↑/↓, Enter/Tab picks, Esc closes ----------
+// Permissions are NOT slash commands (they are not a conversation mode) — they live in the permission button only.
+const SLASH = [{ cmd: 'plan', title: () => t('desktop.mode.plan'), desc: () => t('desktop.mode.planDesc'), on: planOn, run: () => setPlan(!planOn()) }];
 let slashItems = [];
 let slashActive = 0;
 const slashOpen = () => !$('#slashMenu').hidden;
@@ -228,26 +243,25 @@ function slashUpdate() {
   const m = /^\/(\S*)$/.exec($('#chatInput').value);
   if (!m) return slashClose();
   const q = m[1].toLowerCase();
-  slashItems = MODES.filter((x) => !q || x.startsWith(q) || t('desktop.mode.' + x).toLowerCase().includes(q));
+  slashItems = SLASH.filter((c) => !q || c.cmd.startsWith(q) || c.title().toLowerCase().includes(q));
   if (!slashItems.length) return slashClose();
-  const cur = SETTINGS?.permissionMode || 'ask';
   slashActive = Math.min(slashActive, slashItems.length - 1);
-  $('#slashMenu').innerHTML = `<div class="slash-head">${esc(t('desktop.slash.modes'))}</div>` + slashItems.map((x, i) => `
+  $('#slashMenu').innerHTML = `<div class="slash-head">${esc(t('desktop.slash.modes'))}</div>` + slashItems.map((c, i) => `
     <div class="mode-item${i === slashActive ? ' active' : ''}" role="option" data-i="${i}" aria-selected="${i === slashActive}">
-      <span class="mode-check">${x === cur ? '✓' : ''}</span>
-      <span><b>/${x} · ${esc(t('desktop.mode.' + x))}</b><span class="dim">${esc(t('desktop.mode.' + x + 'Desc'))}</span></span>
+      <span class="mode-check">${c.on() ? '✓' : ''}</span>
+      <span><b>/${c.cmd} · ${esc(c.title())}</b><span class="dim">${esc(c.desc())}</span></span>
     </div>`).join('');
   $('#slashMenu').hidden = false;
 }
 function slashPick(i) {
-  const mode = slashItems[i];
-  if (!mode) return;
+  const c = slashItems[i];
+  if (!c) return;
   const input = $('#chatInput');
   input.value = '';
   input.oninput?.();
   slashClose();
   input.focus();
-  setMode(mode);
+  c.run();
 }
 // returns true when the key was handled by the menu (caller must not send)
 function slashKey(e) {
@@ -1329,7 +1343,7 @@ window.addEventListener('hashchange', route);
 function devStub() {
   const repos = ['C:\\code\\payment-svc'];
   const project = { id: 'payments-a1b2', name: 'Payments', repos };
-  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en', permissionMode: 'ask' };
+  const settings = { projects: [project], activeRepo: repos[0], repos, brainModel: '', routerDefaultModel: '', templatesDir: '', autoApprovePlan: false, hooksEnabled: true, language: 'en', permissionMode: 'ask', planEnabled: false };
   const fleet = [
     { id: 'claude', display: 'Claude Code', version: '2.1.310', auth: 'ok', conformance: 'A', installed: true, router: true },
     { id: 'codex', display: 'Codex CLI', version: '0.164.0', auth: 'ok', conformance: 'A', installed: true, router: true },

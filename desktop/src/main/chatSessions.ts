@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { safeAssistantMsg, type Block, type Msg } from '../../../prototype/src/brain.js';
 import { chatDir, projectDir } from '../../../prototype/src/home.js';
+import { isSystemReminder } from '../../../prototype/src/permissions.js';
 import { t } from '../../../prototype/src/i18n/index.js';
 import type { Project } from './contract.js';
 
@@ -110,8 +111,9 @@ export function addRepoDir(repos: string[], dir: string): { ok: true; repo: stri
   return { ok: true, repo, repos: hit ? repos : [...repos, repo] };
 }
 
+// injected <system-reminder> blocks (Plan mode) stay in history for the brain, never in the visible text/title
 const userText = (m: Msg): string =>
-  typeof m.content === 'string' ? m.content : m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');
+  typeof m.content === 'string' ? m.content : m.content.flatMap((b) => (b.type === 'text' && !isSystemReminder(b.text) ? [b.text] : [])).join('\n');
 const hasToolUse = (m: Msg) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use');
 
 export function parseChatSession(text: string): ChatSession {

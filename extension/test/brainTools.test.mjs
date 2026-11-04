@@ -112,16 +112,16 @@ test('fleet_dispatch readonly → plan/planner node, with worker answer; default
   assert.match(sys, /readonly:true for tasks that only read/);
 });
 
-test('permission mode: plan blocks write dispatch/pipeline/merge/promote (no prompt), readonly still runs; ask prompts; auto does not prompt for dispatch; prompt has PERMISSION MODE', async (t) => {
+test('Plan (any permission) blocks write dispatch/pipeline/merge/promote (no prompt), readonly still runs; ask prompts; auto does not prompt for dispatch; prompt has PERMISSION MODE', async (t) => {
   const repo = tmp(t);
   const calls = [];
   const asked = [];
   const dispatch = async (_repo, o) => (calls.push(o), { result: { ok: true, taskId: 't-x', stage: 'done', record: { routing: { pick: 'claude' }, artifacts: { files_changed: [] }, last_message: 'ok' } } });
-  const mk = (mode, ans = true) => brainToolExecutor(repo, { approve: async (q, kind) => (asked.push([mode, kind]), ans), dispatch, mode });
-  const plan = mk('plan');
+  const mk = (mode, ans = true, plan = false) => brainToolExecutor(repo, { approve: async (q, kind) => (asked.push([mode, kind]), ans), dispatch, mode, plan });
+  const plan = mk('full', true, true); // Plan + Full access: still blocked (Plan only tightens)
   for (const [name, input] of [['fleet_dispatch', { goal: 'fix', scope: ['a'] }], ['fleet_merge', { taskId: 't-1' }], ['policy_promote', { role: 'coder', cli: 'codex' }]]) {
     const r = await plan(name, input);
-    assert.deepEqual([r.ok, r.content], [false, 'plan mode: describe the plan and ask the user to switch mode'], name);
+    assert.deepEqual([r.ok, r.content], [false, 'plan mode: describe the plan and ask the user to turn Plan off to execute it'], name);
   }
   assert.equal(calls.length, 0);
   assert.ok((await plan('fleet_dispatch', { goal: 'list', scope: ['a'], readonly: true })).ok, 'readonly ok trong plan mode');
@@ -131,8 +131,11 @@ test('permission mode: plan blocks write dispatch/pipeline/merge/promote (no pro
   assert.ok((await mk('auto')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
   assert.ok((await mk('full')('fleet_dispatch', { goal: 'fix', scope: ['a'] })).ok);
   assert.deepEqual(asked, [['ask', 'risk']], 'only ask prompts (kind risk); plan/auto/full do not');
+  assert.equal((await mk('ask', true, true)('fleet_dispatch', { goal: 'fix', scope: ['a'] })).content.startsWith('plan mode'), true, 'ask+plan blocks without prompting');
+  assert.deepEqual(asked, [['ask', 'risk']]);
   assert.equal(calls.length, 3);
-  assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', mode: 'plan' }), /\nPERMISSION MODE: plan — plan before editing/);
+  assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '', mode: 'auto' }), /\nPERMISSION MODE: auto — ask only when/);
+  assert.match(brainSystemPrompt({ project: { name: 'P', repos: [] }, globalMemory: '' }), /<system-reminder> blocks inside user messages are injected by Orchestra/);
   assert.match(brainSystemPrompt({ workspace: { name: 'workspace', path: repo }, globalMemory: '' }), /\nPERMISSION MODE: ask — /, 'missing mode → ask');
 });
 
