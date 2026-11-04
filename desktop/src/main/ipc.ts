@@ -31,7 +31,7 @@ import { convModeOf, convReminder, needsApproval, type ApprovalKind, type Conver
 import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 // R2a: 1 provider store + 1 router for the whole app — brain, dispatch, pipeline all go through here
 const store = createProviderStore();
@@ -264,7 +264,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     const project = projectOf(p?.id);
     if (chat.projectId === project.id) {
       if (chatBusy) throw new Error(t('desktop.chat.err.busyOpen'));
-      resetChat();
+      resetChat(null); // its chat dir is deleted below → continue as a chat outside any project
     }
     const s = settings();
     saveSettings(ctx.settingsFile, { ...s, projects: s.projects.filter((x) => x.id !== project.id) });
@@ -362,6 +362,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     const ac = new AbortController();
     chatAbort = ac;
     const conv = chat; // reset mid-turn → this turn's result won't overwrite the new conversation
+    ensureSessionFile(conv); // before the first await: a chat:sessions queued right after this call already lists it
     // worker progress → chat: tool_use/message always sent, other lines at most once / 2s
     let lastProgress = 0;
     const progress = (line: string) => {
@@ -475,7 +476,10 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     if (!existsSync(sf.file)) return { ok: false, error: t('desktop.chat.err.noSession', { id: String(p.id) }) };
     const { history, messages } = parseChatSession(readFileSync(sf.file, 'utf8'));
     const projectId = sf.project?.id ?? null;
-    if (chat.startedAt !== p.id || chat.projectId !== projectId) void reflect(chat); // flush old session
+    if (chat.startedAt !== p.id || chat.projectId !== projectId) {
+      void reflect(chat); // flush old session
+      dropIfEmpty(chat);
+    }
     // ponytail: reflectedUpTo is RAM-only — reopened old sessions count as fully reflected (history not rescanned)
     chat = { history, startedAt: p.id, projectId, reflectedUpTo: history.length, userTurns: 0, attached: [] };
     chat.attached = loadAttached(chat);
@@ -583,8 +587,32 @@ interface Conv { history: Msg[]; startedAt: string; projectId: string | null; re
 let chat: Conv = { history: [], startedAt: '', projectId: null, reflectedUpTo: 0, userTurns: 0, attached: [] };
 let chatBusy = false;
 let chatAbort: AbortController | null = null; // running turn — chat:cancel aborts it
+const newSessionId = () => new Date().toISOString().replace(/[:.]/g, '-');
+/** session file exists from the moment the chat exists → the sidebar shows it right away (empty = "New chat") */
+function ensureSessionFile(conv: Conv): void {
+  try {
+    conv.startedAt ||= newSessionId();
+    mkdirSync(chatDir(conv.projectId), { recursive: true });
+    appendFileSync(path.join(chatDir(conv.projectId), `${conv.startedAt}.jsonl`), '', 'utf8');
+  } catch (err) {
+    console.log('[chat] session file:', err instanceof Error ? err.message : err);
+  }
+}
+/** leaving a chat nothing was sent in → remove its empty file (never touches a file with content) */
+function dropIfEmpty(conv: Conv): void {
+  if (conv.history.length || !conv.startedAt) return;
+  try {
+    const f = path.join(chatDir(conv.projectId), `${conv.startedAt}.jsonl`);
+    if (existsSync(f) && statSync(f).size === 0) rmSync(f);
+  } catch (err) {
+    console.log('[chat] drop empty session:', err instanceof Error ? err.message : err);
+  }
+}
+/** new conversation = new session file (old one dropped if nothing was sent in it) */
 const resetChat = (projectId: string | null = chat.projectId) => {
+  dropIfEmpty(chat);
   chat = { history: [], startedAt: '', projectId, reflectedUpTo: 0, userTurns: 0, attached: [] };
+  ensureSessionFile(chat);
 };
 const attachedFile = (conv: Conv) => path.join(chatDir(conv.projectId), `${conv.startedAt}.repos.json`);
 function loadAttached(conv: Conv): string[] {
@@ -631,7 +659,7 @@ async function reflect(conv: Conv): Promise<void> {
 /** append new messages to ~/.orchestra/{projects/<id>/chat,chats}/<startedAt>.jsonl — conversation content only, no keys */
 function persistChat(conv: Conv, msgs: Msg[]): void {
   try {
-    conv.startedAt ||= new Date().toISOString().replace(/[:.]/g, '-');
+    conv.startedAt ||= newSessionId();
     const dir = chatDir(conv.projectId);
     mkdirSync(dir, { recursive: true });
     const at = new Date().toISOString();

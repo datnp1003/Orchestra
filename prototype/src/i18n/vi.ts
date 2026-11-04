@@ -100,6 +100,7 @@ export const vi: Record<keyof typeof en, string> = {
   'desktop.time.hours': '{n} giờ',
   'desktop.time.days': '{n} ngày',
   'desktop.sessions.tooltip': '{title} — {n} lượt',
+  'desktop.sessions.new': 'Chat mới',
   'desktop.sessions.empty': 'Chưa có session',
   'desktop.chat.greet': '◆ Orchestra sẵn sàng. Mô tả task — Orchestra tự khảo sát repo và giao việc cho worker.',
   'desktop.chat.pending': '…đang xử lý',

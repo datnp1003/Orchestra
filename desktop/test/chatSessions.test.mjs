@@ -103,7 +103,14 @@ assert.deepEqual(view.projects.map((p) => [p.id, p.name, p.repos, p.sessions.map
 assert.deepEqual(view.projects[0].sessions.map((x) => x.active), [false, true, false]);
 assert.deepEqual(view.chats.map((x) => [x.id, x.title, x.active]), [['g1', 'hi g1', false]], 'global chats kept separate, not wrongly active');
 assert.equal(chatSessionsView(projects, { projectId: null, id: 'g1' }).chats[0].active, true);
-console.log('✓ chat:sessions: grouped by project + global chats, newest first, top N, active');
+// empty session file (chat created, nothing sent): listed only while it is the open one, titled "New chat"
+writeFileSync(path.join(chatDir(null), 'g0.jsonl'), '');
+assert.deepEqual(chatSessionsView(projects, { projectId: null, id: 'g1' }).chats.map((x) => x.id), ['g1'], 'abandoned empty chat hidden');
+const open = chatSessionsView(projects, { projectId: null, id: 'g0' }).chats.find((x) => x.id === 'g0');
+assert.deepEqual([open.active, open.turns, open.title], [true, 0, t('desktop.sessions.new')], 'open empty chat listed right away');
+assert.deepEqual(chatSessionsView(projects, { projectId: 'pa-0001', id: 'g0' }).chats.map((x) => x.id), ['g1'], 'same id in another scope does not keep it');
+rmSync(path.join(chatDir(null), 'g0.jsonl'));
+console.log('✓ chat:sessions: grouped by project + global chats, newest first, top N, active; empty only while open');
 
 assert.ok('error' in sessionFile(projects, 'nope-0000', 'a1'), 'nonexistent project blocked');
 assert.ok('error' in sessionFile(projects, 42, 'a1'));

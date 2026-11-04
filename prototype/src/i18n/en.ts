@@ -100,6 +100,7 @@ export const en = {
   'desktop.time.days': '{n}d ago',
   'desktop.sessions.tooltip': '{title} — {n} turns',
   'desktop.sessions.empty': 'No sessions yet',
+  'desktop.sessions.new': 'New chat',
   'desktop.chat.greet': '◆ Orchestra is ready. Describe a task — Orchestra surveys the repo and hands the work to workers.',
   'desktop.chat.pending': '…working',
   'desktop.chat.tools': '{n} tool calls',

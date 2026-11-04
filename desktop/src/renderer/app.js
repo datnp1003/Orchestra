@@ -409,7 +409,7 @@ const ago = (iso) => {
 // collapsed project groups — UI state only, stored in localStorage
 const COLLAPSED = new Set(JSON.parse(localStorage.getItem('orchestra.collapsed') || '[]'));
 const sessionItem = (x, projectId) => `
-    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-project="${esc(projectId ?? '')}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
+    <div class="session-item ${x.active ? 'active' : ''}" data-session="${esc(x.id)}" data-project="${esc(projectId ?? '')}" data-turns="${x.turns}" title="${esc(t('desktop.sessions.tooltip', { title: x.title, n: x.turns }))}">
       <span class="session-title">${esc(x.title)}</span>
       <span class="session-time">${esc(ago(x.updatedAt))}</span>
     </div>`;
@@ -544,8 +544,15 @@ async function renderChat() {
     add('orch pending', t('desktop.chat.pending'));
     const stop = $('#chatStop');
     stop.hidden = false;
+    // sidebar: main creates the session file synchronously when the exchange starts → list it now;
+    // nothing saved yet (file written when the turn ends) → show this first message as its title meanwhile
+    const turn = api.invoke('chat:exchange', { text });
+    loadSessions().then(() => {
+      const a = $('#sideLists .session-item.active');
+      if (a?.dataset.turns === '0') a.querySelector('.session-title').textContent = text.replace(/\s+/g, ' ').slice(0, 60);
+    });
     try {
-      await api.invoke('chat:exchange', { text });
+      await turn;
     } finally {
       stop.hidden = true;
       loadSessions();

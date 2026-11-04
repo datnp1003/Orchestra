@@ -24,17 +24,20 @@ export const SESSION_ID_RE = /^[\w.-]+$/;
 
 const legacyChatDir = (repo: string) => path.join(repo, '.orchestra', 'chat');
 
-/** sessions in 1 chat dir, newest first, top `limit` */
-export function listChatSessions(dir: string, limit = 30) {
+/** sessions in 1 chat dir, newest first, top `limit`. Empty files (chat created, nothing sent) are listed only
+ *  when it is the open session `keepId` — an abandoned empty chat (e.g. app closed) never clutters the sidebar */
+export function listChatSessions(dir: string, limit = 30, keepId = '') {
   if (!existsSync(dir)) return [];
-  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')).flatMap((f) => {
     const file = path.join(dir, f);
-    return { file, id: f.slice(0, -'.jsonl'.length), updatedAt: statSync(file).mtime.toISOString() };
+    const st = statSync(file);
+    const id = f.slice(0, -'.jsonl'.length);
+    return st.size > 0 || id === keepId ? [{ file, id, updatedAt: st.mtime.toISOString() }] : [];
   }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
   // ponytail: parses whole files of top `limit` on every list — slow for very long sessions → cache by mtime
   return files.map(({ file, id, updatedAt }) => {
     const { title, turns } = parseChatSession(readFileSync(file, 'utf8'));
-    return { id, title, turns, updatedAt };
+    return { id, title: turns ? title : t('desktop.sessions.new'), turns, updatedAt };
   });
 }
 
@@ -42,8 +45,8 @@ export function listChatSessions(dir: string, limit = 30) {
 export function chatSessionsView(projects: Project[], active: { projectId: string | null; id: string }) {
   const mark = (projectId: string | null) => (x: ReturnType<typeof listChatSessions>[number]) => ({ ...x, active: !!active.id && x.id === active.id && projectId === active.projectId });
   return {
-    projects: projects.map((p) => ({ id: p.id, name: p.name, repos: p.repos, sessions: listChatSessions(chatDir(p.id)).map(mark(p.id)) })),
-    chats: listChatSessions(chatDir(null)).map(mark(null)),
+    projects: projects.map((p) => ({ id: p.id, name: p.name, repos: p.repos, sessions: listChatSessions(chatDir(p.id), 30, active.projectId === p.id ? active.id : '').map(mark(p.id)) })),
+    chats: listChatSessions(chatDir(null), 30, active.projectId === null ? active.id : '').map(mark(null)),
   };
 }
 
