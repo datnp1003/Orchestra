@@ -44,6 +44,19 @@ test('tool_use → tool_result sent back → end_turn', async () => {
   assert.ok(!JSON.stringify(r.history).includes(KEY));
 });
 
+test('images: sent and saved as image blocks after the reminder, before the text; image-only message allowed', async () => {
+  const img = { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' };
+  const run = async (o) => {
+    const { fn, calls } = fakeFetch([{ body: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }] } }]);
+    const r = await runBrainTurn({ baseUrl: 'https://gw.test/', apiKey: KEY, history: [], model: 'm', system: 's', tools: TOOLS, execTool: async () => ({ ok: true, content: '' }), fetchImpl: fn, ...o });
+    assert.deepEqual(calls[0].body.messages[0], r.history[0], 'sent = saved');
+    return r.history[0].content;
+  };
+  assert.deepEqual(await run({ userText: 'what is this', reminder: 'R', images: [img] }), [{ type: 'text', text: 'R' }, { type: 'image', source: img }, { type: 'text', text: 'what is this' }]);
+  assert.deepEqual(await run({ userText: '', images: [img] }), [{ type: 'image', source: img }]);
+  assert.equal(await run({ userText: 'plain' }), 'plain', 'no reminder/images → plain string');
+});
+
 test('reminder: sent and saved in the SAME user message, before the user text', async () => {
   const { fn, calls } = fakeFetch([{ body: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'plan' }] } }]);
   const reminder = '<system-reminder>\nPlan mode is active.\n</system-reminder>';

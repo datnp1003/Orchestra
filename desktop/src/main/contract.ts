@@ -166,6 +166,26 @@ function validProjects(raw: unknown[]): Project[] {
   });
 }
 
+// ---------- chat:exchange images — trust boundary (renderer → main → LLM) ----------
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export const MAX_IMAGES = 5;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // Anthropic per-image limit; 5 × 5 MB stays under the router's 20 MB body cap
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+/** [{ mediaType, data(base64) }] → Messages image sources; anything off → error (never silently drop what the user attached) */
+export function validateImages(raw: unknown): { images: { type: 'base64'; media_type: string; data: string }[] } | { error: string } {
+  if (raw === undefined || raw === null) return { images: [] };
+  if (!Array.isArray(raw)) return { error: t('desktop.chat.err.image') };
+  if (raw.length > MAX_IMAGES) return { error: t('desktop.chat.err.imageCount', { n: MAX_IMAGES }) };
+  const images = [];
+  for (const x of raw as { mediaType?: unknown; data?: unknown }[]) {
+    const mediaType = x?.mediaType, data = x?.data;
+    if (!IMAGE_TYPES.includes(mediaType as (typeof IMAGE_TYPES)[number]) || typeof data !== 'string' || !data || data.length % 4 !== 0 || !B64_RE.test(data)) return { error: t('desktop.chat.err.image') };
+    if ((data.length / 4) * 3 > MAX_IMAGE_BYTES) return { error: t('desktop.chat.err.imageSize', { mb: MAX_IMAGE_BYTES / 1024 / 1024 }) };
+    images.push({ type: 'base64' as const, media_type: mediaType as string, data });
+  }
+  return { images };
+}
+
 /** active repo (or repos[0]) — throws if empty/missing, avoids running in process cwd */
 export function requireRepo(s: Pick<AppSettings, 'activeRepo' | 'repos'>): string {
   const repo = s.activeRepo || s.repos[0] || '';

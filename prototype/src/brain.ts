@@ -3,8 +3,10 @@
 // R2a: calls go through the Orchestra router (baseUrl = router, apiKey = router token) — key never logged, never in prompt/record/errors.
 import { t } from './i18n/index.js';
 
+export type ImageSource = { type: 'base64'; media_type: string; data: string };
 export type Block =
   | { type: 'text'; text: string }
+  | { type: 'image'; source: ImageSource }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 export interface Msg {
@@ -103,8 +105,10 @@ const MAX_RESULT = 20_000;
 export interface BrainTurnOpts extends BrainCreds {
   history: Msg[];
   userText: string;
-  /** injected context block sent (and saved) before the user's text in the same message — e.g. Plan mode reminder */
+  /** injected context block sent (and saved) before the user's text in the same message — e.g. conversation mode reminder */
   reminder?: string;
+  /** images attached to the user's message (already validated by the caller) — sent before the text, like Claude apps */
+  images?: ImageSource[];
   model: string;
   system: string;
   tools: ToolDef[];
@@ -116,7 +120,12 @@ export interface BrainTurnOpts extends BrainCreds {
 }
 
 export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; history: Msg[]; aborted?: boolean }> {
-  const user: Msg = o.reminder ? { role: 'user', content: [{ type: 'text', text: o.reminder }, { type: 'text', text: o.userText }] } : { role: 'user', content: o.userText };
+  const blocks: Block[] = [
+    ...(o.reminder ? [{ type: 'text', text: o.reminder } as const] : []),
+    ...(o.images ?? []).map((source): Block => ({ type: 'image', source })),
+    ...(o.userText ? [{ type: 'text', text: o.userText } as const] : []),
+  ];
+  const user: Msg = blocks.length === 1 && blocks[0]!.type === 'text' ? { role: 'user', content: o.userText } : { role: 'user', content: blocks };
   const history: Msg[] = [...o.history.map(safeAssistantMsg), user];
   const maxTurns = o.maxTurns ?? 12;
   // stopped midway: history always ends with assistant, every tool_use has a tool_result

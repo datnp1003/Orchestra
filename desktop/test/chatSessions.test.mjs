@@ -44,6 +44,15 @@ assert.equal(s.turns, 1);
   assert.deepEqual(p.messages[0], { role: 'user', text: 'lên plan thêm X' }, 'reminder hidden from display');
   assert.equal(p.title, 'lên plan thêm X');
 }
+// images in a user message: reopened view gets data: URLs, image-only first message still titles the session
+{
+  const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+  const p = parseChatSession([L('user', [img, { type: 'text', text: 'cái gì đây' }]), L('assistant', 'ảnh logo'), L('user', [img]), L('assistant', 'ok')].join('\n'));
+  assert.deepEqual(p.messages[0], { role: 'user', text: 'cái gì đây', images: ['data:image/png;base64,iVBORw0KGgo='] });
+  assert.deepEqual(p.messages[2], { role: 'user', text: '', images: ['data:image/png;base64,iVBORw0KGgo='] }, 'image-only message kept');
+  assert.equal(p.turns, 2);
+  assert.equal(parseChatSession([L('user', [img]), L('assistant', 'ok')].join('\n')).title, '🖼 ×1');
+}
 setLocale('vi');
 assert.deepEqual(parseChatSession(''), { history: [], messages: [], title: '(trống)', turns: 0 });
 setLocale('en');

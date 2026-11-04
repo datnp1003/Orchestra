@@ -2,7 +2,7 @@
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
 import { app, shell, dialog } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
-import { IPC, EVENTS, requireRepo, type AppSettings, type DispatchPayload } from './contract.js';
+import { IPC, EVENTS, requireRepo, validateImages, type AppSettings, type DispatchPayload } from './contract.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshotAsync, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
@@ -346,14 +346,16 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   }, (error) => ({ ok: false, error })));
 
   // M1: user only talks to Orchestra (brain = LLM API + tools); CLIs are just workers via fleet_* tools
-  ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string }) => {
+  ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string; images?: unknown }) => {
     const notify = (m: unknown) => send(EVENTS.CHAT_MESSAGE, m);
     const fail = (error: string) => {
       // report errors as a message — don't leave the '…processing' bubble hanging
       notify({ kind: 'result', text: `✗ ${error}` });
       return { error };
     };
-    if (typeof p?.text !== 'string' || !p.text.trim()) return fail(t('desktop.chat.err.empty'));
+    const img = validateImages(p?.images);
+    if ('error' in img) return fail(img.error);
+    if (typeof p?.text !== 'string' || (!p.text.trim() && !img.images.length)) return fail(t('desktop.chat.err.empty'));
     if (chatBusy) return fail(t('desktop.chat.err.busy'));
     const creds = routerCreds();
     if (!creds) return fail(t('desktop.err.routerDown'));
@@ -408,7 +410,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
-        userText: p.text,
+        userText: p.text.trim(),
+        images: img.images,
         // conversation mode is announced inside the conversation (saved with the message), not only in the system prompt
         reminder: convReminder(convModeOf(conv.history), s.chatMode),
         // ponytail: goal = longer tool loop, no separate verifier turn — add an auto-continue check if goals stop early

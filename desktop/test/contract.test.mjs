@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo } from '../out/desktop/src/main/contract.js';
+import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo, validateImages, MAX_IMAGES, MAX_IMAGE_BYTES } from '../out/desktop/src/main/contract.js';
 import { loadSettings, saveSettings, initLanguage } from '../out/desktop/src/main/settingsStore.js';
 import { setLocale } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, PROJECT_ID_RE } from '../out/prototype/src/home.js';
@@ -175,6 +175,16 @@ assert.deepEqual(parseApprovalUrl(`orchestra://approval/${id}/reject/`), { id, a
 for (const u of [`orchestra://approval/${id}/merge`, 'orchestra://approval/../x/approve', `https://approval/${id}/approve`, `orchestra://approval/${id}/approve?x=1`, null]) assert.equal(parseApprovalUrl(u), null, String(u));
 const xml = approvalToastXml({ ...sent[0], question: 'a <b> & "c"\nline2' }, 'T');
 assert.ok(xml.includes('a &lt;b&gt; &amp; &quot;c&quot;') && !xml.includes('line2') && xml.includes(`arguments="orchestra://approval/${id}/approve"`) && xml.includes('activationType="protocol"'));
+// chat:exchange images — trust boundary: type allowlist, base64 only, size + count caps, never silently dropped
+{
+  const png = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
+  assert.deepEqual(validateImages(undefined), { images: [] });
+  assert.deepEqual(validateImages([png]), { images: [{ type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' }] });
+  for (const bad of ['x', [{ mediaType: 'image/svg+xml', data: 'PHN2Zz4=' }], [{ mediaType: 'image/png', data: 'not base64!' }], [{ mediaType: 'image/png', data: '' }], [{ mediaType: 'image/png', data: 'abc' }], [null]])
+    assert.ok('error' in validateImages(bad), `rejects ${JSON.stringify(bad).slice(0, 40)}`);
+  assert.ok('error' in validateImages(Array(MAX_IMAGES + 1).fill(png)), 'count cap');
+  assert.ok('error' in validateImages([{ mediaType: 'image/jpeg', data: 'A'.repeat(Math.ceil((MAX_IMAGE_BYTES + 3) / 3) * 4) }]), 'size cap');
+}
 console.log('✓ approval: channel/event, broker request/respond/abort/cancelAll, URL parse strict, toast xml escape; permissionMode validate + default');
 
 // 5. pages

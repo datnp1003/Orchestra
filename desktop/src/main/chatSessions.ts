@@ -12,6 +12,8 @@ import type { Project } from './contract.js';
 export interface ChatView {
   role: 'user' | 'orch' | 'step';
   text: string;
+  /** user message images as data: URLs (renderer shows thumbnails) */
+  images?: string[];
 }
 export interface ChatSession {
   history: Msg[];
@@ -147,7 +149,8 @@ export function parseChatSession(text: string): ChatSession {
   for (const m of history) {
     if (m.role === 'user') {
       const t = userText(m);
-      if (t.trim()) messages.push({ role: 'user', text: t }); // tool_result-only turn → skip
+      const images = Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === 'image' ? [`data:${b.source.media_type};base64,${b.source.data}`] : [])) : [];
+      if (t.trim() || images.length) messages.push({ role: 'user', text: t, ...(images.length ? { images } : {}) }); // tool_result-only turn → skip
       continue;
     }
     const t = userText(m);
@@ -155,7 +158,8 @@ export function parseChatSession(text: string): ChatSession {
     const tools = Array.isArray(m.content) ? m.content.filter((b) => b.type === 'tool_use').map((b) => (b as { name: string }).name) : [];
     if (tools.length) messages.push({ role: 'step', text: `🔧 ${tools.join(', ')}` });
   }
-  const first = messages.find((m) => m.role === 'user')?.text.trim().replace(/\s+/g, ' ') ?? '';
+  const u0 = messages.find((m) => m.role === 'user');
+  const first = u0?.text.trim().replace(/\s+/g, ' ') || (u0?.images ? `🖼 ×${u0.images.length}` : '');
   return {
     history,
     messages,

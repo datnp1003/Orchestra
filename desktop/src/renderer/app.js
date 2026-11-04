@@ -295,6 +295,62 @@ $('#slashMenu').addEventListener('click', (e) => {
   if (it) slashPick(+it.dataset.i);
 });
 
+// ---------- Image attachments (paste / drop / 📎) — main re-validates type + size at the IPC boundary ----------
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_IMAGES = 5;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const ATTACH = []; // { url (blob: preview), mediaType, data (base64) }
+function renderAttach() {
+  const list = $('#attachList');
+  list.hidden = !ATTACH.length;
+  list.replaceChildren(...ATTACH.map((a, i) => {
+    const d = document.createElement('div');
+    d.className = 'attach-item';
+    const im = document.createElement('img');
+    im.src = a.url;
+    im.alt = '';
+    const x = document.createElement('button');
+    x.textContent = '✕';
+    x.title = t('desktop.composer.attachRemove');
+    x.onclick = (e) => { e.stopPropagation(); ATTACH.splice(i, 1); renderAttach(); };
+    d.append(im, x);
+    return d;
+  }));
+}
+const toBase64 = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).slice(String(r.result).indexOf(',') + 1));
+  r.onerror = () => reject(r.error);
+  r.readAsDataURL(file);
+});
+async function addImages(files) {
+  for (const f of files) {
+    if (!IMAGE_TYPES.includes(f.type)) { alert(t('desktop.chat.err.image')); continue; }
+    if (f.size > MAX_IMAGE_BYTES) { alert(t('desktop.chat.err.imageSize', { mb: MAX_IMAGE_BYTES / 1024 / 1024 })); continue; }
+    if (ATTACH.length >= MAX_IMAGES) { alert(t('desktop.chat.err.imageCount', { n: MAX_IMAGES })); break; }
+    ATTACH.push({ url: URL.createObjectURL(f), mediaType: f.type, data: await toBase64(f) });
+  }
+  renderAttach();
+  $('#chatInput').focus();
+}
+$('#cbAttach').addEventListener('click', () => $('#attachFile').click());
+$('#attachFile').addEventListener('change', (e) => { addImages([...e.target.files]); e.target.value = ''; });
+$('#chatInput').addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return; // plain text paste stays native
+  e.preventDefault();
+  addImages(files);
+});
+for (const ev of ['dragenter', 'dragover']) $('#composer').addEventListener(ev, (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); $('#composer').classList.add('drop'); } });
+$('#composer').addEventListener('dragleave', (e) => { if (!$('#composer').contains(e.relatedTarget)) $('#composer').classList.remove('drop'); });
+$('#composer').addEventListener('drop', (e) => {
+  $('#composer').classList.remove('drop');
+  const files = [...(e.dataTransfer?.files ?? [])];
+  if (!files.length) return;
+  e.preventDefault();
+  addImages(files);
+});
+
 // ---------- Approval card in chat (replaces native modal): main sends approval:request, user answers via approval:respond ----------
 const APPROVALS = new Map(); // id → pending request
 let focusApprovalId = null; // click notification / badge → focus this card after Chat finishes drawing
@@ -518,8 +574,26 @@ async function renderChat() {
     $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
     return d;
   };
+  // user bubble with images: thumbnails (data:/blob: URLs) above the text; click opens full size in a new window
+  const addUser = (text, images = []) => {
+    const d = add('user', '');
+    if (images.length) {
+      const box = document.createElement('div');
+      box.className = 'msg-images';
+      for (const src of images) {
+        const im = document.createElement('img');
+        im.src = src;
+        im.alt = '';
+        im.onclick = () => window.open(src);
+        box.appendChild(im);
+      }
+      d.appendChild(box);
+    }
+    if (text) d.appendChild(document.createTextNode(text));
+    return d;
+  };
   add('greet', t('desktop.chat.greet'));
-  for (const m of openedMsgs ?? []) add(m.role, m.text);
+  for (const m of openedMsgs ?? []) m.role === 'user' ? addUser(m.text, m.images) : add(m.role, m.text);
   // chat with no messages → compact centered layout (1 class on #main, same composer DOM)
   const main = document.getElementById('main');
   main.classList.toggle('chat-empty', !CHAT.started);
@@ -535,21 +609,24 @@ async function renderChat() {
   const input = $('#chatInput');
   const send = async () => {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && !ATTACH.length) return;
+    const files = ATTACH.splice(0);
+    renderAttach();
     input.value = '';
     input.style.height = 'auto';
     main.classList.remove('chat-empty');
     CHAT.started = true;
-    add('user', text);
+    addUser(text, files.map((f) => f.url));
+    const images = files.map((f) => ({ mediaType: f.mediaType, data: f.data }));
     add('orch pending', t('desktop.chat.pending'));
     const stop = $('#chatStop');
     stop.hidden = false;
     // sidebar: main creates the session file synchronously when the exchange starts → list it now;
     // nothing saved yet (file written when the turn ends) → show this first message as its title meanwhile
-    const turn = api.invoke('chat:exchange', { text });
+    const turn = api.invoke('chat:exchange', { text, images });
     loadSessions().then(() => {
       const a = $('#sideLists .session-item.active');
-      if (a?.dataset.turns === '0') a.querySelector('.session-title').textContent = text.replace(/\s+/g, ' ').slice(0, 60);
+      if (a?.dataset.turns === '0') a.querySelector('.session-title').textContent = text.replace(/\s+/g, ' ').slice(0, 60) || `🖼 ×${files.length}`;
     });
     try {
       await turn;

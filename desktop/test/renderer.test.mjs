@@ -153,6 +153,7 @@ console.log(`✓ i18n: no hardcoded Vietnamese strings (app.js, index.html, main
   assert.ok(js.includes("const MODES = ['ask', 'auto', 'full'];") && js.includes("const CONVS = ['chat', 'plan', 'goal'];") && html.includes('id="cbConv"') && html.includes('id="convMenu"') && js.includes('{ ...SETTINGS, chatMode }'), 'two pickers: conversation mode + permission');
   const re = /^\/(\S*)$/;
   assert.ok(re.test('/') && re.test('/pl') && !re.test('/plan now') && !re.test('a /plan'), 'only a bare "/query" opens the menu');
+  assert.ok(html.includes("img-src 'self' data: blob:") && html.includes('id="cbAttach"') && html.includes('id="attachList"') && js.includes("addEventListener('paste'") && js.includes("addEventListener('drop'") && js.includes("api.invoke('chat:exchange', { text, images })"), 'images: paste / drop / 📎, CSP allows data/blob thumbnails');
   console.log('✓ conversation mode picker (chat/plan/goal) + /chat /plan /goal, separate from permission');
 }
 

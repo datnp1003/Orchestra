@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:" />
   <link rel="stylesheet" href="styles.css" />
   <title>Orchestra Desktop</title>
 </head>
@@ -62,6 +62,7 @@
         <!-- everything about the message lives inside the box: input + stop/send on top, mode/model/new chat below -->
         <div id="composer">
           <div id="slashMenu" class="mode-menu slash-menu" role="listbox" hidden></div>
+          <div id="attachList" class="attach-list" hidden></div>
           <div class="composer-main">
             <span class="composer-caret">›</span>
             <textarea id="chatInput" rows="1" data-i18n-placeholder="desktop.composer.placeholder"></textarea>
@@ -79,6 +80,8 @@
               <button id="cbMode" class="secondary" data-i18n-title="desktop.mode.title" aria-haspopup="true"></button>
               <div id="modeMenu" class="mode-menu" role="menu" hidden></div>
             </span>
+            <button id="cbAttach" class="secondary" data-i18n-title="desktop.composer.attachTitle" aria-label="attach image">📎</button>
+            <input id="attachFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
             <select id="cbModel" data-i18n-title="desktop.composer.modelTitle"></select>
             <span class="bar-gap"></span>
             <button id="cbNew" class="secondary" data-i18n="desktop.composer.newChat" data-i18n-title="desktop.newChat.title"></button>
