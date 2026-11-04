@@ -39,6 +39,8 @@ export function messagesToChatRequest(body: any, model: string): any {
       else if (b.type === 'image') {
         const s = b.source ?? {};
         parts.push({ type: 'image_url', image_url: { url: s.type === 'base64' ? `data:${s.media_type};base64,${s.data}` : s.url } });
+      } else if (b.type === 'document' && b.source?.type === 'base64') {
+        parts.push({ type: 'file', file: { filename: b.title || 'document.pdf', file_data: `data:${b.source.media_type};base64,${b.source.data}` } });
       } else if (b.type === 'tool_use') {
         toolCalls.push({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } });
       } else if (b.type === 'tool_result') {
@@ -105,6 +107,9 @@ export function chatToMessagesRequest(body: any, model: string): any {
         for (const p of m.content ?? []) {
           if (p.type === 'text') blocks.push({ type: 'text', text: p.text });
           else if (p.type === 'image_url') blocks.push(imagePart(p.image_url?.url ?? ''));
+          else if (p.type === 'file' && /^data:application\/pdf;base64,/.test(p.file?.file_data ?? '')) {
+            blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.file.file_data.slice(p.file.file_data.indexOf(',') + 1) }, ...(p.file.filename ? { title: p.file.filename } : {}) });
+          }
         }
       }
       for (const t of m.tool_calls ?? []) {

@@ -55,6 +55,9 @@ test('images: sent and saved as image blocks after the reminder, before the text
   assert.deepEqual(await run({ userText: 'what is this', reminder: 'R', images: [img] }), [{ type: 'text', text: 'R' }, { type: 'image', source: img }, { type: 'text', text: 'what is this' }]);
   assert.deepEqual(await run({ userText: '', images: [img] }), [{ type: 'image', source: img }]);
   assert.equal(await run({ userText: 'plain' }), 'plain', 'no reminder/images → plain string');
+  const doc = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERg==' }, title: 'a.pdf' };
+  assert.deepEqual(await run({ userText: 'tóm tắt', images: [img], attachments: [doc, { type: 'text', text: '<attachment id="file-1">…</attachment>' }] }),
+    [{ type: 'image', source: img }, doc, { type: 'text', text: '<attachment id="file-1">…</attachment>' }, { type: 'text', text: 'tóm tắt' }], 'images, then files, then the text');
   assert.deepEqual(await run({ userText: 'x', reminder: ['A', 'B'] }), [{ type: 'text', text: 'A' }, { type: 'text', text: 'B' }, { type: 'text', text: 'x' }], 'several reminders in order');
 });
 

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { safeAssistantMsg, type Block, type Msg } from '../../../prototype/src/brain.js';
 import { chatDir, projectDir } from '../../../prototype/src/home.js';
 import { isSystemReminder } from '../../../prototype/src/permissions.js';
+import { attachmentName, extractText, isAttachmentText, readZip, safeEntryPath, sliceText, decodeText, PDF_INLINE_BYTES, type AttachmentInfo } from '../../../prototype/src/attachments.js';
 import { t } from '../../../prototype/src/i18n/index.js';
 import type { Project } from './contract.js';
 
@@ -14,6 +15,8 @@ export interface ChatView {
   text: string;
   /** user message images as data: URLs (renderer shows thumbnails) */
   images?: string[];
+  /** names of files attached to the user message (renderer shows chips) */
+  files?: string[];
 }
 export interface ChatSession {
   history: Msg[];
@@ -41,6 +44,112 @@ export function saveSessionImages(projectId: string | null, sessionId: string, i
     return id;
   });
 }
+// ---------- attached files: <chat dir>/<sessionId>.files/file-N/{<name>, <name>.txt (Office text), <zip stem>/ (unpacked), .meta.json} ----------
+export const FILE_ID_RE = /^file-\d{1,4}$/;
+export const filesDir = (projectId: string | null, sessionId: string) => path.join(chatDir(projectId), `${sessionId}.files`);
+const OFFICE = new Set(['docx', 'xlsx', 'pptx']);
+interface FileMeta { name: string; kind: AttachmentInfo['kind']; size: number; zipDir?: string; tree?: { path: string; size: number }[] }
+/** unpack with safe paths only (no absolute / `..` / reserved names) — readZip already capped count + total size */
+function unzipTo(buf: Buffer, dest: string): { tree: { path: string; size: number }[]; skipped: number } {
+  const tree: { path: string; size: number }[] = [];
+  let skipped = 0;
+  for (const e of readZip(buf)) {
+    const rel = safeEntryPath(e.name);
+    if (!rel) { skipped++; continue; }
+    try {
+      const out = path.join(dest, rel);
+      mkdirSync(path.dirname(out), { recursive: true });
+      writeFileSync(out, e.read());
+      tree.push({ path: rel, size: e.size });
+    } catch {
+      skipped++; // file/dir name clash, corrupt entry
+    }
+  }
+  return { tree, skipped };
+}
+/** save + extract; pdfBudget = bytes still allowed inline in this conversation (PDFs are resent every turn) */
+export function saveSessionFiles(projectId: string | null, sessionId: string, files: { name: string; buf: Buffer }[], pdfBudget = PDF_INLINE_BYTES): AttachmentInfo[] {
+  if (!files.length) return [];
+  const root = filesDir(projectId, sessionId);
+  mkdirSync(root, { recursive: true });
+  let n = readdirSync(root).filter((f) => FILE_ID_RE.test(f)).length;
+  return files.map(({ name, buf }) => {
+    const id = `file-${++n}`;
+    const dir = path.join(root, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, name), buf);
+    const info: AttachmentInfo = { id, name, kind: 'binary', size: buf.length };
+    const meta: FileMeta = { name, kind: 'binary', size: buf.length };
+    try {
+      const r = extractText(name, buf);
+      info.kind = meta.kind = r.kind;
+      info.text = r.text;
+      if (OFFICE.has(r.kind)) writeFileSync(path.join(dir, `${name}.txt`), r.text ?? '', 'utf8');
+      if (r.kind === 'zip') {
+        meta.zipDir = name.replace(/\.zip$/i, '') || 'unzipped';
+        const u = unzipTo(buf, path.join(dir, meta.zipDir));
+        info.tree = meta.tree = u.tree;
+        info.skipped = u.skipped;
+      }
+      if (r.kind === 'pdf' && buf.length <= Math.min(PDF_INLINE_BYTES, pdfBudget)) {
+        info.pdfBase64 = buf.toString('base64');
+        pdfBudget -= buf.length;
+      }
+    } catch (err) {
+      info.kind = meta.kind = /\.(docx|xlsx|pptx|zip)$/i.test(name) ? (name.split('.').pop()!.toLowerCase() as AttachmentInfo['kind']) : info.kind;
+      info.error = err instanceof Error ? err.message : String(err);
+    }
+    writeFileSync(path.join(dir, '.meta.json'), JSON.stringify(meta), 'utf8');
+    return info;
+  });
+}
+const readMeta = (projectId: string | null, sessionId: string, id: string): FileMeta | null => {
+  if (!FILE_ID_RE.test(id)) return null;
+  try { return JSON.parse(readFileSync(path.join(filesDir(projectId, sessionId), id, '.meta.json'), 'utf8')); } catch { return null; }
+};
+const knownFiles = (projectId: string | null, sessionId: string) => {
+  const root = filesDir(projectId, sessionId);
+  return existsSync(root) ? readdirSync(root).filter((f) => FILE_ID_RE.test(f)) : [];
+};
+/** attachment_read: text of an attached file (or a file inside an attached zip), paged */
+export function readSessionFile(projectId: string | null, sessionId: string, id: string, inner: string | undefined, offset: number): { ok: boolean; content: string } {
+  const meta = readMeta(projectId, sessionId, id);
+  if (!meta) return { ok: false, content: `unknown file id: ${id} — attached: ${knownFiles(projectId, sessionId).join(', ') || 'none'}` };
+  const dir = path.join(filesDir(projectId, sessionId), id);
+  let text: string | null;
+  if (inner !== undefined) {
+    if (meta.kind !== 'zip' || !meta.zipDir) return { ok: false, content: `${id} (${meta.name}) is not a zip — omit path` };
+    const rel = safeEntryPath(inner);
+    const f = rel && path.join(dir, meta.zipDir, rel);
+    if (!f || !existsSync(f) || !statSync(f).isFile()) return { ok: false, content: `no such file in ${meta.name}: ${inner}` };
+    if (statSync(f).size > 20 * 1024 * 1024) return { ok: false, content: `${inner} is too large to read here — hand ${id} to a worker via fleet_dispatch.files` };
+    try {
+      text = extractText(rel, readFileSync(f)).text;
+    } catch (err) {
+      return { ok: false, content: `could not read ${inner}: ${err instanceof Error ? err.message : err}` };
+    }
+    if (text === null) return { ok: true, content: `(${inner} is not readable as text here — hand ${id} to a worker via fleet_dispatch.files)` };
+  } else if (meta.kind === 'zip') {
+    return { ok: true, content: `${meta.name}: pass path= one of\n${(meta.tree ?? []).map((e) => e.path).join('\n')}` };
+  } else if (OFFICE.has(meta.kind)) {
+    text = existsSync(path.join(dir, `${meta.name}.txt`)) ? readFileSync(path.join(dir, `${meta.name}.txt`), 'utf8') : null;
+  } else {
+    text = meta.kind === 'text' ? decodeText(readFileSync(path.join(dir, meta.name))) : null;
+  }
+  if (text === null) return { ok: true, content: `(${meta.name} is a ${meta.kind} file — not readable as text here; hand ${id} to a worker via fleet_dispatch.files)` };
+  return { ok: true, content: sliceText(text, offset) };
+}
+/** file ids → this session's attachment dirs (for fleet_dispatch.files) */
+export function sessionFileDirs(projectId: string | null, sessionId: string, ids: string[]): { paths: string[] } | { error: string } {
+  const paths: string[] = [];
+  for (const id of [...new Set(ids)]) {
+    if (!readMeta(projectId, sessionId, id)) return { error: `unknown file id: ${id} — attached: ${knownFiles(projectId, sessionId).join(', ') || 'none'}` };
+    paths.push(path.join(filesDir(projectId, sessionId), id));
+  }
+  return { paths };
+}
+export const hasSessionFiles = (projectId: string | null, sessionId: string) => !!sessionId && knownFiles(projectId, sessionId).length > 0;
+
 /** ids → absolute files of THIS session only (id format checked → no traversal) */
 export function sessionImageFiles(projectId: string | null, sessionId: string, ids: string[]): { paths: string[] } | { error: string } {
   const dir = imagesDir(projectId, sessionId);
@@ -148,7 +257,7 @@ export function addRepoDir(repos: string[], dir: string): { ok: true; repo: stri
 
 // injected <system-reminder> blocks (Plan mode) stay in history for the brain, never in the visible text/title
 const userText = (m: Msg): string =>
-  typeof m.content === 'string' ? m.content : m.content.flatMap((b) => (b.type === 'text' && !isSystemReminder(b.text) ? [b.text] : [])).join('\n');
+  typeof m.content === 'string' ? m.content : m.content.flatMap((b) => (b.type === 'text' && !isSystemReminder(b.text) && !isAttachmentText(b.text) ? [b.text] : [])).join('\n');
 const hasToolUse = (m: Msg) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use');
 
 export function parseChatSession(text: string): ChatSession {
@@ -180,7 +289,8 @@ export function parseChatSession(text: string): ChatSession {
     if (m.role === 'user') {
       const t = userText(m);
       const images = Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === 'image' ? [`data:${b.source.media_type};base64,${b.source.data}`] : [])) : [];
-      if (t.trim() || images.length) messages.push({ role: 'user', text: t, ...(images.length ? { images } : {}) }); // tool_result-only turn → skip
+      const files = Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === 'text' && isAttachmentText(b.text) ? [attachmentName(b.text)!] : [])) : [];
+      if (t.trim() || images.length || files.length) messages.push({ role: 'user', text: t, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}) }); // tool_result-only turn → skip
       continue;
     }
     const t = userText(m);
@@ -189,7 +299,7 @@ export function parseChatSession(text: string): ChatSession {
     if (tools.length) messages.push({ role: 'step', text: `🔧 ${tools.join(', ')}` });
   }
   const u0 = messages.find((m) => m.role === 'user');
-  const first = u0?.text.trim().replace(/\s+/g, ' ') || (u0?.images ? `🖼 ×${u0.images.length}` : '');
+  const first = u0?.text.trim().replace(/\s+/g, ' ') || (u0?.files ? `📎 ${u0.files.join(', ')}` : u0?.images ? `🖼 ×${u0.images.length}` : '');
   return {
     history,
     messages,

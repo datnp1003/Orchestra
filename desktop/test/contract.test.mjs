@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo, validateImages, MAX_IMAGES, MAX_IMAGE_BYTES } from '../out/desktop/src/main/contract.js';
+import { IPC, EVENTS, PAGES, DEFAULT_SETTINGS, validateSettings, requireRepo, validateImages, MAX_IMAGES, MAX_IMAGE_BYTES, validateFiles, MAX_FILES, MAX_FILE_BYTES, MAX_ZIP_BYTES } from '../out/desktop/src/main/contract.js';
 import { loadSettings, saveSettings, initLanguage } from '../out/desktop/src/main/settingsStore.js';
 import { setLocale } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, PROJECT_ID_RE } from '../out/prototype/src/home.js';
@@ -184,6 +184,21 @@ assert.ok(xml.includes('a &lt;b&gt; &amp; &quot;c&quot;') && !xml.includes('line
     assert.ok('error' in validateImages(bad), `rejects ${JSON.stringify(bad).slice(0, 40)}`);
   assert.ok('error' in validateImages(Array(MAX_IMAGES + 1).fill(png)), 'count cap');
   assert.ok('error' in validateImages([{ mediaType: 'image/jpeg', data: 'A'.repeat(Math.ceil((MAX_IMAGE_BYTES + 3) / 3) * 4) }]), 'size cap');
+}
+// chat:exchange files — bare safe names only, base64, size caps (zip bigger), legacy Office refused with a hint
+{
+  const f = (name, data = 'aGk=') => ({ name, data });
+  assert.deepEqual(validateFiles(undefined), { files: [] });
+  const ok = validateFiles([f('Báo cáo.docx'), f('C:\\Users\\x\\a.txt'), f('empty.txt', '')]);
+  assert.deepEqual(ok.files.map((x) => [x.name, x.buf.toString()]), [['Báo cáo.docx', 'hi'], ['a.txt', 'hi'], ['empty.txt', '']], 'path stripped to the bare name');
+  for (const bad of ['x', [f('')], [f('..')], [f('a/..')], [f('CON')], [f('a:b.txt')], [f('.meta.json')], [f('a.txt', 'not base64!')], [f('a.txt', 'abc')], [{ name: 1, data: 'aGk=' }], [null]])
+    assert.ok('error' in validateFiles(bad), `rejects ${JSON.stringify(bad).slice(0, 40)}`);
+  assert.match(validateFiles([f('old.doc')]).error, /Save As|old binary Office/);
+  assert.ok('error' in validateFiles(Array(MAX_FILES + 1).fill(f('a.txt'))), 'count cap');
+  const b64 = (bytes) => 'A'.repeat(Math.ceil(bytes / 3) * 4);
+  assert.ok('error' in validateFiles([f('a.pdf', b64(MAX_FILE_BYTES + 3))]), 'file size cap');
+  assert.ok('files' in validateFiles([f('a.zip', b64(MAX_FILE_BYTES + 3))]), 'zip may be larger');
+  assert.ok('error' in validateFiles([f('a.zip', b64(MAX_ZIP_BYTES + 3))]), 'zip size cap');
 }
 console.log('✓ approval: channel/event, broker request/respond/abort/cancelAll, URL parse strict, toast xml escape; permissionMode validate + default');
 

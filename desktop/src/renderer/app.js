@@ -295,20 +295,23 @@ $('#slashMenu').addEventListener('click', (e) => {
   if (it) slashPick(+it.dataset.i);
 });
 
-// ---------- Image attachments (paste / drop / 📎) — main re-validates type + size at the IPC boundary ----------
+// ---------- Attachments (paste / drop / 📎): images go to the model as images, other files are read in main ----------
+// main re-validates type, name and size at the IPC boundary — these checks only give early feedback
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_IMAGES = 5;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const ATTACH = []; // { url (blob: preview), mediaType, data (base64) }
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_ZIP_BYTES = 50 * 1024 * 1024;
+const ATTACH = []; // image: { url (blob: preview), mediaType, data } | file: { name, data } (base64)
 function renderAttach() {
   const list = $('#attachList');
   list.hidden = !ATTACH.length;
   list.replaceChildren(...ATTACH.map((a, i) => {
     const d = document.createElement('div');
-    d.className = 'attach-item';
-    const im = document.createElement('img');
-    im.src = a.url;
-    im.alt = '';
+    d.className = a.url ? 'attach-item' : 'attach-item file';
+    const im = document.createElement(a.url ? 'img' : 'span');
+    if (a.url) { im.src = a.url; im.alt = ''; } else { im.textContent = `📄 ${a.name}`; d.title = a.name; }
     const x = document.createElement('button');
     x.textContent = '✕';
     x.title = t('desktop.composer.attachRemove');
@@ -325,10 +328,17 @@ const toBase64 = (file) => new Promise((resolve, reject) => {
 });
 async function addImages(files) {
   for (const f of files) {
-    if (!IMAGE_TYPES.includes(f.type)) { alert(t('desktop.chat.err.image')); continue; }
-    if (f.size > MAX_IMAGE_BYTES) { alert(t('desktop.chat.err.imageSize', { mb: MAX_IMAGE_BYTES / 1024 / 1024 })); continue; }
-    if (ATTACH.length >= MAX_IMAGES) { alert(t('desktop.chat.err.imageCount', { n: MAX_IMAGES })); break; }
-    ATTACH.push({ url: URL.createObjectURL(f), mediaType: f.type, data: await toBase64(f) });
+    if (IMAGE_TYPES.includes(f.type)) {
+      if (f.size > MAX_IMAGE_BYTES) { alert(t('desktop.chat.err.imageSize', { mb: MAX_IMAGE_BYTES / 1024 / 1024 })); continue; }
+      if (ATTACH.filter((a) => a.url).length >= MAX_IMAGES) { alert(t('desktop.chat.err.imageCount', { n: MAX_IMAGES })); continue; }
+      ATTACH.push({ url: URL.createObjectURL(f), mediaType: f.type, data: await toBase64(f) });
+      continue;
+    }
+    if (/\.(doc|xls|ppt)$/i.test(f.name)) { alert(t('desktop.chat.err.fileLegacy', { name: f.name })); continue; }
+    const cap = /\.zip$/i.test(f.name) ? MAX_ZIP_BYTES : MAX_FILE_BYTES;
+    if (f.size > cap) { alert(t('desktop.chat.err.fileSize', { name: f.name, mb: cap / 1024 / 1024 })); continue; }
+    if (ATTACH.filter((a) => !a.url).length >= MAX_FILES) { alert(t('desktop.chat.err.fileCount', { n: MAX_FILES })); continue; }
+    ATTACH.push({ name: f.name, data: f.size ? await toBase64(f) : '' });
   }
   renderAttach();
   $('#chatInput').focus();
@@ -336,7 +346,7 @@ async function addImages(files) {
 $('#cbAttach').addEventListener('click', () => $('#attachFile').click());
 $('#attachFile').addEventListener('change', (e) => { addImages([...e.target.files]); e.target.value = ''; });
 $('#chatInput').addEventListener('paste', (e) => {
-  const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+  const files = [...(e.clipboardData?.files ?? [])];
   if (!files.length) return; // plain text paste stays native
   e.preventDefault();
   addImages(files);
@@ -575,8 +585,18 @@ async function renderChat() {
     return d;
   };
   // user bubble with images: thumbnails (data:/blob: URLs) above the text; click opens full size in a new window
-  const addUser = (text, images = []) => {
+  const addUser = (text, images = [], fileNames = []) => {
     const d = add('user', '');
+    if (fileNames.length) {
+      const box = document.createElement('div');
+      box.className = 'msg-files';
+      for (const n of fileNames) {
+        const s = document.createElement('span');
+        s.textContent = `📄 ${n}`;
+        box.appendChild(s);
+      }
+      d.appendChild(box);
+    }
     if (images.length) {
       const box = document.createElement('div');
       box.className = 'msg-images';
@@ -593,7 +613,7 @@ async function renderChat() {
     return d;
   };
   add('greet', t('desktop.chat.greet'));
-  for (const m of openedMsgs ?? []) m.role === 'user' ? addUser(m.text, m.images) : add(m.role, m.text);
+  for (const m of openedMsgs ?? []) m.role === 'user' ? addUser(m.text, m.images, m.files) : add(m.role, m.text);
   // chat with no messages → compact centered layout (1 class on #main, same composer DOM)
   const main = document.getElementById('main');
   main.classList.toggle('chat-empty', !CHAT.started);
@@ -616,17 +636,19 @@ async function renderChat() {
     input.style.height = 'auto';
     main.classList.remove('chat-empty');
     CHAT.started = true;
-    addUser(text, files.map((f) => f.url));
-    const images = files.map((f) => ({ mediaType: f.mediaType, data: f.data }));
+    const imgs = files.filter((f) => f.url), docs = files.filter((f) => !f.url);
+    addUser(text, imgs.map((f) => f.url), docs.map((f) => f.name));
+    const images = imgs.map((f) => ({ mediaType: f.mediaType, data: f.data }));
+    const attached = docs.map((f) => ({ name: f.name, data: f.data }));
     add('orch pending', t('desktop.chat.pending'));
     const stop = $('#chatStop');
     stop.hidden = false;
     // sidebar: main creates the session file synchronously when the exchange starts → list it now;
     // nothing saved yet (file written when the turn ends) → show this first message as its title meanwhile
-    const turn = api.invoke('chat:exchange', { text, images });
+    const turn = api.invoke('chat:exchange', { text, images, files: attached });
     loadSessions().then(() => {
       const a = $('#sideLists .session-item.active');
-      if (a?.dataset.turns === '0') a.querySelector('.session-title').textContent = text.replace(/\s+/g, ' ').slice(0, 60) || `🖼 ×${files.length}`;
+      if (a?.dataset.turns === '0') a.querySelector('.session-title').textContent = text.replace(/\s+/g, ' ').slice(0, 60) || (docs.length ? `📎 ${docs.map((f) => f.name).join(', ')}`.slice(0, 60) : `🖼 ×${imgs.length}`);
     });
     try {
       await turn;

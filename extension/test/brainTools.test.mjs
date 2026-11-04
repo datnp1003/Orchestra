@@ -115,6 +115,14 @@ test('fleet_dispatch readonly → plan/planner node, with worker answer; default
   assert.equal((await xi('fleet_dispatch', { goal: 'g', scope: ['a'], images: 'img-1' })).ok, false);
   assert.equal(calls.length, 3, 'bad images → no dispatch');
   assert.equal(calls[1].images, undefined, 'no images → none passed');
+  // files: same contract as images
+  const xf = brainToolExecutor(repo, { approve: async () => true, dispatch, attachmentDirs: (ids) => (ids.every((i) => i === 'file-1') ? { paths: ['/abs/file-1'] } : { error: `unknown file id: ${ids}` }) });
+  assert.ok((await xf('fleet_dispatch', { goal: 'build from spec', scope: ['src/**'], files: ['file-1'] })).ok);
+  assert.deepEqual(calls[3].files, ['/abs/file-1']);
+  assert.match((await xf('fleet_dispatch', { goal: 'g', scope: ['a'], files: ['file-2'] })).content, /unknown file id/);
+  assert.match((await x('fleet_dispatch', { goal: 'g', scope: ['a'], files: ['file-1'] })).content, /no attached files/);
+  assert.equal((await xf('fleet_dispatch', { goal: 'g', scope: ['a'], files: 'file-1' })).ok, false);
+  assert.equal(calls.length, 4, 'bad files → no dispatch');
   assert.ok(BRAIN_TOOLS.find((d) => d.name === 'fleet_dispatch').input_schema.properties.readonly.type === 'boolean');
   const sys = brainSystemPrompt({ project: { name: 'P', repos: repoRefs([repo]) }, globalMemory: '' });
   assert.ok(sys.includes(`- ${path.basename(repo)}: ${path.resolve(repo)}`), 'system prompt has REPOS');
@@ -179,6 +187,19 @@ test('projectToolExecutor: routes by repo; >1 repo requires repo; 1 repo is defa
   assert.deepEqual(tools.find((d) => d.name === 'repo_read').input_schema.properties.repo.enum, refs.map((r) => r.name));
   assert.ok(tools.some((d) => d.name === 'memory_update'));
   assert.deepEqual(brainTools(null).map((d) => d.name), ['memory_update']);
+  // attachment_read: offered only when the chat has files; validated, routed to the session store (no repo needed)
+  assert.deepEqual(brainTools(null, { files: true }).map((d) => d.name), ['memory_update', 'attachment_read']);
+  assert.ok(brainTools(refs, { files: true }).some((d) => d.name === 'attachment_read'));
+  assert.ok(!brainTools(refs).some((d) => d.name === 'attachment_read'));
+  const reads = [];
+  const xr = projectToolExecutor([], { approve: async () => true, projectId: null, readAttachment: (...a) => (reads.push(a), { ok: true, content: 'TEXT' }) });
+  assert.deepEqual(await xr('attachment_read', { id: 'file-1', path: 'src/a.ts', offset: 10 }), { ok: true, content: 'TEXT' });
+  assert.deepEqual(reads, [['file-1', 'src/a.ts', 10]]);
+  await xr('attachment_read', { id: 'file-1' });
+  assert.deepEqual(reads[1], ['file-1', undefined, 0]);
+  for (const bad of [{}, { id: 'file-1', offset: -1 }, { id: 'file-1', offset: 1.5 }, { id: 'file-1', path: 3 }]) assert.equal((await xr('attachment_read', bad)).ok, false, JSON.stringify(bad));
+  assert.equal(reads.length, 2, 'bad input never reaches the store');
+  assert.match((await none('attachment_read', { id: 'file-1' })).content, /no attached files/);
 });
 
 test('memory_update: global vs project; project blocked outside a project', async (t) => {

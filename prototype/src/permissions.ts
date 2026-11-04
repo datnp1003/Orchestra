@@ -138,6 +138,9 @@ export function convModeOf(history: readonly HistMsg[]): ConversationMode | null
 /** images attached to this message, saved as files — the brain passes these ids to fleet_dispatch.images */
 export const imagesReminder = (ids: string[]) =>
   systemReminder(`Images attached to this message are saved as ${ids.join(', ')}. When a worker must see them (UI mockup, screenshot, diagram), pass these ids in fleet_dispatch.images — workers cannot see this conversation, and your text description alone loses visual detail. Still state in goal/acceptance what to change in the image.`);
+/** files attached to this message — readable via attachment_read, handed to workers via fleet_dispatch.files */
+export const filesReminder = (ids: string[]) =>
+  systemReminder(`Files attached to this message: ${ids.join(', ')} (contents in the <attachment> blocks below). Long text is truncated — attachment_read reads on (and opens files inside a zip). Workers cannot see this conversation: when a worker needs a file, pass its id in fleet_dispatch.files — it gets the original plus extracted text (.txt next to Office files) and unpacked zips under .orchestra/files/<id>/.`);
 /** reminder for the next user message: mode changed (or first message) → full, unchanged → sparse */
 export const convReminder = (prev: ConversationMode | null, mode: ConversationMode) =>
   systemReminder(prev === mode ? CONV_REMINDER[mode].sparse : CONV_REMINDER[mode].full);

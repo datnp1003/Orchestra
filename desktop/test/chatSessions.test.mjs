@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseChatSession, SESSION_ID_RE, listChatSessions, chatSessionsView, sessionFile, findProject, newProjectId, deleteProjectData, addRepoDir, saveSessionImages, sessionImageFiles } from '../out/desktop/src/main/chatSessions.js';
+import { parseChatSession, SESSION_ID_RE, listChatSessions, chatSessionsView, sessionFile, findProject, newProjectId, deleteProjectData, addRepoDir, saveSessionImages, sessionImageFiles, saveSessionFiles, readSessionFile, sessionFileDirs, hasSessionFiles } from '../out/desktop/src/main/chatSessions.js';
+import { attachmentBlocks } from '../out/prototype/src/attachments.js';
+import { deflateRawSync, crc32 } from 'node:zlib';
 import { setLocale, t } from '../out/prototype/src/i18n/index.js';
 import { setOrchestraHome, chatDir } from '../out/prototype/src/home.js';
 import { setMemoryText, loadMemory } from '../out/prototype/src/agentMemory.js';
@@ -137,6 +139,66 @@ console.log('✓ chat:sessions: grouped by project + global chats, newest first,
   rmSync(path.join(chatDir(null), 's1.images'), { recursive: true });
 }
 console.log('✓ session images: saved as img-N files, resolved per session only');
+
+// attached files: stored per session as file-N/, Office text next to the original, zip unpacked safely, read + paged
+{
+  const zip = (files) => {
+    const L = [], C = [];
+    let off = 0;
+    for (const [name, content] of Object.entries(files)) {
+      const d = Buffer.from(content), c = deflateRawSync(d), n = Buffer.from(name), h = Buffer.alloc(30), e = Buffer.alloc(46);
+      h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(8, 8); h.writeUInt32LE(crc32(d), 14); h.writeUInt32LE(c.length, 18); h.writeUInt32LE(d.length, 22); h.writeUInt16LE(n.length, 26);
+      e.writeUInt32LE(0x02014b50, 0); e.writeUInt16LE(8, 10); e.writeUInt32LE(crc32(d), 16); e.writeUInt32LE(c.length, 20); e.writeUInt32LE(d.length, 24); e.writeUInt16LE(n.length, 28); e.writeUInt32LE(off, 42);
+      L.push(h, n, c); C.push(e, n); off += 30 + n.length + c.length;
+    }
+    const cd = Buffer.concat(C), end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(C.length / 2, 8); end.writeUInt16LE(C.length / 2, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(off, 16);
+    return Buffer.concat([...L, cd, end]);
+  };
+  const docx = zip({ 'word/document.xml': '<w:p><w:r><w:t>Yêu cầu: API trả 200</w:t></w:r></w:p>' });
+  const src = zip({ 'app/main.ts': 'console.log(1)', '../evil.txt': 'x', 'C:/abs.txt': 'x', 'app/CON': 'x', 'notes.md': 'y'.repeat(30000) });
+  assert.equal(hasSessionFiles(null, 'f1'), false);
+  const big = Buffer.alloc(11 * 1024 * 1024, 1);
+  const infos = saveSessionFiles(null, 'f1', [
+    { name: 'spec.docx', buf: docx }, { name: 'src.zip', buf: src }, { name: 'a.pdf', buf: Buffer.from('%PDF-1') }, { name: 'big.pdf', buf: big },
+    { name: 'bad.xlsx', buf: Buffer.from('not a zip') }, { name: 'log.txt', buf: Buffer.from('dòng 1') },
+  ]);
+  assert.deepEqual(infos.map((i) => [i.id, i.kind]), [['file-1', 'docx'], ['file-2', 'zip'], ['file-3', 'pdf'], ['file-4', 'pdf'], ['file-5', 'xlsx'], ['file-6', 'text']]);
+  assert.equal(infos[0].text, 'Yêu cầu: API trả 200');
+  assert.deepEqual(infos[1].tree.map((e) => e.path), ['app/main.ts', 'notes.md']);
+  assert.equal(infos[1].skipped, 3, 'traversal / absolute / reserved names skipped');
+  assert.ok(!existsSync(path.join(chatDir(null), 'f1.files', 'evil.txt')) && !existsSync(path.join(chatDir(null), 'evil.txt')), 'nothing written outside');
+  assert.equal(infos[2].pdfBase64, Buffer.from('%PDF-1').toString('base64'));
+  assert.equal(infos[3].pdfBase64, undefined, 'PDF over the inline cap → workers only');
+  assert.match(infos[4].error, /not a zip/);
+  assert.equal(saveSessionFiles(null, 'f1', [{ name: 'c.pdf', buf: Buffer.from('%PDF') }], 2)[0].pdfBase64, undefined, 'conversation PDF budget used up');
+  assert.equal(hasSessionFiles(null, 'f1'), true);
+  const dir = path.join(chatDir(null), 'f1.files');
+  assert.equal(readFileSync(path.join(dir, 'file-1', 'spec.docx.txt'), 'utf8'), 'Yêu cầu: API trả 200', 'extracted text kept for workers');
+  assert.equal(readFileSync(path.join(dir, 'file-2', 'src', 'app', 'main.ts'), 'utf8'), 'console.log(1)');
+  // attachment_read
+  assert.deepEqual(readSessionFile(null, 'f1', 'file-1', undefined, 0), { ok: true, content: 'Yêu cầu: API trả 200' });
+  assert.equal(readSessionFile(null, 'f1', 'file-6', undefined, 0).content, 'dòng 1');
+  assert.match(readSessionFile(null, 'f1', 'file-2', undefined, 0).content, /pass path= one of\napp\/main\.ts\nnotes\.md/);
+  assert.equal(readSessionFile(null, 'f1', 'file-2', 'app/main.ts', 0).content, 'console.log(1)');
+  assert.match(readSessionFile(null, 'f1', 'file-2', 'notes.md', 0).content, /…\(18000 of 30000 chars — offset=18000 for more\)$/);
+  assert.equal(readSessionFile(null, 'f1', 'file-2', 'notes.md', 18000).content.length, 12000);
+  for (const [id, inner] of [['file-2', '../file-1/spec.docx'], ['file-2', 'C:/Windows/win.ini'], ['file-2', 'nope.ts'], ['file-1', 'x'], ['file-99', undefined], ['../f1', undefined]])
+    assert.equal(readSessionFile(null, 'f1', id, inner, 0).ok, false, `${id} ${inner}`);
+  assert.match(readSessionFile(null, 'f1', 'file-3', undefined, 0).content, /pdf file — not readable as text here/);
+  assert.equal(readSessionFile(null, 'f2', 'file-1', undefined, 0).ok, false, 'other session cannot read it');
+  assert.deepEqual(sessionFileDirs(null, 'f1', ['file-2', 'file-1', 'file-2']).paths.map((p) => path.basename(p)), ['file-2', 'file-1']);
+  assert.ok('error' in sessionFileDirs(null, 'f1', ['file-42']));
+  assert.ok('error' in sessionFileDirs('pa-0001', 'f1', ['file-1']));
+  // reopened session: chips from the attachment tags, tags hidden from the text, file-only message titled by names
+  const blocks = attachmentBlocks(infos[0]);
+  const p = parseChatSession([L('user', [...blocks, { type: 'text', text: 'làm theo spec' }]), L('assistant', 'ok'), L('user', attachmentBlocks(infos[5])), L('assistant', 'ok')].join('\n'));
+  assert.deepEqual(p.messages[0], { role: 'user', text: 'làm theo spec', files: ['spec.docx'] });
+  assert.deepEqual(p.messages[2], { role: 'user', text: '', files: ['log.txt'] });
+  assert.equal(parseChatSession([L('user', attachmentBlocks(infos[5])), L('assistant', 'ok')].join('\n')).title, '📎 log.txt');
+  rmSync(dir, { recursive: true });
+}
+console.log('✓ session files: stored as file-N, Office text + safe unzip, attachment_read paged + scoped, chips on reopen');
 
 assert.ok('error' in sessionFile(projects, 'nope-0000', 'a1'), 'nonexistent project blocked');
 assert.ok('error' in sessionFile(projects, 42, 'a1'));

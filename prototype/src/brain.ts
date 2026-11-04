@@ -7,6 +7,7 @@ export type ImageSource = { type: 'base64'; media_type: string; data: string };
 export type Block =
   | { type: 'text'; text: string }
   | { type: 'image'; source: ImageSource }
+  | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string }; title?: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 export interface Msg {
@@ -109,6 +110,8 @@ export interface BrainTurnOpts extends BrainCreds {
   reminder?: string | string[];
   /** images attached to the user's message (already validated by the caller) — sent before the text, like Claude apps */
   images?: ImageSource[];
+  /** attached files as blocks (attachments.ts attachmentBlocks) — after the images, before the text */
+  attachments?: Block[];
   model: string;
   system: string;
   tools: ToolDef[];
@@ -123,6 +126,7 @@ export async function runBrainTurn(o: BrainTurnOpts): Promise<{ text: string; hi
   const blocks: Block[] = [
     ...([] as string[]).concat(o.reminder ?? []).map((text) => ({ type: 'text', text }) as const),
     ...(o.images ?? []).map((source): Block => ({ type: 'image', source })),
+    ...(o.attachments ?? []),
     ...(o.userText ? [{ type: 'text', text: o.userText } as const] : []),
   ];
   const user: Msg = blocks.length === 1 && blocks[0]!.type === 'text' ? { role: 'user', content: o.userText } : { role: 'user', content: blocks };

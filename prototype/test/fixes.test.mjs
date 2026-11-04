@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ import { t } from '../dist/i18n/index.js';
 import { getManifest } from '../dist/manifests.js';
 import { shouldCommit } from '../dist/dispatch.js';
 import { createWorktree, stageAll, changedFiles, commitAll, mergeBranch } from '../dist/worktree.js';
-import { deliverImages } from '../dist/dispatch.js';
+import { deliverImages, deliverFiles } from '../dist/dispatch.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const guard = path.join(here, '..', 'hooks', 'guard.cjs');
@@ -170,6 +170,18 @@ test('deliverImages: copied into the worktree, git-ignored → not a changed fil
   stageAll(wt.path);
   assert.deepEqual(changedFiles(wt.path), [], 'images never show up as worker changes');
   assert.deepEqual(deliverImages(wt.path, []), { rel: [], abs: [] });
+  // attached files: whole dir copied (original + extracted text + unpacked zip), .meta.json not listed, still git-ignored
+  const fdir = path.join(repo, '..', `files-${path.basename(repo)}`, 'file-1');
+  mkdirSync(path.join(fdir, 'src'), { recursive: true });
+  t.after(() => rmSync(path.dirname(fdir), { recursive: true, force: true }));
+  writeFileSync(path.join(fdir, 'spec.docx'), 'D');
+  writeFileSync(path.join(fdir, 'spec.docx.txt'), 'text');
+  writeFileSync(path.join(fdir, 'src', 'a.ts'), 'x');
+  writeFileSync(path.join(fdir, '.meta.json'), '{}');
+  assert.deepEqual(deliverFiles(wt.path, [fdir]).sort(), ['- .orchestra/files/file-1/spec.docx', '- .orchestra/files/file-1/spec.docx.txt', '- .orchestra/files/file-1/src/ (unpacked zip)']);
+  assert.ok(existsSync(path.join(wt.path, '.orchestra', 'files', 'file-1', 'src', 'a.ts')));
+  stageAll(wt.path);
+  assert.deepEqual(changedFiles(wt.path), [], 'attached files never show up as worker changes');
 });
 
 test('fix on a reused worktree is merged into main', (t) => {

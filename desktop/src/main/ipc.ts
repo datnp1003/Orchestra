@@ -2,7 +2,8 @@
 import type { IpcMain, BrowserWindow, Notification } from 'electron';
 import { app, shell, dialog } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
-import { IPC, EVENTS, requireRepo, validateImages, type AppSettings, type DispatchPayload } from './contract.js';
+import { IPC, EVENTS, requireRepo, validateImages, validateFiles, type AppSettings, type DispatchPayload } from './contract.js';
+import { attachmentBlocks, PDF_INLINE_BYTES } from '../../../prototype/src/attachments.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshotAsync, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
@@ -25,9 +26,9 @@ import { createProviderStore, authHeaders, isOAuth, type ProviderConfig } from '
 import { anthropicAuthUrl, exchangeAnthropic, oauthStatus, openaiLogin, pkce } from '../../../prototype/src/router/oauth.js';
 import { startRouter, type RouterHandle } from '../../../prototype/src/router/server.js';
 import type { RouterInfo } from '../../../prototype/src/types.js';
-import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData, saveSessionImages, sessionImageFiles } from './chatSessions.js';
+import { parseChatSession, chatSessionsView, sessionFile, findProject, addRepoDir, newProjectId, deleteProjectData, saveSessionImages, sessionImageFiles, saveSessionFiles, readSessionFile, sessionFileDirs, hasSessionFiles } from './chatSessions.js';
 import { t, setLocale, messages } from '../../../prototype/src/i18n/index.js';
-import { convModeOf, convReminder, imagesReminder, needsApproval, type ApprovalKind, type ConversationMode } from '../../../prototype/src/permissions.js';
+import { convModeOf, convReminder, imagesReminder, filesReminder, needsApproval, type ApprovalKind, type ConversationMode } from '../../../prototype/src/permissions.js';
 import { createApprovalBroker, type ApprovalBroker, type ApprovalRequest } from './approvals.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -346,7 +347,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
   }, (error) => ({ ok: false, error })));
 
   // M1: user only talks to Orchestra (brain = LLM API + tools); CLIs are just workers via fleet_* tools
-  ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string; images?: unknown }) => {
+  ipcMain.handle(IPC.CHAT_EXCHANGE, async (_e, p: { text: string; images?: unknown; files?: unknown }) => {
     const notify = (m: unknown) => send(EVENTS.CHAT_MESSAGE, m);
     const fail = (error: string) => {
       // report errors as a message — don't leave the '…processing' bubble hanging
@@ -355,7 +356,9 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
     };
     const img = validateImages(p?.images);
     if ('error' in img) return fail(img.error);
-    if (typeof p?.text !== 'string' || (!p.text.trim() && !img.images.length)) return fail(t('desktop.chat.err.empty'));
+    const fl = validateFiles(p?.files);
+    if ('error' in fl) return fail(fl.error);
+    if (typeof p?.text !== 'string' || (!p.text.trim() && !img.images.length && !fl.files.length)) return fail(t('desktop.chat.err.empty'));
     if (chatBusy) return fail(t('desktop.chat.err.busy'));
     const creds = routerCreds();
     if (!creds) return fail(t('desktop.err.routerDown'));
@@ -410,13 +413,18 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       // images also saved as files: the brain sees them inline AND can hand the originals to workers by id
       let imageIds: string[] = [];
       try { imageIds = saveSessionImages(conv.projectId, conv.startedAt, img.images); } catch (err) { console.log('[chat] save images:', err instanceof Error ? err.message : err); }
+      // files: stored + extracted; failing to store = the brain can't see them → fail the turn, never drop silently
+      // PDFs ride along in history (resent every turn) → inline only while the conversation's PDF total stays under budget
+      const pdfUsed = conv.history.reduce((n, m) => n + (Array.isArray(m.content) ? m.content.reduce((k, b) => k + (b.type === 'document' ? (b.source.data.length / 4) * 3 : 0), 0) : 0), 0);
+      const files = saveSessionFiles(conv.projectId, conv.startedAt, fl.files, PDF_INLINE_BYTES - pdfUsed);
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
         userText: p.text.trim(),
         images: img.images,
+        attachments: files.flatMap(attachmentBlocks),
         // conversation mode is announced inside the conversation (saved with the message), not only in the system prompt
-        reminder: [convReminder(convModeOf(conv.history), s.chatMode), ...(imageIds.length ? [imagesReminder(imageIds)] : [])],
+        reminder: [convReminder(convModeOf(conv.history), s.chatMode), ...(imageIds.length ? [imagesReminder(imageIds)] : []), ...(files.length ? [filesReminder(files.map((f) => f.id))] : [])],
         // ponytail: goal = longer tool loop, no separate verifier turn — add an auto-continue check if goals stop early
         maxTurns: s.chatMode === 'goal' ? 40 : undefined,
         model: s.brainModel,
@@ -429,7 +437,7 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           skills: availableSkills(project?.id ?? null),
           mode: s.permissionMode,
         }),
-        tools: brainTools(toolRefs, { attach: !project && !!ws }),
+        tools: brainTools(toolRefs, { attach: !project && !!ws, files: hasSessionFiles(conv.projectId, conv.startedAt) }),
         signal: ac.signal,
         execTool: projectToolExecutor(toolRefs ?? [], {
           projectId: project?.id ?? null,
@@ -440,6 +448,8 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
           mode: s.permissionMode,
           conv: s.chatMode,
           imageFiles: (ids) => sessionImageFiles(conv.projectId, conv.startedAt, ids),
+          attachmentDirs: (ids) => sessionFileDirs(conv.projectId, conv.startedAt, ids),
+          readAttachment: (id, inner, offset) => readSessionFile(conv.projectId, conv.startedAt, id, inner, offset),
           hooksEnabled: s.hooksEnabled,
           templatesDir: s.templatesDir || protoAsset('templates') || path.join(ctx.protoDir, 'prototype', 'templates'),
           autoApprovePlan: s.autoApprovePlan,

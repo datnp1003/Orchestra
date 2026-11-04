@@ -1,6 +1,6 @@
 // fleet.dispatch — orchestrate: resolve worker → worktree → brief → validate → run →
 // collect artifacts → scope check (Layer 4) → task record (episodic-lite, rule B4)
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { getManifest } from './manifests.js';
 import { t } from './i18n/index.js';
@@ -46,6 +46,8 @@ export interface DispatchOptions {
   router?: import('./types.js').RouterInfo;
   /** user-attached reference images (absolute source paths) — copied into the worktree, git-ignored */
   images?: string[];
+  /** user-attached file dirs (absolute, one per attachment id) — copied into the worktree, git-ignored */
+  files?: string[];
 }
 
 export interface ScopeCheck {
@@ -147,6 +149,19 @@ export function deliverImages(wtPath: string, images: string[]): { rel: string[]
   return { rel, abs: rel.map((r) => path.join(wtPath, r)) };
 }
 
+/** copy attachment dirs into <worktree>/.orchestra/files/<id>/ (git-ignored) → prompt lines listing what each holds */
+export function deliverFiles(wtPath: string, dirs: string[]): string[] {
+  if (!dirs.length) return [];
+  const root = path.join(wtPath, '.orchestra', 'files');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(path.join(root, '.gitignore'), '*\n', 'utf8');
+  return dirs.flatMap((src) => {
+    const id = path.basename(src);
+    cpSync(src, path.join(root, id), { recursive: true });
+    return readdirSync(src, { withFileTypes: true }).filter((e) => e.name !== '.meta.json').map((e) => `- .orchestra/files/${id}/${e.name}${e.isDirectory() ? '/ (unpacked zip)' : ''}`);
+  });
+}
+
 export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   const taskId = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -211,6 +226,10 @@ export async function dispatch(o: DispatchOptions): Promise<DispatchResult> {
   if (imgs.rel.length) {
     prompt += `\n\nREFERENCE IMAGES from the user (screenshots/mockups — look at them before working; they are the source of truth for visual details):\n${imgs.rel.map((r) => `- ${r}`).join('\n')}`
       + (routing.pick === 'claude' ? '\nOpen each one with the Read tool.' : '');
+  }
+  const fileLines = deliverFiles(wt.path, o.files ?? []);
+  if (fileLines.length) {
+    prompt += `\n\nATTACHED FILES from the user (read what the task needs; <name>.txt next to a PDF/Office file is its extracted text; copy what you need into your scope — never edit these copies):\n${fileLines.join('\n')}`;
   }
   const started = Date.now();
   const run = await runHeadless(manifest, prompt, {

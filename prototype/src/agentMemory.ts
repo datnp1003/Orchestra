@@ -7,6 +7,7 @@ import { memoryFile } from './home.js';
 import { t } from './i18n/index.js';
 import type { Msg } from './brain.js';
 import { isSystemReminder } from './permissions.js';
+import { isAttachmentText } from './attachments.js';
 
 export type Scope = 'global' | 'project';
 export const BUDGET: Record<Scope, number> = { global: 3000, project: 5000 };
@@ -194,7 +195,7 @@ export async function writeMemoryOps(projectId: string | null, ops: ScopedOp[], 
 export function transcriptOf(msgs: Msg[], max = 8000): string {
   const s = msgs
     .flatMap((m) => {
-      const txt = typeof m.content === 'string' ? m.content : m.content.flatMap((b) => (b.type === 'text' && !isSystemReminder(b.text) ? [b.text] : [])).join('\n');
+      const txt = typeof m.content === 'string' ? m.content : m.content.flatMap((b) => (b.type === 'text' && !isSystemReminder(b.text) && !isAttachmentText(b.text) ? [b.text] : [])).join('\n');
       return txt.trim() ? [`${m.role.toUpperCase()}: ${txt.trim()}`] : [];
     })
     .join('\n\n');

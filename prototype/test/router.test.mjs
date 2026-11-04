@@ -416,6 +416,15 @@ test('messagesToChatRequest: system blocks, images, tool_result is_error, tool_c
   assert.equal(out.max_tokens, 9);
 });
 
+test('pdf document block ⇄ Chat file part (round trip keeps data + filename)', () => {
+  const doc = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERg==' }, title: 'spec.pdf' };
+  const chat = messagesToChatRequest({ messages: [{ role: 'user', content: [doc, { type: 'text', text: 'đọc' }] }] }, 'm');
+  assert.deepEqual(chat.messages[0].content[0], { type: 'file', file: { filename: 'spec.pdf', file_data: 'data:application/pdf;base64,JVBERg==' } });
+  const back = chatToMessagesRequest(chat, 'm');
+  assert.deepEqual(back.messages[0].content[0], doc);
+  assert.deepEqual(chatToMessagesRequest({ messages: [{ role: 'user', content: [{ type: 'file', file: { file_data: 'data:text/plain;base64,eA==' } }, { type: 'text', text: 'x' }] }] }, 'm').messages[0].content, [{ type: 'text', text: 'x' }], 'non-pdf file part dropped');
+});
+
 test('chatToMessagesRequest: data URL → base64, tool → tool_result merged into user, broken args → {}', () => {
   const out = chatToMessagesRequest({
     messages: [
