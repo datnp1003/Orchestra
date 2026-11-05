@@ -1,7 +1,7 @@
 {
   "name": "orchestra-desktop",
   "productName": "Orchestra Desktop",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Orchestra Desktop",
   "main": "out/desktop/src/main/main.js",
   "type": "module",
@@ -81,7 +81,11 @@
       "signAndEditExecutable": true
     },
     "nsis": {
-      "oneClick": true
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }
