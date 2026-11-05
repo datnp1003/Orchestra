@@ -181,8 +181,8 @@ console.log('✓ session images: saved as img-N files, resolved per session only
   for (const conv of [undefined, async () => null, async () => { throw new Error('COM'); }]) {
     const [x] = await saveSessionFiles(null, 'f1', [{ name: 'b.xls', buf: Buffer.from('BIN') }], 0, conv);
     assert.equal(x.kind, 'binary');
-    assert.match(x.note, /no LibreOffice \/ Microsoft Office/);
-    assert.match(attachmentBlocks(x)[0].text, /no LibreOffice[\s\S]*binary file — not readable as text; hand it to a worker/);
+    assert.match(x.note, /LibreOffice is required/);
+    assert.match(attachmentBlocks(x)[0].text, /LibreOffice is required[\s\S]*binary file — not readable as text; hand it to a worker/);
   }
   assert.equal(hasSessionFiles(null, 'f1'), true);
   const dir = path.join(chatDir(null), 'f1.files');
@@ -209,6 +209,22 @@ console.log('✓ session images: saved as img-N files, resolved per session only
   assert.deepEqual(p.messages[2], { role: 'user', text: '', files: ['log.txt'] });
   assert.equal(parseChatSession([L('user', attachmentBlocks(infos[5])), L('assistant', 'ok')].join('\n')).title, '📎 log.txt');
   rmSync(dir, { recursive: true });
+}
+// LibreOffice lookup (default dirs, then PATH) + "required engine" order: missing → ensure() asked once, nothing else when it fails
+{
+  const { sofficePath, convertLegacyOffice, SOFFICE_KNOWN } = await import('../out/desktop/src/main/officeConvert.js');
+  const bin = mkdtempSync(path.join(tmp, 'bin-'));
+  const fake = path.join(bin, process.platform === 'win32' ? 'soffice.exe' : 'soffice');
+  writeFileSync(fake, '');
+  const found = sofficePath(`${bin}${path.delimiter}`);
+  assert.ok(found === fake || SOFFICE_KNOWN.includes(found), 'found on PATH (or an installed copy first)');
+  if (!sofficePath()) {
+    let asked = 0;
+    const ensure = async () => (asked++, null);
+    assert.equal(await convertLegacyOffice(path.join(bin, 'a.doc'), bin, { ensureLibreOffice: ensure, msOffice: false }), null);
+    assert.equal(asked, 1, 'LibreOffice missing → install offered');
+  }
+  assert.equal(await convertLegacyOffice(path.join(bin, 'a.txt'), bin, { ensureLibreOffice: async () => { throw new Error('not for txt'); } }), null, 'non-legacy → nothing');
 }
 console.log('✓ session files: stored as file-N, Office text + safe unzip, attachment_read paged + scoped, chips on reopen');
 

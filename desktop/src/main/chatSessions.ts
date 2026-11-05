@@ -92,7 +92,7 @@ export async function saveSessionFiles(projectId: string | null, sessionId: stri
         src = { name: path.basename(c.file), buf: readFileSync(c.file) };
         info.note = `converted from .${name.split('.').pop()} by ${c.via} to ${src.name}`;
       } else {
-        info.note = 'legacy binary Office file — no LibreOffice / Microsoft Office available to convert it here';
+        info.note = 'legacy binary Office file — not converted: LibreOffice is required (install declined or failed) and Microsoft Office is not available';
         writeFileSync(path.join(dir, '.meta.json'), JSON.stringify(meta), 'utf8');
         continue;
       }

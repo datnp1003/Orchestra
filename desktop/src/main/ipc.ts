@@ -4,7 +4,7 @@ import { app, shell, dialog } from 'electron';
 import { spawn as ptySpawn } from '@lydell/node-pty';
 import { IPC, EVENTS, requireRepo, validateImages, validateFiles, type AppSettings, type DispatchPayload } from './contract.js';
 import { attachmentBlocks, PDF_INLINE_BYTES } from '../../../prototype/src/attachments.js';
-import { convertLegacyOffice } from './officeConvert.js';
+import { convertLegacyOffice, installLibreOffice } from './officeConvert.js';
 import { loadSettings, saveSettings } from './settingsStore.js';
 import {
   fleetSnapshotAsync, tasksSnapshot, policyMatrixData, promoteWorker, mergeableTasks, reviewMerge,
@@ -417,7 +417,16 @@ export function wireIpc(ipcMain: IpcMain, ctx: IpcContext): void {
       // files: stored + extracted; failing to store = the brain can't see them → fail the turn, never drop silently
       // PDFs ride along in history (resent every turn) → inline only while the conversation's PDF total stays under budget
       const pdfUsed = conv.history.reduce((n, m) => n + (Array.isArray(m.content) ? m.content.reduce((k, b) => k + (b.type === 'document' ? (b.source.data.length / 4) * 3 : 0), 0) : 0), 0);
-      const files = await saveSessionFiles(conv.projectId, conv.startedAt, fl.files, PDF_INLINE_BYTES - pdfUsed, convertLegacyOffice);
+      // legacy Office needs LibreOffice: missing → ask once per turn, then install (system change → always asks, any mode)
+      let lo: Promise<string | null> | undefined;
+      const ensureLibreOffice = () => (lo ??= (async () => {
+        if (!(await ask(t('desktop.office.installAsk'), 'risk', ac.signal))) return null;
+        send(EVENTS.CHAT_STEP, { kind: 'progress', text: t('desktop.office.installing') });
+        const so = await installLibreOffice();
+        send(EVENTS.CHAT_STEP, { kind: 'progress', text: t(so ? 'desktop.office.installed' : 'desktop.office.installFailed') });
+        return so;
+      })());
+      const files = await saveSessionFiles(conv.projectId, conv.startedAt, fl.files, PDF_INLINE_BYTES - pdfUsed, (src, dir) => convertLegacyOffice(src, dir, { ensureLibreOffice }));
       const r = await runBrainTurn({
         ...creds,
         history: conv.history,
